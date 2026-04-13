@@ -1,0 +1,23 @@
+version = 1
+
+[[annotations]]
+path = [
+  ".gitignore",
+  ".prettierignore",
+  ".prettierrc.json",
+  "README.md",
+  "docs/**",
+  "eslint.config.mjs",
+  "package-lock.json",
+  "package.json",
+  "prompts/**",
+  "schemas/**",
+  "src/**",
+  "test/**",
+  "tsconfig.json",
+  "tsup.config.ts",
+  "vitest.config.ts"
+]
+precedence = "override"
+SPDX-FileCopyrightText = "2026 giantsoup contributors"
+SPDX-License-Identifier = "Apache-2.0"

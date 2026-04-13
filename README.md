@@ -12,24 +12,50 @@ CLI-first open-source Architect-Engineer coding harness for autonomous repo work
 
 ## Current Status
 
-This repository is in planning and bootstrap phase.
+This repository is in Milestone 0 bootstrap phase.
 
 Initial project planning documents:
 
 - [v1 Decisions](./docs/v1-decisions.md)
 - [v1 Backlog](./docs/v1-backlog.md)
+- [Bootstrap Architecture Notes](./docs/bootstrap-architecture.md)
+- [Prompt and Schema Versioning](./docs/prompt-schema-versioning.md)
 
 ## Initial Focus
 
-The first implementation target is Milestone A from the backlog:
+The current implementation target is Milestone 0: Project Foundation:
 
-- npm CLI shell
-- `init` command
-- TOML config loading and validation
-- repo-local run dossier creation
-- versioned prompt and schema file loading
+- npm package and CLI shell
+- TypeScript build and typecheck
+- lint, format, and test tooling
+- initial `src/` architecture layout
+- versioned prompt and schema asset layout
 
 ## Notes
 
-- The repository is public, but no OSS license has been selected yet.
 - GitHub issues are intended to track the milestone backlog from the planning documents.
+
+## License
+
+Apache License 2.0. See [`LICENSE`](./LICENSE).
+
+## Development
+
+Requirements:
+
+- Node.js 22 or newer
+- npm 11 or newer
+
+Commands:
+
+- `npm install`
+- `npm run build`
+- `npm run typecheck`
+- `npm run lint`
+- `npm run format:check`
+- `npm run test`
+- `npm run verify`
+
+CLI smoke check:
+
+- `node dist/cli.js --help`

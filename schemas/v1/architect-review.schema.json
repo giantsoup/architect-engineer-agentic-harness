@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/giantsoup/architect-engineer-agentic-harness/schemas/v1/architect-review.schema.json",
+  "title": "ArchitectReview",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["decision", "summary"],
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": ["approve", "revise", "fail"]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "nextActions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}
