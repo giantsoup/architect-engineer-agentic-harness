@@ -1,7 +1,7 @@
 {
   "name": "architect-engineer-agentic-harness",
   "version": "0.1.0",
-  "description": "CLI-first Architect-Engineer coding harness for autonomous repo work.",
+  "description": "Early-stage CLI-first Architect-Engineer coding harness for autonomous repo work.",
   "type": "module",
   "license": "Apache-2.0",
   "private": false,
@@ -18,14 +18,19 @@
   },
   "keywords": [
     "agent",
+    "ai",
     "automation",
     "cli",
     "engineering",
     "harness",
-    "langgraph"
+    "langgraph",
+    "llm",
+    "mcp",
+    "openai-compatible"
   ],
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.0.0",
+    "npm": ">=11.0.0"
   },
   "files": [
     "dist",
@@ -33,15 +38,24 @@
     "schemas"
   ],
   "bin": {
-    "architect-engineer-agentic-harness": "./dist/cli.js"
+    "architect-engineer-agentic-harness": "./dist/cli.js",
+    "blueprint": "./dist/cli.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./dist/index.js"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
+  "sideEffects": false,
   "scripts": {
     "build": "tsup",
+    "build:watch": "tsup --watch",
+    "cli": "node dist/cli.js",
+    "cli:dev": "node --import tsx src/cli/index.ts",
+    "link:dev": "npm run build && npm link",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",
@@ -52,7 +66,9 @@
     "prepublishOnly": "npm run verify"
   },
   "dependencies": {
-    "commander": "^14.0.1"
+    "commander": "^14.0.1",
+    "smol-toml": "^1.6.1",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@eslint/js": "^9.25.1",

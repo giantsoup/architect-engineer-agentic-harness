@@ -1,6 +1,6 @@
 # architect-engineer-agentic-harness
 
-CLI-first open-source Architect-Engineer coding harness for autonomous repo work with:
+Early-stage CLI-first open-source Architect-Engineer coding harness for autonomous repo work with:
 
 - TypeScript / Node
 - LangGraph JS orchestration
@@ -10,9 +10,65 @@ CLI-first open-source Architect-Engineer coding harness for autonomous repo work
 - Repo-local verbose run artifacts
 - Built-in tools plus MCP integration
 
+## Install
+
+Requirements:
+
+- Node.js 22 or newer
+- npm 11 or newer
+
+Install as a dependency:
+
+```bash
+npm install architect-engineer-agentic-harness
+```
+
+Run without installing globally:
+
+```bash
+npx architect-engineer-agentic-harness --help
+```
+
+Global install:
+
+```bash
+npm install -g architect-engineer-agentic-harness
+architect-engineer-agentic-harness --help
+```
+
+Friendly CLI alias after install:
+
+```bash
+blueprint --help
+```
+
 ## Current Status
 
-This repository is in Milestone 0 bootstrap phase.
+This package is not feature-complete yet. The current published surface is the Milestone 1 bootstrap slice:
+
+- `init` creates a repo-local config file
+- `init` creates the default artifact directory structure
+- `init` updates `.gitignore` to ignore verbose run artifacts safely
+
+Commands such as `run`, `status`, and `inspect` are still placeholders for later milestones.
+
+## Quick Start
+
+Bootstrap a target repository:
+
+```bash
+npx architect-engineer-agentic-harness init
+```
+
+or:
+
+```bash
+blueprint init
+```
+
+Then edit `agent-harness.toml` for the target project before running real tasks.
+
+Secrets should stay in environment variables. Use TOML values like `"${OPENAI_API_KEY}"` instead of storing raw secrets in the config file.
 
 Initial project planning documents:
 
@@ -23,13 +79,12 @@ Initial project planning documents:
 
 ## Initial Focus
 
-The current implementation target is Milestone 0: Project Foundation:
+The current implementation target is Milestone 1: Init Command and Config System:
 
-- npm package and CLI shell
-- TypeScript build and typecheck
-- lint, format, and test tooling
-- initial `src/` architecture layout
-- versioned prompt and schema asset layout
+- repo-local `init` bootstrap flow
+- TOML config loading and validation
+- artifact directory creation
+- safe `.gitignore` updates
 
 ## Notes
 
@@ -41,15 +96,14 @@ Apache License 2.0. See [`LICENSE`](./LICENSE).
 
 ## Development
 
-Requirements:
-
-- Node.js 22 or newer
-- npm 11 or newer
-
 Commands:
 
 - `npm install`
 - `npm run build`
+- `npm run build:watch`
+- `npm run cli -- --help`
+- `npm run cli:dev -- --help`
+- `npm run link:dev`
 - `npm run typecheck`
 - `npm run lint`
 - `npm run format:check`
@@ -59,3 +113,16 @@ Commands:
 CLI smoke check:
 
 - `node dist/cli.js --help`
+
+Local linked CLI workflow:
+
+```bash
+npm run link:dev
+blueprint --help
+```
+
+During active CLI development, keep the build current in another terminal:
+
+```bash
+npm run build:watch
+```

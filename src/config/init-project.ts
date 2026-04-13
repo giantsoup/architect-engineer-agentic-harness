@@ -1,0 +1,213 @@
+import path from "node:path";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+
+import { HARNESS_CONFIG_FILENAME } from "./defaults.js";
+import { loadHarnessConfig } from "./load-config.js";
+import { renderHarnessConfigTemplate } from "./template.js";
+
+export interface InitializeProjectResult {
+  projectRoot: string;
+  configPath: string;
+  configAction: "created" | "preserved";
+  artifactRootDir: string;
+  artifactRootAction: "created" | "existing";
+  runsDir: string;
+  runsDirAction: "created" | "existing";
+  gitignorePath: string;
+  gitignoreAction: "created" | "updated" | "unchanged";
+}
+
+export async function initializeProject(
+  projectRoot: string = process.cwd(),
+): Promise<InitializeProjectResult> {
+  const resolvedProjectRoot = path.resolve(projectRoot);
+  const configPath = path.join(resolvedProjectRoot, HARNESS_CONFIG_FILENAME);
+
+  let configAction: InitializeProjectResult["configAction"] = "preserved";
+
+  if (!(await pathExists(configPath))) {
+    await writeFile(configPath, renderHarnessConfigTemplate(), "utf8");
+    configAction = "created";
+  }
+
+  const { config } = await loadHarnessConfig({
+    projectRoot: resolvedProjectRoot,
+  });
+  const artifactRootPath = path.join(
+    resolvedProjectRoot,
+    config.artifacts.rootDir,
+  );
+  const runsPath = path.join(resolvedProjectRoot, config.artifacts.runsDir);
+  const artifactRootAction = await ensureDirectory(artifactRootPath);
+  const runsDirAction = await ensureDirectory(runsPath);
+  const gitignorePath = path.join(resolvedProjectRoot, ".gitignore");
+  const gitignoreAction = await ensureArtifactIgnoreRule(
+    gitignorePath,
+    config.artifacts.rootDir,
+  );
+
+  return {
+    projectRoot: resolvedProjectRoot,
+    configPath,
+    configAction,
+    artifactRootDir: config.artifacts.rootDir,
+    artifactRootAction,
+    runsDir: config.artifacts.runsDir,
+    runsDirAction,
+    gitignorePath,
+    gitignoreAction,
+  };
+}
+
+export function formatInitializeProjectSummary(
+  result: InitializeProjectResult,
+): string {
+  const gitignoreEntry = toGitignoreEntry(result.artifactRootDir);
+
+  return [
+    `Initialized architect-engineer-agentic-harness in ${result.projectRoot}`,
+    `- Config: ${describeConfigAction(result.configAction, path.basename(result.configPath))}`,
+    `- Artifact root: ${describeDirectoryAction(result.artifactRootAction, result.artifactRootDir)}`,
+    `- Runs directory: ${describeDirectoryAction(result.runsDirAction, result.runsDir)}`,
+    `- .gitignore: ${describeGitignoreAction(result.gitignoreAction, gitignoreEntry)}`,
+  ].join("\n");
+}
+
+async function ensureDirectory(
+  directoryPath: string,
+): Promise<"created" | "existing"> {
+  if (await pathExists(directoryPath)) {
+    const directoryStats = await stat(directoryPath);
+
+    if (!directoryStats.isDirectory()) {
+      throw new Error(`${directoryPath} exists but is not a directory.`);
+    }
+
+    return "existing";
+  }
+
+  await mkdir(directoryPath, { recursive: true });
+  return "created";
+}
+
+async function ensureArtifactIgnoreRule(
+  gitignorePath: string,
+  artifactRootDir: string,
+): Promise<"created" | "updated" | "unchanged"> {
+  const ignoreEntry = toGitignoreEntry(artifactRootDir);
+
+  let gitignoreContents: string | undefined;
+
+  try {
+    gitignoreContents = await readFile(gitignorePath, "utf8");
+  } catch (error) {
+    const maybeNodeError = error as NodeJS.ErrnoException;
+
+    if (maybeNodeError.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  if (
+    gitignoreContents !== undefined &&
+    hasEquivalentIgnoreEntry(gitignoreContents, artifactRootDir)
+  ) {
+    return "unchanged";
+  }
+
+  const nextContents =
+    gitignoreContents === undefined
+      ? `${ignoreEntry}\n`
+      : appendLine(gitignoreContents, ignoreEntry);
+
+  await writeFile(gitignorePath, nextContents, "utf8");
+
+  return gitignoreContents === undefined ? "created" : "updated";
+}
+
+function hasEquivalentIgnoreEntry(
+  gitignoreContents: string,
+  artifactRootDir: string,
+): boolean {
+  const normalizedArtifactRootDir = normalizeIgnorePath(artifactRootDir);
+
+  return gitignoreContents.split(/\r?\n/u).some((line) => {
+    const trimmedLine = line.trim();
+
+    if (
+      trimmedLine.length === 0 ||
+      trimmedLine.startsWith("#") ||
+      trimmedLine.startsWith("!")
+    ) {
+      return false;
+    }
+
+    return normalizeIgnorePath(trimmedLine) === normalizedArtifactRootDir;
+  });
+}
+
+function normalizeIgnorePath(value: string): string {
+  return value
+    .replaceAll("\\", "/")
+    .trim()
+    .replace(/^\.\/+/u, "")
+    .replace(/^\/+/u, "")
+    .replace(/\/+$/u, "");
+}
+
+function toGitignoreEntry(artifactRootDir: string): string {
+  return `/${normalizeIgnorePath(artifactRootDir)}/`;
+}
+
+function appendLine(currentContents: string, lineToAppend: string): string {
+  const trailingNewline = currentContents.endsWith("\n") ? "" : "\n";
+
+  return `${currentContents}${trailingNewline}${lineToAppend}\n`;
+}
+
+function describeConfigAction(
+  action: InitializeProjectResult["configAction"],
+  configFileName: string,
+): string {
+  return action === "created"
+    ? `created ${configFileName}`
+    : `preserved existing ${configFileName}`;
+}
+
+function describeDirectoryAction(
+  action: "created" | "existing",
+  directory: string,
+): string {
+  return action === "created"
+    ? `created ${directory}`
+    : `kept existing ${directory}`;
+}
+
+function describeGitignoreAction(
+  action: InitializeProjectResult["gitignoreAction"],
+  ignoreEntry: string,
+): string {
+  switch (action) {
+    case "created":
+      return `created with ${ignoreEntry}`;
+    case "updated":
+      return `added ${ignoreEntry}`;
+    case "unchanged":
+      return `already contains ${ignoreEntry}`;
+  }
+}
+
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await stat(targetPath);
+    return true;
+  } catch (error) {
+    const maybeNodeError = error as NodeJS.ErrnoException;
+
+    if (maybeNodeError.code === "ENOENT") {
+      return false;
+    }
+
+    throw error;
+  }
+}

@@ -7,11 +7,15 @@ import { describe, expect, it } from "vitest";
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(currentDirectory, "..", "..");
 const cliEntrypoint = path.resolve(repoRoot, "src/cli/index.ts");
+const tsxLoaderEntrypoint = path.resolve(
+  repoRoot,
+  "node_modules/tsx/dist/loader.mjs",
+);
 
 function runCli(args: string[]) {
   return spawnSync(
     process.execPath,
-    ["--import", "tsx", cliEntrypoint, ...args],
+    ["--import", tsxLoaderEntrypoint, cliEntrypoint, ...args],
     {
       cwd: repoRoot,
       encoding: "utf8",
@@ -41,12 +45,31 @@ describe("CLI help", () => {
     expect(result.stdout).toContain("inspect");
   });
 
+  it("prints the package version", () => {
+    const result = runCli(["--version"]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout.trim()).toBe("0.1.0");
+  });
+
+  it("registers the friendly blueprint bin alias", async () => {
+    const packageJsonModule = await import("../../package.json", {
+      with: { type: "json" },
+    });
+
+    expect(packageJsonModule.default.bin).toMatchObject({
+      "architect-engineer-agentic-harness": "./dist/cli.js",
+      blueprint: "./dist/cli.js",
+    });
+  });
+
   it("returns a non-zero exit code for placeholder commands", () => {
-    const result = runCli(["init"]);
+    const result = runCli(["run"]);
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("not implemented yet");
-    expect(result.stderr).toContain("Milestone 1");
+    expect(result.stderr).toContain("Milestone 2+");
   });
 });
