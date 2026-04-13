@@ -30,6 +30,7 @@ export {
 } from "./artifacts/run-id.js";
 export {
   appendCommandLog,
+  appendModelEvent,
   appendRunEvent,
   appendStructuredMessage,
   initializeRunDossier,
@@ -49,6 +50,34 @@ export {
   validateRunResult,
 } from "./runtime/run-result.js";
 export type { HarnessConfig, LoadedHarnessConfig } from "./types/config.js";
+export {
+  ArchitectControlOutputValidationError,
+  createArchitectStructuredOutputFormat,
+  loadArchitectControlSchema,
+  validateArchitectControlOutput,
+} from "./models/architect-output.js";
+export {
+  createRunDossierModelLogger,
+  redactModelHeaders,
+} from "./models/dossier-logger.js";
+export {
+  DEFAULT_MODEL_MAX_RETRIES,
+  DEFAULT_MODEL_TIMEOUT_MS,
+  createRoleModelClient,
+  normalizeOpenAiCompatibleBaseUrl,
+  resolveModelConfigForRole,
+} from "./models/provider-factory.js";
+export {
+  ModelClientConfigError,
+  ModelClientError,
+  ModelHttpError,
+  ModelNetworkError,
+  ModelResponseError,
+  ModelStructuredOutputError,
+  ModelTimeoutError,
+  OpenAiCompatibleChatClient,
+  UnsupportedModelProviderError,
+} from "./models/openai-compatible-client.js";
 export type {
   CommandLogRecord,
   DossierArtifactKind,
@@ -65,3 +94,25 @@ export type {
   RunSchemaReference,
   StructuredMessageRecord,
 } from "./types/run.js";
+export type {
+  ArchitectPlanOutput,
+  ArchitectReview,
+  ArchitectReviewOutput,
+  ArchitectStructuredOutputKind,
+  ArchitectStructuredOutputSchema,
+  ArchitectStructuredOutputValue,
+  HarnessModelRole,
+  ModelChatMessage,
+  ModelChatRequest,
+  ModelChatResponse,
+  ModelChatRole,
+  ModelLogErrorEvent,
+  ModelLogRequestEvent,
+  ModelLogResponseEvent,
+  ModelLogRetryEvent,
+  ModelRequestLogger,
+  ModelResponseUsage,
+  ModelStructuredOutputSpec,
+  ResolvedModelConfig,
+  SupportedModelProvider,
+} from "./models/types.js";

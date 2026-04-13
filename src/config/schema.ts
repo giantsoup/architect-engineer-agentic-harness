@@ -25,6 +25,9 @@ const modelConfigSchema = z
     model: nonEmptyStringSchema,
     baseUrl: z.string().url("Must be a valid URL."),
     apiKey: nonEmptyStringSchema.optional(),
+    headers: z.record(nonEmptyStringSchema, nonEmptyStringSchema).optional(),
+    maxRetries: z.number().int().min(0).optional(),
+    timeoutMs: z.number().int().positive().optional(),
   })
   .strict();
 

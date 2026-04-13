@@ -23,6 +23,7 @@ describe("loadHarnessConfig", () => {
 
     delete process.env.TEST_ENGINEER_CONTAINER;
     delete process.env.TEST_ARCHITECT_API_KEY;
+    delete process.env.TEST_ARCHITECT_HEADER;
   });
 
   it("resolves environment variable references throughout the config", async () => {
@@ -253,5 +254,73 @@ requirePassingChecks = true
 
     expect(loadedConfig.configPath).toBe(configPath);
     expect(loadedConfig.projectRoot).toBe(projectRoot);
+  });
+
+  it("loads optional model headers, timeouts, and retry settings", async () => {
+    const projectRoot = createTempProject();
+    createdProjectRoots.push(projectRoot);
+    process.env.TEST_ARCHITECT_HEADER = "through-env";
+
+    writeFileSync(
+      path.join(projectRoot, "agent-harness.toml"),
+      `version = 1
+
+[models.architect]
+provider = "openai-compatible"
+model = "architect"
+baseUrl = "https://api.example.com/v1"
+timeoutMs = 45000
+maxRetries = 4
+
+[models.architect.headers]
+x-route = "\${TEST_ARCHITECT_HEADER}"
+
+[models.engineer]
+provider = "llama.cpp"
+model = "engineer"
+baseUrl = "http://127.0.0.1:8080/v1"
+timeoutMs = 90000
+maxRetries = 1
+
+[project]
+executionTarget = "host"
+
+[commands]
+setup = "npm install"
+build = "npm run build"
+test = "npm run test"
+lint = "npm run lint"
+format = "npm run format"
+
+[mcp]
+allowlist = []
+
+[network]
+mode = "inherit"
+
+[sandbox]
+mode = "workspace-write"
+
+[artifacts]
+rootDir = ".agent-harness"
+runsDir = ".agent-harness/runs"
+
+[stopConditions]
+maxIterations = 12
+maxEngineerAttempts = 3
+requirePassingChecks = true
+`,
+      "utf8",
+    );
+
+    const { config } = await loadHarnessConfig({ projectRoot });
+
+    expect(config.models.architect.headers).toEqual({
+      "x-route": "through-env",
+    });
+    expect(config.models.architect.timeoutMs).toBe(45000);
+    expect(config.models.architect.maxRetries).toBe(4);
+    expect(config.models.engineer.timeoutMs).toBe(90000);
+    expect(config.models.engineer.maxRetries).toBe(1);
   });
 });

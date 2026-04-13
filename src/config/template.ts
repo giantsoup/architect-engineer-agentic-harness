@@ -21,12 +21,22 @@ provider = ${quoteTomlString(config.models.architect.provider)}
 model = ${quoteTomlString(config.models.architect.model)}
 baseUrl = ${quoteTomlString(config.models.architect.baseUrl)}
 # apiKey = "\${OPENAI_API_KEY}"
+# timeoutMs = 45000
+# maxRetries = 2
+#
+# [models.architect.headers]
+# x-provider-route = "architect"
 
 [models.engineer]
 # Example local llama.cpp-compatible endpoint for the Engineer role.
 provider = ${quoteTomlString(config.models.engineer.provider)}
 model = ${quoteTomlString(config.models.engineer.model)}
 baseUrl = ${quoteTomlString(config.models.engineer.baseUrl)}
+# timeoutMs = 120000
+# maxRetries = 1
+#
+# [models.engineer.headers]
+# x-provider-route = "engineer"
 
 [project]
 # Use "docker" to execute inside an existing container, or "host" to run locally.

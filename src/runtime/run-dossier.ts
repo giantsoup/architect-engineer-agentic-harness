@@ -191,6 +191,13 @@ export async function appendStructuredMessage(
   });
 }
 
+export async function appendModelEvent(
+  paths: RunDossierPaths,
+  event: Record<string, unknown>,
+): Promise<RunManifest> {
+  return appendRunEvent(paths, event);
+}
+
 export async function appendCommandLog(
   paths: RunDossierPaths,
   commandLog: CommandLogRecord,

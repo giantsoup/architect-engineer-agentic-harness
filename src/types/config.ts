@@ -3,6 +3,9 @@ export interface ModelConfig {
   model: string;
   baseUrl: string;
   apiKey?: string | undefined;
+  headers?: Record<string, string> | undefined;
+  maxRetries?: number | undefined;
+  timeoutMs?: number | undefined;
 }
 
 export interface HarnessConfig {
