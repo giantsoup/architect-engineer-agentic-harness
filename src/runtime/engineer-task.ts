@@ -13,6 +13,7 @@ import {
   type EngineerAction,
 } from "../models/engineer-output.js";
 import { createRoleModelClient } from "../models/provider-factory.js";
+import { ModelClientError } from "../models/openai-compatible-client.js";
 import { createToolRouter, type ToolRouter } from "../tools/tool-router.js";
 import type { CreateMcpServerClient } from "../tools/mcp/client.js";
 import type {
@@ -43,6 +44,7 @@ const DEFAULT_RUN_TIMEOUT_MS = 60 * 60 * 1000;
 const MAX_MODEL_VISIBLE_FILE_READ_CHARS = 4000;
 const MAX_MODEL_VISIBLE_COMMAND_OUTPUT_CHARS = 3000;
 const MAX_CONSECUTIVE_EXPLORATION_STEPS = 12;
+const MAX_CONSECUTIVE_RETRYABLE_MODEL_ERRORS = 3;
 
 export type EngineerTaskStopReason =
   | "blocked"
@@ -230,6 +232,7 @@ export async function executeEngineerTask(
     const checks: RunCheckResult[] = [...(options.initialChecks ?? [])];
     let consecutiveFailedChecks = options.initialConsecutiveFailedChecks ?? 0;
     let consecutiveExplorationSteps = 0;
+    let consecutiveRetryableModelErrors = 0;
     let hasPassingCheck = !requirePassingChecks;
     let iterationCount = 0;
     let outcome: FinalizedOutcome | undefined;
@@ -284,6 +287,31 @@ export async function executeEngineerTask(
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        const modelError =
+          error instanceof ModelClientError ? error : undefined;
+
+        if (
+          modelError?.retryable === true &&
+          consecutiveRetryableModelErrors <
+            MAX_CONSECUTIVE_RETRYABLE_MODEL_ERRORS
+        ) {
+          consecutiveRetryableModelErrors += 1;
+          const reminder = createRetryableModelErrorGuidance({
+            error: modelError,
+            requiredCheckCommand,
+          });
+
+          messages.push({
+            content: reminder,
+            role: "user",
+          });
+          await appendStructuredMessage(dossier.paths, {
+            content: reminder,
+            role: "system",
+            timestamp: now().toISOString(),
+          });
+          continue;
+        }
 
         outcome = {
           status: "failed",
@@ -292,6 +320,8 @@ export async function executeEngineerTask(
         };
         break;
       }
+
+      consecutiveRetryableModelErrors = 0;
 
       messages.push({
         content: modelResponse.rawContent,
@@ -881,6 +911,25 @@ function createPostToolGuidance(options: {
   }
 
   return undefined;
+}
+
+function createRetryableModelErrorGuidance(options: {
+  error: ModelClientError;
+  requiredCheckCommand: string;
+}): string {
+  const issueDetails =
+    options.error.issues === undefined || options.error.issues.length === 0
+      ? "The previous response did not match the required engineer_action schema."
+      : `The previous response did not match the required engineer_action schema: ${options.error.issues.join("; ")}`;
+
+  return [
+    issueDetails,
+    "Return exactly one JSON object matching the schema and nothing else.",
+    "Use only one tool request or one final action.",
+    "Match the chosen tool's exact request shape and omit extra fields.",
+    "For example, only `file.read`, `file.write`, and `file.list` may include `path`.",
+    `If the work is already done, run \`${options.requiredCheckCommand}\` or return a valid \`final\` action after a passing check is recorded.`,
+  ].join(" ");
 }
 
 function renderFinalReport(options: {

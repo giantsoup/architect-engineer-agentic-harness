@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 
 import type { JsonValue } from "../types/run.js";
 
@@ -12,7 +13,10 @@ export async function writeJsonFile(
   value: unknown,
 ): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, stringifyJson(value), "utf8");
+  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+
+  await writeFile(temporaryPath, stringifyJson(value), "utf8");
+  await rename(temporaryPath, filePath);
 }
 
 function sortJsonValue(value: unknown): JsonValue {

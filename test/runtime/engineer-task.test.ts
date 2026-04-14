@@ -24,6 +24,7 @@ import {
   type McpToolCallResult,
   type ModelChatRequest,
   type ModelChatResponse,
+  ModelStructuredOutputError,
   McpServerUnavailableError,
 } from "../../src/index.js";
 
@@ -1031,5 +1032,69 @@ args = ["repo-mcp.js"]`,
 
     expect(toolMessage?.content).toContain("[truncated ");
     expect(toolMessage?.content.length).toBeLessThan(6000);
+  });
+
+  it("continues after a retryable Engineer model-format error and accepts the next valid action", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: "http://127.0.0.1:65535/v1",
+      projectRoot,
+    });
+    const requests: Array<ModelChatRequest<unknown>> = [];
+    let callCount = 0;
+    const client = {
+      async chat<TStructured>(
+        request: ModelChatRequest<TStructured>,
+      ): Promise<ModelChatResponse<TStructured>> {
+        requests.push(request as ModelChatRequest<unknown>);
+        callCount += 1;
+
+        if (callCount === 1) {
+          throw new ModelStructuredOutputError(
+            "Structured output from engineer model `engineer-model` did not match engineer_action.",
+            {
+              issues: ["engineer_action.request.path: Unexpected property."],
+              retryable: true,
+              schemaName: "engineer_action",
+            },
+          );
+        }
+
+        return {
+          id: `mock-${callCount}`,
+          rawContent: JSON.stringify({
+            outcome: "blocked",
+            summary: "Blocked after retry guidance.",
+            type: "final",
+          }),
+          role: "assistant",
+          structuredOutput: {
+            outcome: "blocked",
+            summary: "Blocked after retry guidance.",
+            type: "final",
+          } as TStructured,
+        };
+      },
+    };
+
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      modelClient: client,
+      persistFinalArtifacts: false,
+      task: "Find one tiny improvement.",
+    });
+
+    expect(execution.stopReason).toBe("blocked");
+    expect(requests).toHaveLength(2);
+    expect(
+      requests[1]?.messages.some(
+        (message) =>
+          message.role === "user" &&
+          message.content.includes("Match the chosen tool's exact request shape"),
+      ),
+    ).toBe(true);
   });
 });

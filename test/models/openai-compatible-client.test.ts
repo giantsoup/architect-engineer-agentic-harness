@@ -1041,11 +1041,9 @@ describe("OpenAiCompatibleChatClient", () => {
                 message: {
                   content: JSON.stringify({
                     request: {
-                      path: "src/cli/program.ts",
                       toolName: "git.status",
                     },
-                    summary:
-                      "Inspect src/cli/program.ts to identify a small wording or DX improvement.",
+                    summary: 42,
                     type: "tool",
                   }),
                   role: "assistant",
@@ -1113,6 +1111,59 @@ describe("OpenAiCompatibleChatClient", () => {
       type: "tool",
     });
     expect(attempts).toBe(2);
+  });
+
+  it("normalizes salvageable Engineer request shapes before validation", async () => {
+    const mockServer = await startMockServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  request: {
+                    path: "README.md",
+                    toolName: "git.status",
+                  },
+                  summary: "Inspect git status for the workspace.",
+                  type: "tool",
+                }),
+                role: "assistant",
+              },
+            },
+          ],
+          id: "chatcmpl-engineer-normalized-request",
+        }),
+      );
+    });
+    servers.push(mockServer);
+
+    const { loadedConfig, projectRoot } = await createLoadedConfig(
+      renderConfig({
+        architectBaseUrl: `${mockServer.url}/remote/v1`,
+        engineerBaseUrl: `${mockServer.url}/local/v1`,
+      }),
+    );
+    projectRoots.push(projectRoot);
+
+    const client = new OpenAiCompatibleChatClient({
+      config: resolveModelConfigForRole(loadedConfig, "engineer"),
+      retryDelayMs: 0,
+    });
+
+    const response = await client.chat({
+      messages: [{ content: "Return an engineer action.", role: "user" }],
+      structuredOutput: await createEngineerStructuredOutputFormat(),
+    });
+
+    expect(response.structuredOutput).toEqual({
+      request: {
+        toolName: "git.status",
+      },
+      summary: "Inspect git status for the workspace.",
+      type: "tool",
+    });
   });
 
   it("classifies malformed successful provider payloads as invalid responses", async () => {

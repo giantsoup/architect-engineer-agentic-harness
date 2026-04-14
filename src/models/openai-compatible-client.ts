@@ -444,6 +444,19 @@ export class OpenAiCompatibleChatClient {
         return await structuredOutput.validate(parsedJson);
       } catch (error) {
         lastValidationError = error;
+
+        const normalizedJson = normalizeStructuredOutputCandidate(
+          structuredOutput.formatName,
+          parsedJson,
+        );
+
+        if (normalizedJson !== parsedJson) {
+          try {
+            return await structuredOutput.validate(normalizedJson);
+          } catch (normalizedError) {
+            lastValidationError = normalizedError;
+          }
+        }
       }
     }
 
@@ -925,6 +938,107 @@ function isRetryableStructuredOutputFailure(options: {
   }
 
   return false;
+}
+
+function normalizeStructuredOutputCandidate(
+  formatName: string,
+  value: unknown,
+): unknown {
+  if (formatName !== "engineer_action" || !isPlainObject(value)) {
+    return value;
+  }
+
+  if (value.type === "tool") {
+    const normalized: Record<string, unknown> = {
+      request: normalizeEngineerToolRequest(value.request),
+      summary: value.summary,
+      type: value.type,
+    };
+
+    if (value.stopWhenSuccessful !== undefined) {
+      normalized.stopWhenSuccessful = value.stopWhenSuccessful;
+    }
+
+    return normalized;
+  }
+
+  if (value.type === "final") {
+    const normalized: Record<string, unknown> = {
+      outcome: value.outcome,
+      summary: value.summary,
+      type: value.type,
+    };
+
+    if (value.blockers !== undefined) {
+      normalized.blockers = value.blockers;
+    }
+
+    return normalized;
+  }
+
+  return value;
+}
+
+function normalizeEngineerToolRequest(value: unknown): unknown {
+  if (!isPlainObject(value) || typeof value.toolName !== "string") {
+    return value;
+  }
+
+  switch (value.toolName) {
+    case "file.read":
+      return {
+        path: value.path,
+        toolName: value.toolName,
+      };
+    case "file.write":
+      return {
+        content: value.content,
+        path: value.path,
+        toolName: value.toolName,
+      };
+    case "file.list":
+      return {
+        ...(value.path === undefined ? {} : { path: value.path }),
+        toolName: value.toolName,
+      };
+    case "command.execute":
+      return {
+        ...(value.accessMode === undefined
+          ? {}
+          : { accessMode: value.accessMode }),
+        command: value.command,
+        ...(value.environment === undefined
+          ? {}
+          : { environment: value.environment }),
+        ...(value.timeoutMs === undefined ? {} : { timeoutMs: value.timeoutMs }),
+        toolName: value.toolName,
+        ...(value.workingDirectory === undefined
+          ? {}
+          : { workingDirectory: value.workingDirectory }),
+      };
+    case "git.status":
+      return {
+        toolName: value.toolName,
+      };
+    case "git.diff":
+      return {
+        ...(value.staged === undefined ? {} : { staged: value.staged }),
+        toolName: value.toolName,
+      };
+    case "mcp.call":
+      return {
+        ...(value.arguments === undefined ? {} : { arguments: value.arguments }),
+        name: value.name,
+        server: value.server,
+        toolName: value.toolName,
+      };
+    default:
+      return value;
+  }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function renderStructuredOutputFallbackInstruction<TStructured>(
