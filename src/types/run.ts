@@ -98,6 +98,10 @@ export interface ToolCallErrorRecord {
     | "git-failed"
     | "invalid-input"
     | "invalid-state"
+    | "mcp-call-failed"
+    | "mcp-not-allowed"
+    | "mcp-server-unavailable"
+    | "mcp-tool-not-found"
     | "path-violation"
     | "permission-denied";
   message: string;

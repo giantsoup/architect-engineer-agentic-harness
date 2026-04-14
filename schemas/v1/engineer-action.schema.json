@@ -108,6 +108,27 @@
                   "const": "git.diff"
                 }
               }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "server", "toolName"],
+              "properties": {
+                "arguments": {
+                  "type": "object"
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "server": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "toolName": {
+                  "const": "mcp.call"
+                }
+              }
             }
           ]
         },

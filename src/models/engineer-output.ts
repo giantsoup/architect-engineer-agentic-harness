@@ -2,11 +2,11 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import { DEFAULT_SCHEMA_VERSION } from "../versioning.js";
-import type { BuiltInToolRequest } from "../tools/types.js";
+import type { ToolRequest } from "../tools/types.js";
 import type { ModelStructuredOutputSpec } from "./types.js";
 
 export interface EngineerToolAction {
-  request: BuiltInToolRequest;
+  request: ToolRequest;
   stopWhenSuccessful?: boolean | undefined;
   summary: string;
   type: "tool";
@@ -44,13 +44,14 @@ export class EngineerControlOutputValidationError extends Error {
 }
 
 const schemaCache = new Map<string, Promise<Record<string, unknown>>>();
-const BUILT_IN_TOOL_NAMES = new Set([
+const SUPPORTED_TOOL_NAMES = new Set([
   "command.execute",
   "file.list",
   "file.read",
   "file.write",
   "git.diff",
   "git.status",
+  "mcp.call",
 ]);
 
 export async function loadEngineerControlSchema(
@@ -237,8 +238,8 @@ function validateToolRequest(
     return;
   }
 
-  if (!BUILT_IN_TOOL_NAMES.has(toolName)) {
-    issues.push(`${path}.toolName: Unsupported built-in tool.`);
+  if (!SUPPORTED_TOOL_NAMES.has(toolName)) {
+    issues.push(`${path}.toolName: Unsupported tool.`);
     return;
   }
 
@@ -341,6 +342,21 @@ function validateToolRequest(
       }
 
       return;
+    case "mcp.call":
+      pushUnexpectedProperties(
+        path,
+        value,
+        new Set(["arguments", "name", "server", "toolName"]),
+        issues,
+      );
+      validateNonEmptyString(value.server, `${path}.server`, issues);
+      validateNonEmptyString(value.name, `${path}.name`, issues);
+
+      if (value.arguments !== undefined) {
+        validateJsonObject(value.arguments, `${path}.arguments`, issues);
+      }
+
+      return;
   }
 }
 
@@ -365,6 +381,52 @@ function validateEnvironmentObject(
       );
     }
   }
+}
+
+function validateJsonObject(
+  value: unknown,
+  path: string,
+  issues: string[],
+): void {
+  if (!isPlainObject(value)) {
+    issues.push(`${path}: Expected an object.`);
+    return;
+  }
+
+  for (const [key, nestedValue] of Object.entries(value)) {
+    validateJsonValue(nestedValue, `${path}.${key}`, issues);
+  }
+}
+
+function validateJsonValue(
+  value: unknown,
+  path: string,
+  issues: string[],
+): void {
+  if (
+    value === null ||
+    typeof value === "boolean" ||
+    typeof value === "number" ||
+    typeof value === "string"
+  ) {
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) =>
+      validateJsonValue(item, `${path}[${index}]`, issues),
+    );
+    return;
+  }
+
+  if (isPlainObject(value)) {
+    for (const [key, nestedValue] of Object.entries(value)) {
+      validateJsonValue(nestedValue, `${path}.${key}`, issues);
+    }
+    return;
+  }
+
+  issues.push(`${path}: Expected JSON-compatible data.`);
 }
 
 function validateString(value: unknown, path: string, issues: string[]): void {

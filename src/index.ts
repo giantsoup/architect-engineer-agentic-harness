@@ -60,6 +60,11 @@ export {
   BuiltInToolPathError,
   BuiltInToolPermissionError,
   BuiltInToolStateError,
+  McpServerUnavailableError,
+  McpToolCallError,
+  McpToolError,
+  McpToolNotAllowedError,
+  McpToolNotFoundError,
 } from "./tools/errors.js";
 export {
   buildDockerExecArgs,
@@ -76,10 +81,24 @@ export {
   createBuiltInToolExecutor,
   BuiltInToolExecutor,
 } from "./tools/built-in-tools.js";
+export { createToolRouter, ToolRouter } from "./tools/tool-router.js";
 export {
   createProjectCommandRunner,
   ProjectCommandRunner,
 } from "./sandbox/command-runner.js";
+export {
+  assertMcpServerAllowed,
+  getAllowlistedMcpServerIds,
+  isMcpServerAllowed,
+} from "./tools/mcp/allowlist.js";
+export { createMcpServerClient } from "./tools/mcp/client.js";
+export {
+  DEFAULT_MCP_STARTUP_TIMEOUT_MS,
+  DEFAULT_MCP_TOOL_TIMEOUT_MS,
+  listConfiguredMcpServerIds,
+  resolveConfiguredMcpServers,
+  resolveMcpServerDefinition,
+} from "./tools/mcp/registry.js";
 export {
   RunResultValidationError,
   validateRunResult,
@@ -91,7 +110,12 @@ export {
   GitStatusParseError,
   parseGitStatusPorcelain,
 } from "./git/status.js";
-export type { HarnessConfig, LoadedHarnessConfig } from "./types/config.js";
+export type {
+  HarnessConfig,
+  LoadedHarnessConfig,
+  McpServerConfig,
+  McpServerPreset,
+} from "./types/config.js";
 export type {
   DetectedProjectAdapter,
   ProjectAdapterId,
@@ -122,7 +146,18 @@ export type {
   GitStatusEntry,
   GitStatusToolRequest,
   GitStatusToolResult,
+  McpAvailableTool,
+  McpServerAvailability,
+  McpToolCallRequest,
+  McpToolCallResult,
+  McpToolResponseContent,
+  ToolCatalog,
+  ToolExecutionContext,
+  ToolExecutionSummary,
+  ToolRequest,
+  ToolResult,
 } from "./tools/types.js";
+export type { CreateToolRouterOptions } from "./tools/tool-router.js";
 export type {
   CommandExecutionRequest,
   CreateProjectCommandRunnerOptions,
@@ -217,6 +252,10 @@ export type {
   ToolCallRecord,
 } from "./types/run.js";
 export type {
+  CreateMcpServerClient,
+  McpServerClientLike,
+} from "./tools/mcp/client.js";
+export type {
   EngineerAction,
   EngineerFinalAction,
   EngineerToolAction,
@@ -254,3 +293,4 @@ export type {
   ArchitectEngineerRunExecution,
   ExecuteArchitectEngineerRunOptions,
 } from "./runtime/architect-engineer-run.js";
+export type { ResolvedMcpServerDefinition } from "./tools/mcp/registry.js";

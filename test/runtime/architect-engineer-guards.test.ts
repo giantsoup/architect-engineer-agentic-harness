@@ -13,6 +13,27 @@ import {
   hasArchitectEngineerTimedOut,
   hasReachedFailedCheckThreshold,
 } from "../../src/runtime/architect-engineer-guards.js";
+import type { ToolExecutionSummary } from "../../src/tools/types.js";
+
+const EMPTY_TOOL_SUMMARY: ToolExecutionSummary = {
+  builtInCallCount: 0,
+  builtInTools: [
+    "command.execute",
+    "file.list",
+    "file.read",
+    "file.write",
+    "git.diff",
+    "git.status",
+  ],
+  mcpCallCount: 0,
+  mcpCalls: [],
+  mcpServers: {
+    available: [],
+    configured: [],
+    unavailable: [],
+  },
+  mcpTools: [],
+};
 
 describe("architect-engineer guards", () => {
   it("reports remaining time and timeout state", () => {
@@ -58,6 +79,7 @@ describe("architect-engineer guards", () => {
           summary: "Required check failed 5 consecutive times.",
         },
         stopReason: "max-consecutive-failed-checks",
+        toolSummary: EMPTY_TOOL_SUMMARY,
       },
     );
 

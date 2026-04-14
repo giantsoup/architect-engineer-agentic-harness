@@ -173,6 +173,8 @@ describe("project adapter config integration", () => {
       "Detected project adapter: Generic Laravel",
     );
     expect(configContents).toContain('test = "php artisan test"');
+    expect(configContents).toContain("[mcp.servers.laravel-boost]");
+    expect(configContents).toContain('preset = "laravel-boost"');
   });
 
   it("lets explicit config overrides win over detected project commands", async () => {

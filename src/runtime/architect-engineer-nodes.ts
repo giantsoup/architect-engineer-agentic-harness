@@ -944,7 +944,23 @@ function renderFinalReport(
       `- Consecutive failed required checks: ${state.stopConditions.consecutiveFailedRequiredChecks}`,
       `- Latest stop reason: ${state.engineerExecution.stopReason}`,
       `- Latest summary: ${state.engineerExecution.result.summary}`,
+      `- Built-in calls recorded: ${state.engineerExecution.toolSummary.builtInCallCount}`,
+      `- MCP calls recorded: ${state.engineerExecution.toolSummary.mcpCallCount}`,
+      `- MCP available servers: ${
+        state.engineerExecution.toolSummary.mcpServers.available.length === 0
+          ? "none"
+          : state.engineerExecution.toolSummary.mcpServers.available.join(", ")
+      }`,
     );
+
+    if (state.engineerExecution.toolSummary.mcpServers.unavailable.length > 0) {
+      lines.push("", "## MCP Diagnostics", "");
+
+      for (const diagnostic of state.engineerExecution.toolSummary.mcpServers
+        .unavailable) {
+        lines.push(`- ${diagnostic.message}`);
+      }
+    }
   }
 
   lines.push(

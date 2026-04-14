@@ -59,6 +59,13 @@ export function createRunCommand(): Command {
             ? {}
             : { timeoutMs: options.timeoutMs }),
         });
+        const unavailableMcpServers =
+          execution.state.engineerExecution?.toolSummary.mcpServers
+            .unavailable ?? [];
+
+        for (const diagnostic of unavailableMcpServers) {
+          console.error(`MCP warning: ${diagnostic.message}`);
+        }
 
         console.error(
           `Run ${execution.result.status}: ${execution.result.summary}. Dossier: ${execution.dossier.paths.runDirRelativePath}`,

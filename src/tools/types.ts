@@ -3,6 +3,7 @@ import type {
   ContainerCommandEnvironment,
   ContainerCommandResult,
 } from "../sandbox/container-session.js";
+import type { JsonValue } from "../types/run.js";
 
 export type BuiltInToolName =
   | "command.execute"
@@ -122,6 +123,85 @@ export type BuiltInToolResult =
   | GitDiffToolResult
   | GitStatusToolResult;
 
-export interface BuiltInToolExecutionContext {
+export interface McpToolCallRequest {
+  arguments?: Record<string, JsonValue> | undefined;
+  name: string;
+  server: string;
+  toolName: "mcp.call";
+}
+
+export type McpToolResponseContent =
+  | {
+      text: string;
+      type: "text";
+    }
+  | {
+      data: string;
+      mimeType: string;
+      type: "audio" | "image";
+    }
+  | {
+      blob?: string | undefined;
+      mimeType?: string | undefined;
+      text?: string | undefined;
+      type: "resource";
+      uri: string;
+    }
+  | {
+      description?: string | undefined;
+      mimeType?: string | undefined;
+      name: string;
+      title?: string | undefined;
+      type: "resource_link";
+      uri: string;
+    };
+
+export interface McpToolCallResult {
+  content: McpToolResponseContent[];
+  isError: boolean;
+  name: string;
+  server: string;
+  structuredContent?: Record<string, JsonValue> | undefined;
+  toolName: "mcp.call";
+}
+
+export interface McpAvailableTool {
+  description?: string | undefined;
+  name: string;
+  server: string;
+}
+
+export interface McpServerAvailability {
+  available: string[];
+  configured: string[];
+  unavailable: Array<{
+    message: string;
+    server: string;
+  }>;
+}
+
+export interface ToolCatalog {
+  builtInTools: BuiltInToolName[];
+  mcpServers: McpServerAvailability;
+  mcpTools: McpAvailableTool[];
+}
+
+export interface ToolExecutionSummary extends ToolCatalog {
+  builtInCallCount: number;
+  mcpCallCount: number;
+  mcpCalls: Array<{
+    name: string;
+    server: string;
+    status: "completed" | "failed";
+  }>;
+}
+
+export type ToolRequest = BuiltInToolRequest | McpToolCallRequest;
+
+export type ToolResult = BuiltInToolResult | McpToolCallResult;
+
+export interface ToolExecutionContext {
   role: HarnessModelRole;
 }
+
+export type BuiltInToolExecutionContext = ToolExecutionContext;

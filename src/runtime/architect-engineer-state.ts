@@ -8,6 +8,7 @@ import type {
   EngineerTaskStopReason,
 } from "./engineer-task.js";
 import type { RunCheckResult, RunResult } from "../types/run.js";
+import type { ToolExecutionSummary } from "../tools/types.js";
 import {
   createInitialRunGitMetadata,
   type RuntimeRunGitMetadata,
@@ -63,6 +64,7 @@ export interface ArchitectEngineerExecutionSnapshot {
   iterationCount: number;
   result: RunResult;
   stopReason: EngineerTaskStopReason;
+  toolSummary: ToolExecutionSummary;
 }
 
 export interface ArchitectEngineerFinalOutcome {
@@ -172,6 +174,7 @@ export function withEngineerExecution(
       iterationCount: execution.iterationCount,
       result: execution.result,
       stopReason: execution.stopReason,
+      toolSummary: execution.toolSummary,
     },
     iterations: {
       ...state.iterations,

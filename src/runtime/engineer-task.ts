@@ -13,12 +13,15 @@ import {
   type EngineerAction,
 } from "../models/engineer-output.js";
 import { createRoleModelClient } from "../models/provider-factory.js";
-import {
-  createBuiltInToolExecutor,
-  type BuiltInToolExecutor,
-} from "../tools/built-in-tools.js";
-import type { BuiltInToolRequest, BuiltInToolResult } from "../tools/types.js";
-import { BuiltInToolError } from "../tools/errors.js";
+import { createToolRouter, type ToolRouter } from "../tools/tool-router.js";
+import type { CreateMcpServerClient } from "../tools/mcp/client.js";
+import type {
+  ToolCatalog,
+  ToolExecutionSummary,
+  ToolRequest,
+  ToolResult,
+} from "../tools/types.js";
+import { BuiltInToolError, McpToolError } from "../tools/errors.js";
 import type { ProjectCommandRunnerLike } from "../sandbox/command-runner.js";
 import type { RunProcess } from "../sandbox/process-runner.js";
 import { DEFAULT_PROMPT_VERSION } from "../versioning.js";
@@ -61,6 +64,7 @@ export interface ExecuteEngineerTaskOptions {
   loadedConfig: LoadedHarnessConfig;
   maxConsecutiveFailedChecks?: number;
   maxIterations?: number;
+  mcpClientFactory?: CreateMcpServerClient;
   modelClient?: EngineerTaskModelClient;
   now?: () => Date;
   persistFinalArtifacts?: boolean;
@@ -79,6 +83,7 @@ export interface EngineerTaskExecution {
   iterationCount: number;
   result: RunResult;
   stopReason: EngineerTaskStopReason;
+  toolSummary: ToolExecutionSummary;
 }
 
 interface FinalizedOutcome {
@@ -89,10 +94,18 @@ interface FinalizedOutcome {
 }
 
 interface WorkspaceArtifactCollection {
-  diff: Extract<BuiltInToolResult, { toolName: "git.diff" }> | undefined;
+  diff: Extract<ToolResult, { toolName: "git.diff" }> | undefined;
   notes: string[];
-  status: Extract<BuiltInToolResult, { toolName: "git.status" }> | undefined;
+  status: Extract<ToolResult, { toolName: "git.status" }> | undefined;
 }
+
+type ToolFeedback =
+  | {
+      ok: false;
+      toolName: string;
+      error: { code: string; message: string; name: string };
+    }
+  | { ok: true; toolName: string; result: ToolResult };
 
 export async function executeEngineerTask(
   options: ExecuteEngineerTaskOptions,
@@ -106,17 +119,6 @@ export async function executeEngineerTask(
         : { createdAt: options.createdAt }),
       ...(options.runId === undefined ? {} : { runId: options.runId }),
     }));
-  const taskBrief = renderEngineerTaskBrief({
-    loadedConfig: options.loadedConfig,
-    maxConsecutiveFailedChecks:
-      options.maxConsecutiveFailedChecks ??
-      options.loadedConfig.config.stopConditions.maxEngineerAttempts,
-    maxIterations:
-      options.maxIterations ??
-      options.loadedConfig.config.stopConditions.maxIterations,
-    task: options.task,
-    timeoutMs: options.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS,
-  });
   const requiredCheckCommand = getRequiredCheckCommand(options.loadedConfig);
   const requirePassingChecks =
     options.loadedConfig.config.stopConditions.requirePassingChecks;
@@ -131,17 +133,23 @@ export async function executeEngineerTask(
   const deadlineMs = startedAt.getTime() + timeoutMs;
   const toolExecutor =
     options.projectCommandRunner === undefined
-      ? createBuiltInToolExecutor({
+      ? createToolRouter({
           dossierPaths: dossier.paths,
           loadedConfig: options.loadedConfig,
+          ...(options.mcpClientFactory === undefined
+            ? {}
+            : { mcpClientFactory: options.mcpClientFactory }),
           now,
           ...(options.runProcess === undefined
             ? {}
             : { runProcess: options.runProcess }),
         })
-      : createBuiltInToolExecutor({
+      : createToolRouter({
           dossierPaths: dossier.paths,
           loadedConfig: options.loadedConfig,
+          ...(options.mcpClientFactory === undefined
+            ? {}
+            : { mcpClientFactory: options.mcpClientFactory }),
           now,
           projectCommandRunner: options.projectCommandRunner,
           ...(options.runProcess === undefined
@@ -150,6 +158,15 @@ export async function executeEngineerTask(
         });
 
   try {
+    const toolCatalog = await toolExecutor.prepare();
+    const taskBrief = renderEngineerTaskBrief({
+      loadedConfig: options.loadedConfig,
+      maxConsecutiveFailedChecks,
+      maxIterations,
+      task: options.task,
+      timeoutMs,
+      toolCatalog,
+    });
     const initialTimestamp = startedAt.toISOString();
 
     await writeRunLifecycleStatus(dossier.paths, "running", initialTimestamp);
@@ -167,6 +184,11 @@ export async function executeEngineerTask(
       resolvedCommands: toResolvedCommandRecord(options.loadedConfig),
       requiredCheckCommand,
       requirePassingChecks,
+      toolCatalog: {
+        builtInTools: toolCatalog.builtInTools,
+        mcpServers: toolCatalog.mcpServers,
+        mcpTools: toolCatalog.mcpTools,
+      },
       timeoutMs,
       timestamp: initialTimestamp,
       type: "engineer-run-started",
@@ -406,7 +428,7 @@ export async function executeEngineerTask(
       toolExecutor,
     });
   } finally {
-    toolExecutor.close();
+    await toolExecutor.close();
   }
 }
 
@@ -422,12 +444,13 @@ async function finalizeEngineerRun(options: {
   requiredCheckCommand: string;
   requirePassingChecks: boolean;
   task: string;
-  toolExecutor: BuiltInToolExecutor;
+  toolExecutor: ToolRouter;
 }): Promise<EngineerTaskExecution> {
   const finalizedAt = options.now().toISOString();
   const workspaceArtifacts = await collectWorkspaceArtifacts(
     options.toolExecutor,
   );
+  const toolSummary = options.toolExecutor.getExecutionSummary();
   let failureNotesMarkdown: string | undefined;
 
   if (workspaceArtifacts.diff !== undefined) {
@@ -467,6 +490,7 @@ async function finalizeEngineerRun(options: {
       requirePassingChecks: options.requirePassingChecks,
       runDir: options.dossier.paths.runDirRelativePath,
       task: options.task,
+      toolSummary,
       workspaceNotes: workspaceArtifacts.notes,
     });
 
@@ -525,20 +549,14 @@ async function finalizeEngineerRun(options: {
     iterationCount: options.iterationCount,
     result,
     stopReason: options.outcome.stopReason,
+    toolSummary,
   };
 }
 
 async function executeEngineerTool(options: {
-  executor: BuiltInToolExecutor;
-  request: BuiltInToolRequest;
-}): Promise<
-  | {
-      ok: false;
-      toolName: string;
-      error: { code: string; message: string; name: string };
-    }
-  | { ok: true; toolName: string; result: BuiltInToolResult }
-> {
+  executor: ToolRouter;
+  request: ToolRequest;
+}): Promise<ToolFeedback> {
   try {
     const result = await options.executor.execute(
       { role: "engineer" },
@@ -551,7 +569,7 @@ async function executeEngineerTool(options: {
       toolName: options.request.toolName,
     };
   } catch (error) {
-    if (error instanceof BuiltInToolError) {
+    if (error instanceof BuiltInToolError || error instanceof McpToolError) {
       return {
         error: {
           code: error.code,
@@ -566,14 +584,14 @@ async function executeEngineerTool(options: {
     const message = error instanceof Error ? error.message : String(error);
 
     throw new Error(
-      `Unexpected built-in tool failure for ${options.request.toolName}: ${message}`,
+      `Unexpected tool failure for ${options.request.toolName}: ${message}`,
       error instanceof Error ? { cause: error } : undefined,
     );
   }
 }
 
 async function collectWorkspaceArtifacts(
-  executor: BuiltInToolExecutor,
+  executor: ToolRouter,
 ): Promise<WorkspaceArtifactCollection> {
   const notes: string[] = [];
   const status = await safelyExecuteToolWithNotes(
@@ -597,15 +615,15 @@ async function collectWorkspaceArtifacts(
 }
 
 async function safelyExecuteToolWithNotes(
-  executor: BuiltInToolExecutor,
-  request: BuiltInToolRequest,
+  executor: ToolRouter,
+  request: ToolRequest,
   notes: string[],
   context: string,
-): Promise<BuiltInToolResult | undefined> {
+): Promise<ToolResult | undefined> {
   try {
     return await executor.execute({ role: "engineer" }, request);
   } catch (error) {
-    if (error instanceof BuiltInToolError) {
+    if (error instanceof BuiltInToolError || error instanceof McpToolError) {
       notes.push(`${context}: ${error.message}`);
       return undefined;
     }
@@ -618,9 +636,9 @@ async function safelyExecuteToolWithNotes(
 }
 
 function applyRemainingTimeToToolRequest(
-  request: BuiltInToolRequest,
+  request: ToolRequest,
   remainingTimeMs: number,
-): BuiltInToolRequest {
+): ToolRequest {
   if (request.toolName !== "command.execute") {
     return request;
   }
@@ -637,7 +655,7 @@ function applyRemainingTimeToToolRequest(
 }
 
 function isRequiredCheckCommand(
-  request: BuiltInToolRequest,
+  request: ToolRequest,
   requiredCheckCommand: string,
 ): boolean {
   return (
@@ -647,13 +665,7 @@ function isRequiredCheckCommand(
 }
 
 function toCheckResult(
-  feedback:
-    | {
-        ok: false;
-        toolName: string;
-        error: { code: string; message: string; name: string };
-      }
-    | { ok: true; toolName: string; result: BuiltInToolResult },
+  feedback: ToolFeedback,
   requiredCheckCommand: string,
 ): RunCheckResult {
   if (feedback.ok === false) {
@@ -720,7 +732,7 @@ function renderFinalReport(options: {
   checks: RunCheckResult[];
   diffPath: string;
   failureNotesPath?: string | undefined;
-  gitStatus: Extract<BuiltInToolResult, { toolName: "git.status" }> | undefined;
+  gitStatus: Extract<ToolResult, { toolName: "git.status" }> | undefined;
   outcome: FinalizedOutcome;
   projectAdapter: LoadedHarnessConfig["resolvedProject"]["adapter"];
   resolvedCommands: Record<string, string | undefined>;
@@ -728,6 +740,7 @@ function renderFinalReport(options: {
   requirePassingChecks: boolean;
   runDir: string;
   task: string;
+  toolSummary: ToolExecutionSummary;
   workspaceNotes: string[];
 }): string {
   const lines = [
@@ -772,6 +785,30 @@ function renderFinalReport(options: {
     lines.push("- Last check: not run");
   }
 
+  lines.push(
+    "",
+    "## Tooling",
+    "",
+    `- Built-in calls recorded: ${options.toolSummary.builtInCallCount}`,
+    `- MCP calls recorded: ${options.toolSummary.mcpCallCount}`,
+    `- MCP configured servers: ${formatList(options.toolSummary.mcpServers.configured)}`,
+    `- MCP available servers: ${formatList(options.toolSummary.mcpServers.available)}`,
+    `- MCP available tools: ${
+      options.toolSummary.mcpTools.length === 0
+        ? "none"
+        : options.toolSummary.mcpTools
+            .map((tool) => `${tool.server}.${tool.name}`)
+            .join(", ")
+    }`,
+    `- MCP calls: ${
+      options.toolSummary.mcpCalls.length === 0
+        ? "none"
+        : options.toolSummary.mcpCalls
+            .map((call) => `${call.server}.${call.name} (${call.status})`)
+            .join(", ")
+    }`,
+  );
+
   lines.push("", "## Workspace", "");
 
   if (options.gitStatus !== undefined) {
@@ -786,6 +823,14 @@ function renderFinalReport(options: {
     );
   } else {
     lines.push("- Git status: unavailable");
+  }
+
+  if (options.toolSummary.mcpServers.unavailable.length > 0) {
+    lines.push("", "## MCP Diagnostics", "");
+
+    for (const diagnostic of options.toolSummary.mcpServers.unavailable) {
+      lines.push(`- ${diagnostic.message}`);
+    }
   }
 
   if (options.workspaceNotes.length > 0) {
@@ -805,8 +850,10 @@ function renderEngineerTaskBrief(options: {
   maxIterations: number;
   task: string;
   timeoutMs: number;
+  toolCatalog: ToolCatalog;
 }): string {
   const builtInTools = renderBuiltInToolsMarkdown();
+  const mcpTools = renderMcpToolsMarkdown(options.toolCatalog);
   const requiredCheckCommand = getRequiredCheckCommand(options.loadedConfig);
 
   return [
@@ -838,6 +885,10 @@ function renderEngineerTaskBrief(options: {
     "## Available Built-in Tools",
     "",
     builtInTools,
+    "",
+    "## Available MCP Tools",
+    "",
+    mcpTools,
   ].join("\n");
 }
 
@@ -852,11 +903,12 @@ function renderEngineerProtocol(options: {
     "Return exactly one JSON action per turn.",
     "",
     "Rules:",
-    `- Use \`type: "tool"\` to request exactly one built-in tool.`,
+    `- Use \`type: "tool"\` to request exactly one tool call, either a built-in tool or \`mcp.call\`.`,
     `- Use \`type: "final"\` only when the task is complete or blocked.`,
     `- Set \`stopWhenSuccessful: true\` only when running the required check \`${options.requiredCheckCommand}\` and the run should end immediately if it passes.`,
     `- The harness stops after ${formatIterationLimit(options.maxIterations)} Engineer iterations, ${options.timeoutMs}ms, or ${options.maxConsecutiveFailedChecks} consecutive failed required checks.`,
     `- Passing checks required: ${options.requirePassingChecks ? "yes" : "no"}.`,
+    "- Built-in tool names always route to built-in tools. MCP is only available through `mcp.call`.",
     "- Keep tool use explicit and auditable.",
   ].join("\n");
 }
@@ -891,6 +943,40 @@ function renderBuiltInToolsMarkdown(): string {
     "- Capture the current patch.",
     '- Request shape: `{ "toolName": "git.diff", "staged": false }`',
   ].join("\n");
+}
+
+function renderMcpToolsMarkdown(toolCatalog: ToolCatalog): string {
+  const lines = [
+    `- Configured servers: ${formatList(toolCatalog.mcpServers.configured)}`,
+    `- Allowlisted and available servers: ${formatList(toolCatalog.mcpServers.available)}`,
+  ];
+
+  if (toolCatalog.mcpTools.length === 0) {
+    lines.push("- Allowlisted MCP tools available now: none");
+  } else {
+    for (const tool of toolCatalog.mcpTools) {
+      lines.push("", `### \`${tool.server}.${tool.name}\``);
+      lines.push(`- Server: \`${tool.server}\``);
+
+      if (tool.description !== undefined) {
+        lines.push(`- Description: ${tool.description}`);
+      }
+
+      lines.push(
+        `- Request shape: \`{ "toolName": "mcp.call", "server": "${tool.server}", "name": "${tool.name}", "arguments": {} }\``,
+      );
+    }
+  }
+
+  if (toolCatalog.mcpServers.unavailable.length > 0) {
+    lines.push("", "### Diagnostics");
+
+    for (const diagnostic of toolCatalog.mcpServers.unavailable) {
+      lines.push(`- ${diagnostic.message}`);
+    }
+  }
+
+  return lines.join("\n");
 }
 
 async function loadPromptAsset(relativePath: string): Promise<string> {
@@ -977,4 +1063,8 @@ function formatProjectAdapter(
   return adapter.id === "unknown"
     ? "Unknown"
     : `${adapter.label} (${adapter.markers.join(", ")})`;
+}
+
+function formatList(values: readonly string[]): string {
+  return values.length === 0 ? "none" : values.join(", ");
 }

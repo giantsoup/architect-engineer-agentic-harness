@@ -32,6 +32,7 @@ export const DEFAULT_HARNESS_CONFIG: HarnessConfig = {
   },
   mcp: {
     allowlist: [],
+    servers: {},
   },
   network: {
     mode: "inherit",

@@ -17,9 +17,14 @@ import {
   initializeProject,
   loadHarnessConfig,
   type ContainerCommandResult,
+  type CreateMcpServerClient,
   type LoadedHarnessConfig,
+  type McpAvailableTool,
+  type McpToolCallRequest,
+  type McpToolCallResult,
   type ModelChatRequest,
   type ModelChatResponse,
+  McpServerUnavailableError,
 } from "../../src/index.js";
 
 function createTempProject(): string {
@@ -95,6 +100,7 @@ async function startMockServer(
 
 async function createLoadedConfig(options: {
   engineerBaseUrl: string;
+  mcpBlock?: string;
   projectRoot: string;
   stopConditions?: {
     maxEngineerAttempts?: number;
@@ -116,7 +122,8 @@ async function createLoadedConfig(options: {
     .replace("maxIterations = 12", () => {
       const value = options.stopConditions?.maxIterations ?? 12;
       return `maxIterations = ${value}`;
-    });
+    })
+    .replace("allowlist = []", options.mcpBlock ?? "allowlist = []");
 
   writeFileSync(configPath, updatedConfig, "utf8");
 
@@ -165,6 +172,110 @@ async function readRequestBody(request: IncomingMessage): Promise<string> {
   }
 
   return Buffer.concat(chunks).toString("utf8");
+}
+
+function createQueuedModelClient<TStructured>(
+  outputs: readonly TStructured[],
+): {
+  client: {
+    chat<TRequestStructured>(
+      request: ModelChatRequest<TRequestStructured>,
+    ): Promise<ModelChatResponse<TRequestStructured>>;
+  };
+} {
+  const queue = [...outputs];
+  let requestCount = 0;
+
+  return {
+    client: {
+      async chat<TRequestStructured>(
+        request: ModelChatRequest<TRequestStructured>,
+      ): Promise<ModelChatResponse<TRequestStructured>> {
+        void request;
+        const nextOutput = queue.shift();
+
+        if (nextOutput === undefined) {
+          throw new Error("Unexpected extra model request.");
+        }
+
+        requestCount += 1;
+        return {
+          id: `mock-${requestCount}`,
+          rawContent: JSON.stringify(nextOutput),
+          role: "assistant",
+          structuredOutput: nextOutput as TRequestStructured,
+        };
+      },
+    },
+  };
+}
+
+type ToolCallEventRecord = {
+  error?: { code?: string };
+  request?: { server?: string };
+  result?: { content?: Array<{ text?: string }> };
+  toolName?: string;
+  type?: string;
+};
+
+function createFakeMcpClientFactory(
+  behaviors: Record<
+    string,
+    {
+      callResult?: McpToolCallResult | Error | undefined;
+      listTools?: McpAvailableTool[] | Error | undefined;
+    }
+  >,
+): {
+  calls: McpToolCallRequest[];
+  factory: CreateMcpServerClient;
+} {
+  const calls: McpToolCallRequest[] = [];
+
+  return {
+    calls,
+    factory: (server) => {
+      const behavior = behaviors[server.id];
+
+      return {
+        async close() {},
+        async connect() {},
+        getStderrSummary() {
+          return undefined;
+        },
+        async listTools() {
+          const outcome = behavior?.listTools ?? [];
+
+          if (outcome instanceof Error) {
+            throw outcome;
+          }
+
+          return outcome.map((tool) => ({
+            ...tool,
+            server: server.id,
+          }));
+        },
+        async runTool(request) {
+          calls.push(request);
+          const outcome = behavior?.callResult;
+
+          if (outcome instanceof Error) {
+            throw outcome;
+          }
+
+          return (
+            outcome ?? {
+              content: [{ text: "ok", type: "text" }],
+              isError: false,
+              name: request.name,
+              server: server.id,
+              toolName: "mcp.call",
+            }
+          );
+        },
+      };
+    },
+  };
 }
 
 describe("executeEngineerTask", () => {
@@ -516,5 +627,280 @@ describe("executeEngineerTask", () => {
         "utf8",
       ),
     ).toContain("Required check failed 2 consecutive times.");
+  });
+
+  it("invokes an allowlisted MCP server during a run and records MCP activity in the dossier", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: "http://127.0.0.1:65535/v1",
+      mcpBlock: `allowlist = ["repo"]
+
+[mcp.servers.repo]
+transport = "stdio"
+command = "node"
+args = ["repo-mcp.js"]`,
+      projectRoot,
+    });
+    const modelClient = createQueuedModelClient([
+      {
+        request: {
+          name: "lookup",
+          server: "repo",
+          toolName: "mcp.call",
+        },
+        summary: "Inspect repository context through MCP.",
+        type: "tool",
+      },
+      {
+        request: {
+          accessMode: "mutate",
+          command: "npm run test",
+          toolName: "command.execute",
+        },
+        stopWhenSuccessful: true,
+        summary: "Checks passed after the MCP-assisted inspection.",
+        type: "tool",
+      },
+    ]).client;
+    const fakeMcp = createFakeMcpClientFactory({
+      repo: {
+        callResult: {
+          content: [{ text: "resolved context", type: "text" }],
+          isError: false,
+          name: "lookup",
+          server: "repo",
+          toolName: "mcp.call",
+        },
+        listTools: [{ name: "lookup", server: "repo" }],
+      },
+    });
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 15,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: 0,
+          role: "engineer",
+          stderr: "",
+          stdout: "tests passed\n",
+          timestamp: "2026-04-13T12:20:00.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      mcpClientFactory: fakeMcp.factory,
+      modelClient,
+      projectCommandRunner: fakeCommandRunner,
+      runId: "20260413T122000.000Z-abcded",
+      task: "Use MCP context before running the required test command.",
+    });
+    const events = parseJsonLines(
+      execution.dossier.paths.files.events.absolutePath,
+    );
+    const finalReport = readFileSync(
+      execution.dossier.paths.files.finalReport.absolutePath,
+      "utf8",
+    );
+
+    expect(execution.result.status).toBe("success");
+    expect(fakeMcp.calls).toEqual([
+      {
+        name: "lookup",
+        server: "repo",
+        toolName: "mcp.call",
+      },
+    ]);
+    expect(
+      events.some((event) => {
+        const typedEvent = event as ToolCallEventRecord;
+
+        return (
+          typedEvent.type === "tool-call" &&
+          typedEvent.toolName === "mcp.call" &&
+          typedEvent.request?.server === "repo" &&
+          typedEvent.result?.content?.[0]?.text === "resolved context"
+        );
+      }),
+    ).toBe(true);
+    expect(finalReport).toContain("MCP calls recorded: 1");
+    expect(finalReport).toContain("repo.lookup (completed)");
+  });
+
+  it("blocks non-allowlisted MCP servers during a run", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: "http://127.0.0.1:65535/v1",
+      mcpBlock: `allowlist = []
+
+[mcp.servers.repo]
+transport = "stdio"
+command = "node"
+args = ["repo-mcp.js"]`,
+      projectRoot,
+      stopConditions: {
+        maxIterations: 2,
+      },
+    });
+    const modelClient = createQueuedModelClient([
+      {
+        request: {
+          name: "lookup",
+          server: "repo",
+          toolName: "mcp.call",
+        },
+        summary: "Try the blocked MCP server.",
+        type: "tool",
+      },
+      {
+        blockers: ["MCP server access is blocked by config."],
+        outcome: "blocked",
+        summary: "Cannot continue without the blocked MCP server.",
+        type: "final",
+      },
+    ]).client;
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      modelClient,
+      runId: "20260413T122100.000Z-abcded",
+      task: "Attempt to use a blocked MCP server.",
+    });
+    const events = parseJsonLines(
+      execution.dossier.paths.files.events.absolutePath,
+    );
+
+    expect(execution.result.status).toBe("failed");
+    expect(execution.stopReason).toBe("blocked");
+    expect(
+      events.some((event) => {
+        const typedEvent = event as ToolCallEventRecord;
+
+        return (
+          typedEvent.type === "tool-call" &&
+          typedEvent.toolName === "mcp.call" &&
+          typedEvent.error?.code === "mcp-not-allowed"
+        );
+      }),
+    ).toBe(true);
+  });
+
+  it("records unavailable MCP server diagnostics while keeping built-in tools usable", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: "http://127.0.0.1:65535/v1",
+      mcpBlock: `allowlist = ["repo"]
+
+[mcp.servers.repo]
+transport = "stdio"
+command = "node"
+args = ["repo-mcp.js"]`,
+      projectRoot,
+    });
+    const sourcePath = path.join(projectRoot, "src", "example.ts");
+
+    mkdirSync(path.dirname(sourcePath), { recursive: true });
+    writeFileSync(sourcePath, "export const value = 1;\n", "utf8");
+
+    const modelClient = createQueuedModelClient([
+      {
+        request: {
+          content: "export const value = 2;\n",
+          path: "src/example.ts",
+          toolName: "file.write",
+        },
+        summary: "Apply the built-in file write anyway.",
+        type: "tool",
+      },
+      {
+        request: {
+          accessMode: "mutate",
+          command: "npm run test",
+          toolName: "command.execute",
+        },
+        stopWhenSuccessful: true,
+        summary: "Built-in tools still complete the run.",
+        type: "tool",
+      },
+    ]).client;
+    const fakeMcp = createFakeMcpClientFactory({
+      repo: {
+        listTools: new McpServerUnavailableError(
+          "MCP server `repo` did not answer `listTools`: spawn failed",
+        ),
+      },
+    });
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 10,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: 0,
+          role: "engineer",
+          stderr: "",
+          stdout: "tests passed\n",
+          timestamp: "2026-04-13T12:30:00.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      mcpClientFactory: fakeMcp.factory,
+      modelClient,
+      projectCommandRunner: fakeCommandRunner,
+      runId: "20260413T123000.000Z-abcded",
+      task: "Keep using built-in tools even if MCP is unavailable.",
+    });
+    const engineerTask = readFileSync(
+      execution.dossier.paths.files.engineerTask.absolutePath,
+      "utf8",
+    );
+    const finalReport = readFileSync(
+      execution.dossier.paths.files.finalReport.absolutePath,
+      "utf8",
+    );
+
+    expect(execution.result.status).toBe("success");
+    expect(readFileSync(sourcePath, "utf8")).toBe("export const value = 2;\n");
+    expect(engineerTask).toContain(
+      "MCP server `repo` did not answer `listTools`",
+    );
+    expect(finalReport).toContain("## MCP Diagnostics");
+    expect(finalReport).toContain("spawn failed");
+    expect(finalReport).toContain("MCP calls recorded: 0");
   });
 });

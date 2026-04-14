@@ -10,6 +10,19 @@ export interface ModelConfig {
   timeoutMs?: number | undefined;
 }
 
+export type McpServerPreset = "laravel-boost";
+
+export interface McpServerConfig {
+  transport: "stdio";
+  preset?: McpServerPreset | undefined;
+  command?: string | undefined;
+  args?: string[] | undefined;
+  env?: Record<string, string> | undefined;
+  workingDirectory?: string | undefined;
+  startupTimeoutMs?: number | undefined;
+  toolTimeoutMs?: number | undefined;
+}
+
 export interface HarnessConfig {
   version: 1;
   models: {
@@ -31,6 +44,7 @@ export interface HarnessConfig {
   };
   mcp: {
     allowlist: string[];
+    servers?: Record<string, McpServerConfig> | undefined;
   };
   network: {
     mode: "inherit" | "disabled";

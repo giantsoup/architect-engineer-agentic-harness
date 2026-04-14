@@ -15,6 +15,27 @@ import {
   renderArchitectReviewMarkdown,
   renderFailureNotesMarkdown,
 } from "../../src/runtime/architect-engineer-nodes.js";
+import type { ToolExecutionSummary } from "../../src/tools/types.js";
+
+const EMPTY_TOOL_SUMMARY: ToolExecutionSummary = {
+  builtInCallCount: 0,
+  builtInTools: [
+    "command.execute",
+    "file.list",
+    "file.read",
+    "file.write",
+    "git.diff",
+    "git.status",
+  ],
+  mcpCallCount: 0,
+  mcpCalls: [],
+  mcpServers: {
+    available: [],
+    configured: [],
+    unavailable: [],
+  },
+  mcpTools: [],
+};
 
 describe("architect-engineer state", () => {
   it("transitions through plan, execute, review, and finalize states", () => {
@@ -50,6 +71,7 @@ describe("architect-engineer state", () => {
         summary: "Tests passed after the fix.",
       },
       stopReason: "passing-checks",
+      toolSummary: EMPTY_TOOL_SUMMARY,
     });
     expect(state.nextNode).toBe("review");
     expect(state.iterations.engineerAttempts).toBe(1);
@@ -99,6 +121,7 @@ describe("architect-engineer state", () => {
             summary: "Tests failed after the first attempt.",
           },
           stopReason: "blocked",
+          toolSummary: EMPTY_TOOL_SUMMARY,
         },
         "2026-04-14T12:00:30.000Z",
       ),

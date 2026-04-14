@@ -8,6 +8,12 @@ export type BuiltInToolErrorCode =
   | "path-violation"
   | "permission-denied";
 
+export type McpToolErrorCode =
+  | "mcp-call-failed"
+  | "mcp-not-allowed"
+  | "mcp-server-unavailable"
+  | "mcp-tool-not-found";
+
 export class BuiltInToolError extends Error {
   readonly code: BuiltInToolErrorCode;
   readonly toolName: BuiltInToolName;
@@ -95,5 +101,50 @@ export class BuiltInToolGitError extends BuiltInToolError {
     super(toolName, "git-failed", message, options);
 
     this.name = "BuiltInToolGitError";
+  }
+}
+
+export class McpToolError extends Error {
+  readonly code: McpToolErrorCode;
+  readonly toolName: "mcp.call";
+
+  constructor(code: McpToolErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options);
+
+    this.name = "McpToolError";
+    this.code = code;
+    this.toolName = "mcp.call";
+  }
+}
+
+export class McpToolNotAllowedError extends McpToolError {
+  constructor(message: string, options?: ErrorOptions) {
+    super("mcp-not-allowed", message, options);
+
+    this.name = "McpToolNotAllowedError";
+  }
+}
+
+export class McpServerUnavailableError extends McpToolError {
+  constructor(message: string, options?: ErrorOptions) {
+    super("mcp-server-unavailable", message, options);
+
+    this.name = "McpServerUnavailableError";
+  }
+}
+
+export class McpToolNotFoundError extends McpToolError {
+  constructor(message: string, options?: ErrorOptions) {
+    super("mcp-tool-not-found", message, options);
+
+    this.name = "McpToolNotFoundError";
+  }
+}
+
+export class McpToolCallError extends McpToolError {
+  constructor(message: string, options?: ErrorOptions) {
+    super("mcp-call-failed", message, options);
+
+    this.name = "McpToolCallError";
   }
 }

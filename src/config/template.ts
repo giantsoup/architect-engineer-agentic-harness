@@ -75,7 +75,19 @@ ${renderOptionalTomlKey("format", config.commands.format)}
 
 [mcp]
 # Only listed MCP servers may be used by the harness.
-allowlist = []
+allowlist = ${renderTomlStringArray(config.mcp.allowlist)}
+#
+# Example custom stdio server:
+# [mcp.servers.repo]
+# transport = "stdio"
+# command = "node"
+# args = ["scripts/repo-mcp.js"]
+#
+# Laravel Boost preset:
+# [mcp.servers.laravel-boost]
+# transport = "stdio"
+# preset = "laravel-boost"
+${renderMcpServers(config)}
 
 [network]
 mode = ${quoteTomlString(config.network.mode)}
@@ -100,4 +112,54 @@ function renderOptionalTomlKey(key: string, value: string | undefined): string {
   return value === undefined
     ? `# ${key} = ${quoteTomlString(`replace-with-${key}-command`)}`
     : `${key} = ${quoteTomlString(value)}`;
+}
+
+function renderMcpServers(config: HarnessConfig): string {
+  const serverEntries = Object.entries(config.mcp.servers ?? {});
+
+  if (serverEntries.length === 0) {
+    return "";
+  }
+
+  return `\n${serverEntries
+    .map(([serverId, serverConfig]) =>
+      [
+        `[mcp.servers.${serverId}]`,
+        `transport = ${quoteTomlString(serverConfig.transport)}`,
+        ...(serverConfig.preset === undefined
+          ? []
+          : [`preset = ${quoteTomlString(serverConfig.preset)}`]),
+        ...(serverConfig.command === undefined
+          ? []
+          : [`command = ${quoteTomlString(serverConfig.command)}`]),
+        ...(serverConfig.args === undefined
+          ? []
+          : [`args = ${renderTomlStringArray(serverConfig.args)}`]),
+        ...(serverConfig.workingDirectory === undefined
+          ? []
+          : [
+              `workingDirectory = ${quoteTomlString(serverConfig.workingDirectory)}`,
+            ]),
+        ...(serverConfig.startupTimeoutMs === undefined
+          ? []
+          : [`startupTimeoutMs = ${serverConfig.startupTimeoutMs}`]),
+        ...(serverConfig.toolTimeoutMs === undefined
+          ? []
+          : [`toolTimeoutMs = ${serverConfig.toolTimeoutMs}`]),
+        ...(serverConfig.env === undefined
+          ? []
+          : [
+              "",
+              `[mcp.servers.${serverId}.env]`,
+              ...Object.entries(serverConfig.env).map(
+                ([key, value]) => `${key} = ${quoteTomlString(value)}`,
+              ),
+            ]),
+      ].join("\n"),
+    )
+    .join("\n\n")}`;
+}
+
+function renderTomlStringArray(values: readonly string[]): string {
+  return `[${values.map((value) => quoteTomlString(value)).join(", ")}]`;
 }

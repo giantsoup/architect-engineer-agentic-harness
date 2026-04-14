@@ -274,9 +274,26 @@ function createInitialHarnessConfig(
               }),
         };
 
+  const mcp: HarnessConfig["mcp"] =
+    resolvedProject.adapter.id === "laravel-generic"
+      ? {
+          allowlist: [],
+          servers: {
+            "laravel-boost": {
+              preset: "laravel-boost",
+              transport: "stdio",
+            },
+          },
+        }
+      : {
+          allowlist: [],
+          servers: {},
+        };
+
   return {
     ...DEFAULT_HARNESS_CONFIG,
     commands,
+    mcp,
   };
 }
 

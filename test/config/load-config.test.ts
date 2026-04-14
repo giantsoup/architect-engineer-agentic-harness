@@ -59,7 +59,7 @@ lint = "npm run lint"
 format = "npm run format"
 
 [mcp]
-allowlist = ["repo"]
+allowlist = []
 
 [network]
 mode = "inherit"
@@ -322,5 +322,129 @@ requirePassingChecks = true
     expect(config.models.architect.maxRetries).toBe(4);
     expect(config.models.engineer.timeoutMs).toBe(90000);
     expect(config.models.engineer.maxRetries).toBe(1);
+  });
+
+  it("loads explicit MCP server definitions and Laravel Boost presets", async () => {
+    const projectRoot = createTempProject();
+    createdProjectRoots.push(projectRoot);
+
+    writeFileSync(
+      path.join(projectRoot, "agent-harness.toml"),
+      `version = 1
+
+[models.architect]
+provider = "openai-compatible"
+model = "architect"
+baseUrl = "https://api.example.com/v1"
+
+[models.engineer]
+provider = "llama.cpp"
+model = "engineer"
+baseUrl = "http://127.0.0.1:8080/v1"
+
+[project]
+executionTarget = "host"
+
+[commands]
+test = "npm run test"
+
+[mcp]
+allowlist = ["repo", "laravel-boost"]
+
+[mcp.servers.repo]
+transport = "stdio"
+command = "node"
+args = ["scripts/repo-mcp.js"]
+workingDirectory = "."
+toolTimeoutMs = 30000
+
+[mcp.servers.laravel-boost]
+transport = "stdio"
+preset = "laravel-boost"
+
+[network]
+mode = "inherit"
+
+[sandbox]
+mode = "workspace-write"
+
+[artifacts]
+rootDir = ".agent-harness"
+runsDir = ".agent-harness/runs"
+
+[stopConditions]
+maxIterations = 12
+maxEngineerAttempts = 5
+requirePassingChecks = true
+`,
+      "utf8",
+    );
+
+    const { config } = await loadHarnessConfig({ projectRoot });
+
+    expect(config.mcp.allowlist).toEqual(["repo", "laravel-boost"]);
+    expect(config.mcp.servers).toEqual({
+      "laravel-boost": {
+        preset: "laravel-boost",
+        transport: "stdio",
+      },
+      repo: {
+        args: ["scripts/repo-mcp.js"],
+        command: "node",
+        toolTimeoutMs: 30000,
+        transport: "stdio",
+        workingDirectory: ".",
+      },
+    });
+  });
+
+  it("rejects allowlist entries that do not map to configured MCP servers", async () => {
+    const projectRoot = createTempProject();
+    createdProjectRoots.push(projectRoot);
+
+    writeFileSync(
+      path.join(projectRoot, "agent-harness.toml"),
+      `version = 1
+
+[models.architect]
+provider = "openai-compatible"
+model = "architect"
+baseUrl = "https://api.example.com/v1"
+
+[models.engineer]
+provider = "llama.cpp"
+model = "engineer"
+baseUrl = "http://127.0.0.1:8080/v1"
+
+[project]
+executionTarget = "host"
+
+[commands]
+test = "npm run test"
+
+[mcp]
+allowlist = ["missing-server"]
+
+[network]
+mode = "inherit"
+
+[sandbox]
+mode = "workspace-write"
+
+[artifacts]
+rootDir = ".agent-harness"
+runsDir = ".agent-harness/runs"
+
+[stopConditions]
+maxIterations = 12
+maxEngineerAttempts = 5
+requirePassingChecks = true
+`,
+      "utf8",
+    );
+
+    await expect(loadHarnessConfig({ projectRoot })).rejects.toThrowError(
+      /mcp\.allowlist\[0\]: Configured MCP server `missing-server` was not found in mcp\.servers\./u,
+    );
   });
 });
