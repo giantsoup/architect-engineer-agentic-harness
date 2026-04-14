@@ -75,6 +75,24 @@ function parseGitBranchSummary(line: string): GitStatusBranchSummary {
     };
   }
 
+  if (line.startsWith("No commits yet on ")) {
+    return {
+      ahead: 0,
+      behind: 0,
+      detached: false,
+      head: line.slice("No commits yet on ".length),
+    };
+  }
+
+  if (line.startsWith("Initial commit on ")) {
+    return {
+      ahead: 0,
+      behind: 0,
+      detached: false,
+      head: line.slice("Initial commit on ".length),
+    };
+  }
+
   const [rawHeadSection, trackingSection] = line.split(" [", 2);
   const headSection = rawHeadSection ?? "";
   const headSegments = headSection.split("...", 2);

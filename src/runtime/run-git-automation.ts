@@ -9,6 +9,7 @@ import {
   parseGitStatusPorcelain,
   type GitStatusSnapshot,
 } from "../git/status.js";
+import type { GitStatusEntry } from "../tools/types.js";
 import type { RunProcess } from "../sandbox/process-runner.js";
 import { runProcessCommand } from "../sandbox/process-runner.js";
 import type { LoadedHarnessConfig } from "../types/config.js";
@@ -217,6 +218,35 @@ export async function commitRunGitChanges(
     };
   }
 
+  const commitEligiblePaths = selectCommitEligiblePaths(
+    status.entries,
+    options.loadedConfig,
+  );
+
+  if (commitEligiblePaths.length === 0) {
+    await appendRunEvent(options.dossier.paths, {
+      phase: options.phase,
+      reason: "artifact-only-changes",
+      timestamp: options.now().toISOString(),
+      type: "run-git-commit-skipped",
+    });
+
+    const finalCommit =
+      options.git.finalCommit ??
+      (await readGitHeadCommit(options.loadedConfig, options.runProcess));
+
+    return {
+      git:
+        finalCommit === undefined
+          ? options.git
+          : {
+              ...options.git,
+              finalCommit,
+            },
+      kind: "skipped",
+    };
+  }
+
   const message = createRunCommitMessage({
     engineerAttempt: options.engineerAttempt,
     phase: options.phase,
@@ -226,10 +256,11 @@ export async function commitRunGitChanges(
   });
 
   try {
-    await runGitCommand(options.loadedConfig, options.runProcess, [
-      "add",
-      "--all",
-    ]);
+    await runGitCommand(
+      options.loadedConfig,
+      options.runProcess,
+      createGitAddArgs(commitEligiblePaths),
+    );
     await runGitCommand(options.loadedConfig, options.runProcess, [
       "-c",
       `user.name=${HARNESS_GIT_USER_NAME}`,
@@ -419,4 +450,51 @@ function selectErrorMessage(stderr: string, stdout: string): string {
   const trimmedStdout = stdout.trim();
 
   return trimmedStdout.length > 0 ? trimmedStdout : "Unknown git failure.";
+}
+
+function createGitAddArgs(paths: readonly string[]): string[] {
+  if (paths.length === 0) {
+    return ["add", "--all"];
+  }
+
+  return ["add", "--all", "--", ...paths];
+}
+
+function selectCommitEligiblePaths(
+  entries: readonly GitStatusEntry[],
+  loadedConfig: LoadedHarnessConfig,
+): string[] {
+  const artifactRoot = normalizeRelativeDirectory(
+    loadedConfig.config.artifacts.rootDir,
+  );
+  const paths = new Set<string>();
+
+  for (const entry of entries) {
+    if (!isPathInsideArtifactRoot(entry.path, artifactRoot)) {
+      paths.add(entry.path);
+    }
+
+    if (
+      entry.originalPath !== undefined &&
+      !isPathInsideArtifactRoot(entry.originalPath, artifactRoot)
+    ) {
+      paths.add(entry.originalPath);
+    }
+  }
+
+  return [...paths];
+}
+
+function isPathInsideArtifactRoot(path: string, artifactRoot: string): boolean {
+  if (artifactRoot === "." || artifactRoot.length === 0) {
+    return false;
+  }
+
+  return path === artifactRoot || path.startsWith(`${artifactRoot}/`);
+}
+
+function normalizeRelativeDirectory(value: string): string {
+  const normalized = value.replace(/\\/gu, "/").replace(/\/+$/u, "");
+
+  return normalized.length === 0 ? "." : normalized;
 }

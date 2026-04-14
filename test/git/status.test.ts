@@ -40,4 +40,15 @@ describe("git status helpers", () => {
       isDirty: false,
     });
   });
+
+  it("parses unborn branch headers without treating the full sentence as the branch name", () => {
+    const status = parseGitStatusPorcelain("## No commits yet on main\n");
+
+    expect(status.branch).toEqual({
+      ahead: 0,
+      behind: 0,
+      detached: false,
+      head: "main",
+    });
+  });
 });
