@@ -322,7 +322,7 @@ export class OpenAiCompatibleChatClient {
   ): Record<string, unknown> {
     const payload: Record<string, unknown> = {
       max_tokens: request.maxOutputTokens,
-      messages: request.messages.map((message) => toOpenAiMessage(message)),
+      messages: this.buildMessages(request, useNativeStructuredOutput),
       model: this.config.model,
       temperature: request.temperature,
       top_p: request.topP,
@@ -352,6 +352,24 @@ export class OpenAiCompatibleChatClient {
     }
 
     return payload;
+  }
+
+  private buildMessages<TStructured>(
+    request: ModelChatRequest<TStructured>,
+    useNativeStructuredOutput: boolean,
+  ): Array<Record<string, string>> {
+    const messages = request.messages.map((message) => toOpenAiMessage(message));
+
+    if (!useNativeStructuredOutput && request.structuredOutput !== undefined) {
+      messages.push({
+        content: renderStructuredOutputFallbackInstruction(
+          request.structuredOutput,
+        ),
+        role: "developer",
+      });
+    }
+
+    return messages;
   }
 
   private async executeRequest(
@@ -395,30 +413,38 @@ export class OpenAiCompatibleChatClient {
       return undefined;
     }
 
-    let parsedJson: unknown;
+    const candidateJsonSnippets = collectStructuredOutputCandidates(rawContent);
+    let lastParseError: unknown;
+    let lastValidationError: unknown;
 
-    try {
-      parsedJson = parseStructuredOutputJson(rawContent);
-    } catch (error) {
-      throw new ModelStructuredOutputError(
-        `Expected valid JSON for structured output from ${this.describeTarget()}, but the response could not be parsed.`,
-        {
-          cause: error,
-          schemaName: structuredOutput.formatName,
-        },
-      );
+    for (const candidateJson of candidateJsonSnippets) {
+      let parsedJson: unknown;
+
+      try {
+        parsedJson = JSON.parse(candidateJson);
+      } catch (error) {
+        lastParseError = error;
+        continue;
+      }
+
+      try {
+        return await structuredOutput.validate(parsedJson);
+      } catch (error) {
+        lastValidationError = error;
+      }
     }
 
-    try {
-      return await structuredOutput.validate(parsedJson);
-    } catch (error) {
+    if (lastValidationError !== undefined) {
       const issues =
-        error instanceof Error && "issues" in error
-          ? ((error as { issues?: readonly string[] }).issues ?? undefined)
+        lastValidationError instanceof Error && "issues" in lastValidationError
+          ? ((lastValidationError as { issues?: readonly string[] }).issues ??
+              undefined)
           : undefined;
       const schemaPath =
-        error instanceof Error && "schemaPath" in error
-          ? ((error as { schemaPath?: string }).schemaPath ?? undefined)
+        lastValidationError instanceof Error &&
+        "schemaPath" in lastValidationError
+          ? ((lastValidationError as { schemaPath?: string }).schemaPath ??
+              undefined)
           : undefined;
 
       throw new ModelStructuredOutputError(
@@ -426,12 +452,20 @@ export class OpenAiCompatibleChatClient {
           ? `Structured output from ${this.describeTarget()} did not match ${structuredOutput.formatName}.`
           : `Structured output from ${this.describeTarget()} did not match ${structuredOutput.formatName} (${schemaPath}).`,
         {
-          cause: error,
+          cause: lastValidationError,
           issues,
           schemaName: structuredOutput.formatName,
         },
       );
     }
+
+    throw new ModelStructuredOutputError(
+      `Expected valid JSON for structured output from ${this.describeTarget()}, but the response could not be parsed.`,
+      {
+        cause: lastParseError,
+        schemaName: structuredOutput.formatName,
+      },
+    );
   }
 
   private shouldUseNativeStructuredOutput<TStructured>(
@@ -650,28 +684,142 @@ async function parseOpenAiChatCompletionResponse(
   }
 }
 
-function parseStructuredOutputJson(rawContent: string): unknown {
-  const trimmedContent = rawContent.trim();
-
-  try {
-    return JSON.parse(trimmedContent);
-  } catch (error) {
-    const fencedJson = extractJsonCodeFence(trimmedContent);
-
-    if (fencedJson !== undefined) {
-      return JSON.parse(fencedJson);
-    }
-
-    throw error;
-  }
-}
-
 function extractJsonCodeFence(rawContent: string): string | undefined {
   const fencedMatch =
     /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(rawContent) ??
     /```(?:json)?\s*([\s\S]*?)\s*```/iu.exec(rawContent);
 
   return fencedMatch?.[1];
+}
+
+function collectStructuredOutputCandidates(rawContent: string): string[] {
+  const trimmedContent = rawContent.trim();
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+
+  function addCandidate(candidate: string | undefined): void {
+    if (candidate === undefined) {
+      return;
+    }
+
+    const trimmedCandidate = candidate.trim();
+
+    if (trimmedCandidate.length === 0 || seen.has(trimmedCandidate)) {
+      return;
+    }
+
+    seen.add(trimmedCandidate);
+    candidates.push(trimmedCandidate);
+  }
+
+  addCandidate(trimmedContent);
+
+  const fencedJson = extractJsonCodeFence(trimmedContent);
+  addCandidate(fencedJson);
+
+  for (const candidate of extractTopLevelJsonCandidates(trimmedContent)) {
+    addCandidate(candidate);
+  }
+
+  if (fencedJson !== undefined) {
+    for (const candidate of extractTopLevelJsonCandidates(fencedJson)) {
+      addCandidate(candidate);
+    }
+  }
+
+  return candidates;
+}
+
+function extractTopLevelJsonCandidates(rawContent: string): string[] {
+  const candidates: string[] = [];
+
+  for (let index = 0; index < rawContent.length; index += 1) {
+    const character = rawContent[index];
+
+    if (character !== "{" && character !== "[") {
+      continue;
+    }
+
+    const endIndex = findBalancedJsonEnd(rawContent, index);
+
+    if (endIndex === undefined) {
+      continue;
+    }
+
+    candidates.push(rawContent.slice(index, endIndex + 1));
+    index = endIndex;
+  }
+
+  return candidates;
+}
+
+function findBalancedJsonEnd(
+  rawContent: string,
+  startIndex: number,
+): number | undefined {
+  const stack = [rawContent[startIndex]];
+  let inString = false;
+  let isEscaped = false;
+
+  for (let index = startIndex + 1; index < rawContent.length; index += 1) {
+    const character = rawContent[index];
+
+    if (inString) {
+      if (isEscaped) {
+        isEscaped = false;
+        continue;
+      }
+
+      if (character === "\\") {
+        isEscaped = true;
+        continue;
+      }
+
+      if (character === '"') {
+        inString = false;
+      }
+
+      continue;
+    }
+
+    if (character === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (character === "{" || character === "[") {
+      stack.push(character);
+      continue;
+    }
+
+    if (character !== "}" && character !== "]") {
+      continue;
+    }
+
+    const expectedOpen = character === "}" ? "{" : "[";
+    const actualOpen = stack.pop();
+
+    if (actualOpen !== expectedOpen) {
+      return undefined;
+    }
+
+    if (stack.length === 0) {
+      return index;
+    }
+  }
+
+  return undefined;
+}
+
+function renderStructuredOutputFallbackInstruction<TStructured>(
+  structuredOutput: ModelStructuredOutputSpec<TStructured>,
+): string {
+  return [
+    `Structured output fallback mode for ${structuredOutput.formatName}.`,
+    "Return exactly one JSON object and nothing else.",
+    "Do not include markdown fences, comments, prose, or multiple JSON objects.",
+    `The JSON must match this schema exactly: ${JSON.stringify(structuredOutput.schema)}`,
+  ].join("\n");
 }
 
 async function delay(durationMs: number): Promise<void> {

@@ -589,6 +589,11 @@ describe("OpenAiCompatibleChatClient", () => {
     expect(attempts).toBe(2);
     expect(seenBodies[0]?.response_format).toBeDefined();
     expect(seenBodies[1]?.response_format).toBeUndefined();
+    expect(
+      JSON.stringify(seenBodies[1]?.messages ?? []).includes(
+        "Return exactly one JSON object and nothing else.",
+      ),
+    ).toBe(true);
   });
 
   it("fails clearly when Architect structured output does not match the schema", async () => {
@@ -696,6 +701,129 @@ describe("OpenAiCompatibleChatClient", () => {
     expect(response.structuredOutput).toEqual({
       steps: ["inspect", "ship"],
       summary: "Fenced output",
+    });
+  });
+
+  it("accepts prose-wrapped structured JSON during local validation fallback", async () => {
+    let attempts = 0;
+    const mockServer = await startMockServer((_request, response) => {
+      attempts += 1;
+
+      if (attempts === 1) {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: {
+              message: "response_format is unsupported here",
+            },
+          }),
+        );
+        return;
+      }
+
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content:
+                  'Here is the requested JSON object:\n{"summary":"Wrapped output","steps":["inspect","ship"]}',
+                role: "assistant",
+              },
+            },
+          ],
+          id: "chatcmpl-prose-wrapped-structured",
+        }),
+      );
+    });
+    servers.push(mockServer);
+
+    const { loadedConfig, projectRoot } = await createLoadedConfig(
+      renderConfig({
+        architectBaseUrl: `${mockServer.url}/remote/v1`,
+        architectMaxRetries: 0,
+        engineerBaseUrl: `${mockServer.url}/local/v1`,
+      }),
+    );
+    projectRoots.push(projectRoot);
+
+    const client = new OpenAiCompatibleChatClient({
+      config: resolveModelConfigForRole(loadedConfig, "architect"),
+      retryDelayMs: 0,
+    });
+
+    const response = await client.chat({
+      messages: [{ content: "Return a wrapped plan.", role: "user" }],
+      structuredOutput: await createArchitectStructuredOutputFormat("plan"),
+    });
+
+    expect(response.structuredOutput).toEqual({
+      steps: ["inspect", "ship"],
+      summary: "Wrapped output",
+    });
+  });
+
+  it("accepts the first valid structured JSON object when the response contains multiple JSON objects", async () => {
+    let attempts = 0;
+    const mockServer = await startMockServer((_request, response) => {
+      attempts += 1;
+
+      if (attempts === 1) {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: {
+              message: "response_format is unsupported here",
+            },
+          }),
+        );
+        return;
+      }
+
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: [
+                  '{"type":"tool","tool":{"toolName":"file.list","path":"."}}',
+                  '{"type":"plan","summary":"Inspect then implement","steps":["inspect the repo","make one small change","run tests"]}',
+                ].join("\n"),
+                role: "assistant",
+              },
+            },
+          ],
+          id: "chatcmpl-multiple-structured",
+        }),
+      );
+    });
+    servers.push(mockServer);
+
+    const { loadedConfig, projectRoot } = await createLoadedConfig(
+      renderConfig({
+        architectBaseUrl: `${mockServer.url}/remote/v1`,
+        architectMaxRetries: 0,
+        engineerBaseUrl: `${mockServer.url}/local/v1`,
+      }),
+    );
+    projectRoots.push(projectRoot);
+
+    const client = new OpenAiCompatibleChatClient({
+      config: resolveModelConfigForRole(loadedConfig, "architect"),
+      retryDelayMs: 0,
+    });
+
+    const response = await client.chat({
+      messages: [{ content: "Return one valid plan.", role: "user" }],
+      structuredOutput: await createArchitectStructuredOutputFormat("plan"),
+    });
+
+    expect(response.structuredOutput).toEqual({
+      type: "plan",
+      summary: "Inspect then implement",
+      steps: ["inspect the repo", "make one small change", "run tests"],
     });
   });
 
