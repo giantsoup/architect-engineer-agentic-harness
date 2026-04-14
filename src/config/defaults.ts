@@ -1,11 +1,12 @@
 import type { HarnessConfig } from "../types/config.js";
+import { CURRENT_HARNESS_CONFIG_VERSION } from "../versioning.js";
 
 export const HARNESS_CONFIG_FILENAME = "agent-harness.toml";
 export const DEFAULT_ARTIFACTS_ROOT_DIR = ".agent-harness";
 export const DEFAULT_RUNS_DIR = `${DEFAULT_ARTIFACTS_ROOT_DIR}/runs`;
 
 export const DEFAULT_HARNESS_CONFIG: HarnessConfig = {
-  version: 1,
+  version: CURRENT_HARNESS_CONFIG_VERSION,
   models: {
     architect: {
       provider: "openai-compatible",

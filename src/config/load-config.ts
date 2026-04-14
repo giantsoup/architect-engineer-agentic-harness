@@ -7,6 +7,10 @@ import type { ZodIssue } from "zod";
 import { resolveProjectContext } from "../adapters/detect-project.js";
 import type { LoadedHarnessConfig } from "../types/config.js";
 import { HARNESS_CONFIG_FILENAME } from "./defaults.js";
+import {
+  HarnessConfigMigrationError,
+  migrateHarnessConfig,
+} from "./migrate-config.js";
 import { resolveEnvironmentReferences } from "./resolve-env.js";
 import { harnessConfigSchema } from "./schema.js";
 
@@ -44,7 +48,8 @@ export async function loadHarnessConfig(
 
   const rawConfig = await readConfigFile(configPath);
   const parsedConfig = parseTomlConfig(configPath, rawConfig);
-  const resolvedConfig = resolveEnvironmentReferences(parsedConfig);
+  const migratedConfig = migrateParsedConfig(configPath, parsedConfig);
+  const resolvedConfig = resolveEnvironmentReferences(migratedConfig);
 
   if (resolvedConfig.issues.length > 0) {
     throw new HarnessConfigError(
@@ -84,6 +89,21 @@ export async function loadHarnessConfig(
     projectRoot,
     resolvedProject,
   };
+}
+
+function migrateParsedConfig(
+  configPath: string,
+  parsedConfig: unknown,
+): unknown {
+  try {
+    return migrateHarnessConfig(parsedConfig).value;
+  } catch (error) {
+    if (error instanceof HarnessConfigMigrationError) {
+      throw new HarnessConfigError(configPath, error.issues);
+    }
+
+    throw error;
+  }
 }
 
 async function readConfigFile(configPath: string): Promise<string> {

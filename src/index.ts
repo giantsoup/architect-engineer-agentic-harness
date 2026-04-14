@@ -1,4 +1,5 @@
 export {
+  CURRENT_HARNESS_CONFIG_VERSION,
   DEFAULT_PROMPT_VERSION,
   DEFAULT_SCHEMA_VERSION,
 } from "./versioning.js";
@@ -19,6 +20,10 @@ export {
   initializeProject,
 } from "./config/init-project.js";
 export { HarnessConfigError, loadHarnessConfig } from "./config/load-config.js";
+export {
+  HarnessConfigMigrationError,
+  migrateHarnessConfig,
+} from "./config/migrate-config.js";
 export { renderHarnessConfigTemplate } from "./config/template.js";
 export { appendJsonLine } from "./artifacts/logs.js";
 export {

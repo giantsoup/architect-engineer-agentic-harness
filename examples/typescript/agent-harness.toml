@@ -1,0 +1,45 @@
+# Example config for a generic TypeScript project running inside a predefined container.
+# Copy this into your repo root as `agent-harness.toml` and replace the model values.
+
+version = 1
+
+[models.architect]
+provider = "openai-compatible"
+model = "replace-with-your-remote-architect-model"
+baseUrl = "https://api.openai.com/v1"
+apiKey = "${OPENAI_API_KEY}"
+
+[models.engineer]
+provider = "llama.cpp"
+model = "replace-with-your-local-engineer-model"
+baseUrl = "http://127.0.0.1:8080/v1"
+
+[project]
+executionTarget = "docker"
+containerName = "app"
+
+[commands]
+install = "npm install"
+lint = "npm run lint"
+test = "npm run test"
+typecheck = "npm run typecheck"
+build = "npm run build"
+format = "npm run format"
+
+[mcp]
+allowlist = []
+
+[network]
+mode = "inherit"
+
+[sandbox]
+mode = "container"
+
+[artifacts]
+rootDir = ".agent-harness"
+runsDir = ".agent-harness/runs"
+
+[stopConditions]
+maxIterations = 12
+maxEngineerAttempts = 5
+requirePassingChecks = true

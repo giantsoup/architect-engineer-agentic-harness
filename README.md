@@ -1,14 +1,17 @@
 # architect-engineer-agentic-harness
 
-Early-stage CLI-first open-source Architect-Engineer coding harness for autonomous repo work with:
+CLI-first Architect-Engineer coding harness for autonomous repo work.
 
-- TypeScript / Node
-- Explicit TypeScript orchestration runtime
+Current v1 shape:
+
+- explicit TypeScript runtime, not LangGraph
 - OpenAI-compatible model APIs
-- Remote Architect and local Engineer defaults
-- Docker-based execution against predefined project containers
-- Repo-local verbose run artifacts
-- Built-in tools plus MCP integration
+- remote Architect plus local `llama.cpp` Engineer by default
+- Docker command execution against a predefined project container
+- repo-local run dossiers under `.agent-harness/runs/<run-id>/`
+- built-in tools plus MCP stdio servers gated by a repo allowlist
+
+The package is pre-v1, but the CLI is real today: `init`, `run`, `status`, and `inspect` all work.
 
 ## Install
 
@@ -16,135 +19,310 @@ Requirements:
 
 - Node.js 22 or newer
 - npm 11 or newer
+- Docker available if `project.executionTarget = "docker"`
 
-Install as a dependency:
+One-shot usage with `npx`:
 
 ```bash
-npm install architect-engineer-agentic-harness
+npx architect-engineer-agentic-harness@latest --help
 ```
 
-Run without installing globally:
+Local project install:
 
 ```bash
-npx architect-engineer-agentic-harness --help
+npm install --save-dev architect-engineer-agentic-harness
+npm exec blueprint -- --help
 ```
 
 Global install:
 
 ```bash
 npm install -g architect-engineer-agentic-harness
-architect-engineer-agentic-harness --help
-```
-
-Friendly CLI alias after install:
-
-```bash
 blueprint --help
 ```
 
-## Current Status
-
-This package is still pre-v1, but the local execution path is now real:
-
-- `init` creates a repo-local config file
-- `init` creates the default artifact directory structure
-- `init` updates `.gitignore` to ignore verbose run artifacts safely
-- `run --command ...` executes a single configured command and writes a dossier entry
-- built-in tools support file reads, file writes, file listing, command execution, `git status`, and `git diff`
-- `run --task ...` and `run --task-file ...` execute the Architect-Engineer loop with strict JSON control messages, dossier artifacts, final reports, and stop-condition enforcement
-
-`status` and `inspect` are still placeholders for later milestones.
+`architect-engineer-agentic-harness` and `blueprint` both point to the same CLI binary. Use the package name with `npx`; use either binary name after local or global installation.
 
 ## Quick Start
 
-Bootstrap a target repository:
+Initialize a repo:
 
 ```bash
-npx architect-engineer-agentic-harness init
+npx architect-engineer-agentic-harness@latest init
 ```
 
-or:
+That creates:
+
+- `agent-harness.toml`
+- `.agent-harness/`
+- `.agent-harness/runs/`
+- a `.gitignore` entry for `/.agent-harness/`
+
+Then update `agent-harness.toml` with your real model endpoints, API-key env vars, project container name, and repo commands.
+
+Run a single command through the configured execution target:
 
 ```bash
-blueprint init
+blueprint run --command "npm test"
 ```
 
-Then edit `agent-harness.toml` for the target project before running real tasks.
-
-Run a one-off configured command:
+Run the full Architect-Engineer loop from inline markdown:
 
 ```bash
-npx architect-engineer-agentic-harness run --command "npm test"
+blueprint run --task "Implement Milestone 12 and keep all tests green."
 ```
 
-Run the Architect-Engineer execution loop with a markdown task brief:
+Run the full loop from a file:
 
 ```bash
-npx architect-engineer-agentic-harness run --task-file task.md
+blueprint run --task-file task.md
 ```
 
-Secrets should stay in environment variables. Use TOML values like `"${OPENAI_API_KEY}"` instead of storing raw secrets in the config file.
+Check the latest run:
 
-Initial project planning documents:
+```bash
+blueprint status
+blueprint inspect
+```
+
+## Commands
+
+`init`
+
+- bootstraps `agent-harness.toml`
+- creates artifact directories
+- preserves an existing config file
+- adds `/.agent-harness/` to `.gitignore` if needed
+- detects a generic TypeScript or Laravel repo and seeds matching command defaults
+
+`run`
+
+- `run --command <command>` executes one command and writes a dossier entry
+- `run --task <markdown>` runs the Architect-Engineer loop
+- `run --task-file <path>` reads the task brief from disk
+- `--role architect|engineer` applies to single-command mode
+- `--cwd`, `--env`, and `--timeout-ms` are supported
+
+`status [run-id]`
+
+- summarizes the latest run by default
+- shows run status, summary, current phase, and key artifact paths
+
+`inspect [run-id]`
+
+- lists the main artifact files for the latest run or a specific run
+- points you to dossier files without dumping their contents
+
+## Config Overview
+
+The repo-local config file is `agent-harness.toml`.
+
+Current config version behavior:
+
+- current supported version: `1`
+- missing `version` fails with an actionable error
+- newer config versions fail with an upgrade message
+- legacy `commands.setup` is still accepted and normalized to `commands.install`
+
+Top-level sections:
+
+- `version`
+- `models.architect`
+- `models.engineer`
+- `project`
+- `commands`
+- `mcp`
+- `network`
+- `sandbox`
+- `artifacts`
+- `stopConditions`
+
+Secrets should stay in environment variables:
+
+```toml
+[models.architect]
+apiKey = "${OPENAI_API_KEY}"
+```
+
+Two shipped reference configs are available:
+
+- [examples/typescript/agent-harness.toml](./examples/typescript/agent-harness.toml)
+- [examples/laravel/agent-harness.toml](./examples/laravel/agent-harness.toml)
+
+## Remote Architect Setup
+
+The Architect model is just an OpenAI-compatible endpoint. Configure:
+
+```toml
+[models.architect]
+provider = "openai-compatible"
+model = "replace-with-your-architect-model"
+baseUrl = "https://api.openai.com/v1"
+apiKey = "${OPENAI_API_KEY}"
+```
+
+Guidelines:
+
+- `baseUrl` must be the provider's OpenAI-compatible API root
+- `apiKey` should reference an env var, not a literal secret
+- `headers`, `timeoutMs`, and `maxRetries` are optional
+- the harness does not hardcode any single provider beyond requiring an OpenAI-compatible chat interface
+
+## Local `llama.cpp` Setup
+
+The default local Engineer path assumes an OpenAI-compatible `llama.cpp` server.
+
+A minimal local launch often looks like:
+
+```bash
+llama-server --host 127.0.0.1 --port 8080 --model /absolute/path/to/engineer.gguf
+```
+
+Match the config to that server:
+
+```toml
+[models.engineer]
+provider = "llama.cpp"
+model = "replace-with-your-engineer-model"
+baseUrl = "http://127.0.0.1:8080/v1"
+```
+
+Notes:
+
+- the harness talks to the Engineer model from the host process, not from inside the Docker project container
+- keep the `baseUrl` reachable from the machine running `blueprint`
+- set `model` to whatever identifier your local server expects
+
+## Predefined Project Container Requirements
+
+When `project.executionTarget = "docker"`, the harness does not create or start containers for you. It expects an existing running container.
+
+Current Docker behavior is explicit:
+
+- the CLI calls `docker inspect <container-name>`
+- command execution uses `docker exec --workdir <dir> <container-name> sh -lc "<command>"`
+
+Your predefined project container should already provide:
+
+- a running container with the repo mounted and visible to the same working tree the harness edits on the host
+- `/bin/sh` or equivalent `sh`
+- the project toolchain for the commands you configure
+- any app dependencies and backing services already wired up
+
+If the repo inside the container does not see the same filesystem state as the host checkout, the harness can edit files successfully on the host while tests inside the container still run against stale code. That setup is unsupported.
+
+## Laravel Container Expectations
+
+The shipped Laravel example assumes:
+
+- `project.executionTarget = "docker"`
+- the Laravel app container is already running
+- the container has `php`, `composer`, `artisan`, and any Node package manager commands referenced in `commands`
+- app services such as MySQL, Redis, queues, or mailhog are already reachable from that container
+
+Typical Laravel commands:
+
+```toml
+[commands]
+install = "composer install && npm install"
+lint = "./vendor/bin/pint --test"
+test = "php artisan test"
+typecheck = "npm run typecheck"
+```
+
+Important current limitation:
+
+- project commands run inside the configured Docker container
+- MCP stdio servers run on the host machine where the harness CLI starts
+
+That matters for the Laravel Boost preset. The preset resolves to:
+
+```bash
+php artisan boost:mcp
+```
+
+from the repo root on the host. If your host environment cannot run that command, do one of these:
+
+- omit Laravel Boost from the allowlist
+- replace the preset with an explicit host-side command that works in your setup
+
+The harness does not currently proxy MCP server startup through Docker.
+
+## MCP Allowlist Configuration
+
+Only allowlisted MCP servers may be used.
+
+Example with an explicit stdio server:
+
+```toml
+[mcp]
+allowlist = ["repo"]
+
+[mcp.servers.repo]
+transport = "stdio"
+command = "node"
+args = ["scripts/repo-mcp.js"]
+workingDirectory = "."
+```
+
+Example with the Laravel Boost preset:
+
+```toml
+[mcp]
+allowlist = ["laravel-boost"]
+
+[mcp.servers.laravel-boost]
+transport = "stdio"
+preset = "laravel-boost"
+```
+
+Behavior:
+
+- every server in `mcp.allowlist` must also exist in `mcp.servers`
+- duplicate allowlist entries are rejected
+- preset-backed servers must not also declare `command` or `args`
+- non-allowlisted MCP calls fail with a clear config error
+
+## Package Contents
+
+The published npm package intentionally ships only runtime assets and examples:
+
+- `dist/`
+- `prompts/`
+- `schemas/`
+- `examples/`
+- npm metadata files such as `package.json`, `README.md`, and `LICENSE`
+
+It does not ship `src/`, `test/`, or repo-only planning docs.
+
+## Development
+
+Useful commands:
+
+```bash
+npm install
+npm run build
+npm run cli -- --help
+npm run cli:dev -- --help
+npm run test
+npm run verify
+```
+
+Local package validation:
+
+```bash
+npm run build
+node dist/cli.js --help
+npm pack --dry-run
+```
+
+Project notes:
 
 - [v1 Decisions](./docs/v1-decisions.md)
 - [v1 Backlog](./docs/v1-backlog.md)
 - [Bootstrap Architecture Notes](./docs/bootstrap-architecture.md)
 - [Prompt and Schema Versioning](./docs/prompt-schema-versioning.md)
 
-## Current Focus
-
-The current implementation covers Milestones 1-7:
-
-- repo-local `init` bootstrap flow
-- TOML config loading and validation
-- artifact directory creation
-- safe `.gitignore` updates
-- command execution against the configured project target
-- built-in tool execution with role-aware write permissions
-- reusable explicit orchestration state, nodes, and guards for the Architect-Engineer loop
-- Architect planning and review with strict JSON validation against packaged schemas
-- engineer execution reuse with dossier logging, failure-note carry-forward, and final reports
-
-The orchestration layer is intentionally explicit-first today. LangGraph remains a possible future wrapper if the workflow grows more complex, but the current code keeps orchestration mechanics visible and easy to reason about.
-
-## Notes
-
-- GitHub issues are intended to track the milestone backlog from the planning documents.
-
 ## License
 
-Apache License 2.0. See [`LICENSE`](./LICENSE).
-
-## Development
-
-Commands:
-
-- `npm install`
-- `npm run build`
-- `npm run build:watch`
-- `npm run cli -- --help`
-- `npm run cli:dev -- --help`
-- `npm run link:dev`
-- `npm run typecheck`
-- `npm run lint`
-- `npm run format:check`
-- `npm run test`
-- `npm run verify`
-
-CLI smoke check:
-
-- `node dist/cli.js --help`
-
-Local linked CLI workflow:
-
-```bash
-npm run link:dev
-blueprint --help
-```
-
-During active CLI development, keep the build current in another terminal:
-
-```bash
-npm run build:watch
-```
+Apache License 2.0. See [LICENSE](./LICENSE).

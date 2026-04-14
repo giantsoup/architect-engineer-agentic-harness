@@ -3,6 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 
 import type { HarnessConfig } from "../types/config.js";
+import { CURRENT_HARNESS_CONFIG_VERSION } from "../versioning.js";
 
 const nonEmptyStringSchema = z.string().trim().min(1, "Must not be empty.");
 const mcpServerIdSchema = nonEmptyStringSchema.regex(
@@ -50,7 +51,7 @@ const mcpServerConfigSchema = z
 
 export const harnessConfigSchema: z.ZodType<HarnessConfig> = z
   .object({
-    version: z.literal(1),
+    version: z.literal(CURRENT_HARNESS_CONFIG_VERSION),
     models: z
       .object({
         architect: modelConfigSchema,

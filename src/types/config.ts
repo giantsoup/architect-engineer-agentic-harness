@@ -1,4 +1,5 @@
 import type { ResolvedProjectContext } from "../adapters/types.js";
+import type { HarnessConfigVersion } from "../versioning.js";
 
 export interface ModelConfig {
   provider: string;
@@ -24,7 +25,7 @@ export interface McpServerConfig {
 }
 
 export interface HarnessConfig {
-  version: 1;
+  version: HarnessConfigVersion;
   models: {
     architect: ModelConfig;
     engineer: ModelConfig;

@@ -60,12 +60,14 @@ baseUrl = ${quoteTomlString(config.models.engineer.baseUrl)}
 # x-provider-route = "engineer"
 
 [project]
-# Use "docker" to execute inside an existing container, or "host" to run locally.
+# The supported v1 execution path is "docker" against an existing project container.
+# Keep "host" reserved unless you are extending the runtime yourself.
 executionTarget = ${quoteTomlString(config.project.executionTarget)}
 containerName = ${quoteTomlString(config.project.containerName ?? "app")}
 
 [commands]
 # Override these commands to match the target repository. Omit keys to rely on fallback detection.
+# Use \`install\`; \`setup\` remains a legacy compatibility alias.
 ${renderOptionalTomlKey("install", config.commands.install)}
 ${renderOptionalTomlKey("test", config.commands.test)}
 ${renderOptionalTomlKey("lint", config.commands.lint)}
