@@ -596,6 +596,103 @@ args = ["repo-mcp.js"]`,
     ).toBe(true);
   });
 
+  it("accepts legacy Architect final outputs without type and records normalized action types", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+    commitFile(projectRoot, "src/example.ts", "export const value = 1;\n");
+
+    const loadedConfig = await createLoadedConfig(projectRoot);
+    const architect = createQueuedModelClient([
+      {
+        acceptanceCriteria: ["`npm run test` passes"],
+        steps: ["Update the source file", "Run the required test command"],
+        summary: "Change the export and verify it.",
+      },
+      {
+        decision: "approve",
+        summary: "The change is complete and verified.",
+      },
+    ]);
+    const engineer = createQueuedModelClient([
+      {
+        request: {
+          content: "export const value = 2;\n",
+          path: "src/example.ts",
+          toolName: "file.write",
+        },
+        summary: "Update the source file.",
+        type: "tool",
+      },
+      {
+        request: {
+          accessMode: "mutate",
+          command: "npm run test",
+          toolName: "command.execute",
+        },
+        stopWhenSuccessful: true,
+        summary: "Verification passed after running the required test command.",
+        type: "tool",
+      },
+    ]);
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 20,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: 0,
+          role: "engineer",
+          stderr: "",
+          stdout: "tests passed\n",
+          timestamp: "2026-04-14T12:00:30.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeArchitectEngineerRun({
+      architectModelClient: architect.client,
+      createdAt: new Date("2026-04-14T12:00:00.000Z"),
+      engineerModelClient: engineer.client,
+      loadedConfig,
+      now: () => new Date("2026-04-14T12:00:30.000Z"),
+      projectCommandRunner: fakeCommandRunner,
+      runId: "20260414T120000.000Z-abc137",
+      task: "Update `src/example.ts` so it exports `2` instead of `1`.",
+    });
+    const events = parseJsonLines(
+      execution.dossier.paths.files.events.absolutePath,
+    );
+    const actionSelections = events.filter(
+      (event) => event.type === "architect-action-selected",
+    );
+
+    expect(execution.result.status).toBe("success");
+    expect(actionSelections).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          actionType: "plan",
+          phase: "architect-plan",
+        }),
+        expect.objectContaining({
+          actionType: "review",
+          phase: "architect-review",
+        }),
+      ]),
+    );
+  });
+
   it("stops safely before branching when the repository starts dirty", async () => {
     const projectRoot = createTempProject();
     projectRoots.push(projectRoot);

@@ -628,8 +628,10 @@ async function runArchitectLoop<TKind extends "plan" | "review">(options: {
         };
       }
 
+      const actionType = action.type ?? options.kind;
+
       await appendRunEvent(options.dossier.paths, {
-        actionType: action.type,
+        actionType,
         iteration,
         phase: options.kind === "plan" ? "architect-plan" : "architect-review",
         summary: action.summary,
