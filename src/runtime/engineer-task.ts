@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 
+import { getResolvedProjectCommand } from "../adapters/detect-project.js";
 import type { LoadedHarnessConfig } from "../types/config.js";
 import type { RunCheckResult, RunResult } from "../types/run.js";
 import type {
@@ -116,7 +117,7 @@ export async function executeEngineerTask(
     task: options.task,
     timeoutMs: options.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS,
   });
-  const requiredCheckCommand = options.loadedConfig.config.commands.test;
+  const requiredCheckCommand = getRequiredCheckCommand(options.loadedConfig);
   const requirePassingChecks =
     options.loadedConfig.config.stopConditions.requirePassingChecks;
   const maxIterations =
@@ -162,6 +163,8 @@ export async function executeEngineerTask(
     await appendRunEvent(dossier.paths, {
       maxConsecutiveFailedChecks,
       maxIterations,
+      projectAdapter: options.loadedConfig.resolvedProject.adapter,
+      resolvedCommands: toResolvedCommandRecord(options.loadedConfig),
       requiredCheckCommand,
       requirePassingChecks,
       timeoutMs,
@@ -393,6 +396,7 @@ export async function executeEngineerTask(
       consecutiveFailedChecks,
       dossier,
       iterationCount,
+      loadedConfig: options.loadedConfig,
       now,
       outcome,
       persistFinalArtifacts: options.persistFinalArtifacts ?? true,
@@ -411,6 +415,7 @@ async function finalizeEngineerRun(options: {
   consecutiveFailedChecks: number;
   dossier: RunDossier;
   iterationCount: number;
+  loadedConfig: LoadedHarnessConfig;
   now: () => Date;
   outcome: FinalizedOutcome;
   persistFinalArtifacts: boolean;
@@ -456,6 +461,8 @@ async function finalizeEngineerRun(options: {
           : options.dossier.paths.files.failureNotes.relativePath,
       gitStatus: workspaceArtifacts.status,
       outcome: options.outcome,
+      projectAdapter: options.loadedConfig.resolvedProject.adapter,
+      resolvedCommands: toResolvedCommandRecord(options.loadedConfig),
       requiredCheckCommand: options.requiredCheckCommand,
       requirePassingChecks: options.requirePassingChecks,
       runDir: options.dossier.paths.runDirRelativePath,
@@ -715,6 +722,8 @@ function renderFinalReport(options: {
   failureNotesPath?: string | undefined;
   gitStatus: Extract<BuiltInToolResult, { toolName: "git.status" }> | undefined;
   outcome: FinalizedOutcome;
+  projectAdapter: LoadedHarnessConfig["resolvedProject"]["adapter"];
+  resolvedCommands: Record<string, string | undefined>;
   requiredCheckCommand: string;
   requirePassingChecks: boolean;
   runDir: string;
@@ -733,6 +742,14 @@ function renderFinalReport(options: {
     "## Task",
     "",
     options.task.trim(),
+    "",
+    "## Project Adapter",
+    "",
+    `- Adapter: ${formatProjectAdapter(options.projectAdapter)}`,
+    ...Object.entries(options.resolvedCommands).map(
+      ([commandName, command]) =>
+        `- ${commandName}: ${command === undefined ? "not resolved" : `\`${command}\``}`,
+    ),
     "",
     "## Verification",
     "",
@@ -790,6 +807,7 @@ function renderEngineerTaskBrief(options: {
   timeoutMs: number;
 }): string {
   const builtInTools = renderBuiltInToolsMarkdown();
+  const requiredCheckCommand = getRequiredCheckCommand(options.loadedConfig);
 
   return [
     "# Engineer Task Brief",
@@ -798,9 +816,17 @@ function renderEngineerTaskBrief(options: {
     "",
     options.task.trim(),
     "",
+    "## Project Adapter",
+    "",
+    `- Adapter: ${formatProjectAdapter(options.loadedConfig.resolvedProject.adapter)}`,
+    ...Object.entries(toResolvedCommandRecord(options.loadedConfig)).map(
+      ([commandName, command]) =>
+        `- ${commandName}: ${command === undefined ? "not resolved" : `\`${command}\``}`,
+    ),
+    "",
     "## Required Check",
     "",
-    `Run \`${options.loadedConfig.config.commands.test}\` through \`command.execute\` before final completion when passing checks are required.`,
+    `Run \`${requiredCheckCommand}\` through \`command.execute\` before final completion when passing checks are required.`,
     "",
     "## Stop Conditions",
     "",
@@ -919,4 +945,36 @@ function withEngineerTimeout(
 
 function normalizeCommand(command: string): string {
   return command.trim().replace(/\s+/gu, " ");
+}
+
+function getRequiredCheckCommand(loadedConfig: LoadedHarnessConfig): string {
+  const requiredCheckCommand = getResolvedProjectCommand(
+    loadedConfig.resolvedProject,
+    "test",
+  );
+
+  if (requiredCheckCommand === undefined) {
+    throw new Error("No required test command was resolved for this project.");
+  }
+
+  return requiredCheckCommand;
+}
+
+function toResolvedCommandRecord(
+  loadedConfig: LoadedHarnessConfig,
+): Record<string, string | undefined> {
+  return {
+    install: loadedConfig.resolvedProject.commands.install.command,
+    lint: loadedConfig.resolvedProject.commands.lint.command,
+    test: loadedConfig.resolvedProject.commands.test.command,
+    typecheck: loadedConfig.resolvedProject.commands.typecheck.command,
+  };
+}
+
+function formatProjectAdapter(
+  adapter: LoadedHarnessConfig["resolvedProject"]["adapter"],
+): string {
+  return adapter.id === "unknown"
+    ? "Unknown"
+    : `${adapter.label} (${adapter.markers.join(", ")})`;
 }

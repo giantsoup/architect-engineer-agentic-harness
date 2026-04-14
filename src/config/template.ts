@@ -1,13 +1,34 @@
+import type { ResolvedProjectContext } from "../adapters/types.js";
+import type { HarnessConfig } from "../types/config.js";
 import { DEFAULT_HARNESS_CONFIG } from "./defaults.js";
 
 function quoteTomlString(value: string): string {
   return JSON.stringify(value);
 }
 
-export function renderHarnessConfigTemplate(): string {
-  const config = DEFAULT_HARNESS_CONFIG;
+export interface RenderHarnessConfigTemplateOptions {
+  config?: HarnessConfig;
+  detectedProject?: ResolvedProjectContext["adapter"];
+}
 
-  return `# Repository-local configuration for architect-engineer-agentic-harness.
+export function renderHarnessConfigTemplate(
+  options: RenderHarnessConfigTemplateOptions = {},
+): string {
+  const config = options.config ?? DEFAULT_HARNESS_CONFIG;
+  const lines = [
+    "# Repository-local configuration for architect-engineer-agentic-harness.",
+  ];
+
+  if (
+    options.detectedProject !== undefined &&
+    options.detectedProject.id !== "unknown"
+  ) {
+    lines.push(
+      `# Detected project adapter: ${options.detectedProject.label} (${options.detectedProject.markers.join(", ")}).`,
+    );
+  }
+
+  return `${lines.join("\n")}
 # Keep secrets out of this file. Reference environment variables instead:
 #   apiKey = "\${OPENAI_API_KEY}"
 #
@@ -44,12 +65,13 @@ executionTarget = ${quoteTomlString(config.project.executionTarget)}
 containerName = ${quoteTomlString(config.project.containerName ?? "app")}
 
 [commands]
-# Override these commands to match the target repository.
-setup = ${quoteTomlString(config.commands.setup)}
-build = ${quoteTomlString(config.commands.build)}
-test = ${quoteTomlString(config.commands.test)}
-lint = ${quoteTomlString(config.commands.lint)}
-format = ${quoteTomlString(config.commands.format)}
+# Override these commands to match the target repository. Omit keys to rely on fallback detection.
+${renderOptionalTomlKey("install", config.commands.install)}
+${renderOptionalTomlKey("test", config.commands.test)}
+${renderOptionalTomlKey("lint", config.commands.lint)}
+${renderOptionalTomlKey("typecheck", config.commands.typecheck)}
+${renderOptionalTomlKey("build", config.commands.build)}
+${renderOptionalTomlKey("format", config.commands.format)}
 
 [mcp]
 # Only listed MCP servers may be used by the harness.
@@ -72,4 +94,10 @@ maxIterations = ${config.stopConditions.maxIterations}
 maxEngineerAttempts = ${config.stopConditions.maxEngineerAttempts}
 requirePassingChecks = ${config.stopConditions.requirePassingChecks}
 `;
+}
+
+function renderOptionalTomlKey(key: string, value: string | undefined): string {
+  return value === undefined
+    ? `# ${key} = ${quoteTomlString(`replace-with-${key}-command`)}`
+    : `${key} = ${quoteTomlString(value)}`;
 }

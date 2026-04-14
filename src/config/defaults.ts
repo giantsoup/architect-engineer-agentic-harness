@@ -23,11 +23,12 @@ export const DEFAULT_HARNESS_CONFIG: HarnessConfig = {
     containerName: "app",
   },
   commands: {
-    setup: "npm install",
     build: "npm run build",
-    test: "npm run test",
-    lint: "npm run lint",
     format: "npm run format",
+    install: "npm install",
+    lint: "npm run lint",
+    test: "npm run test",
+    typecheck: "npm run typecheck",
   },
   mcp: {
     allowlist: [],

@@ -852,4 +852,105 @@ describe("executeArchitectEngineerRun", () => {
       ),
     ).toContain("Required check failed 2 consecutive times.");
   });
+
+  it("keeps passing tests as the minimum completion gate even when Architect adds extra goals", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+    commitFile(projectRoot, "src/example.ts", "export const value = 1;\n");
+
+    const loadedConfig = await createLoadedConfig(projectRoot);
+    const architect = createQueuedModelClient([
+      {
+        acceptanceCriteria: ["Export `2`", "Update the summary line"],
+        steps: ["Update the file", "Verify with tests"],
+        summary: "Make the code change and meet the extra review goals.",
+      },
+      {
+        decision: "approve",
+        summary: "The change and follow-up goals are complete.",
+      },
+    ]);
+    const engineer = createQueuedModelClient([
+      {
+        request: {
+          content: "export const value = 2;\n",
+          path: "src/example.ts",
+          toolName: "file.write",
+        },
+        summary: "Apply the code change.",
+        type: "tool",
+      },
+      {
+        outcome: "complete",
+        summary: "The requested change is complete.",
+        type: "final",
+      },
+      {
+        request: {
+          accessMode: "mutate",
+          command: "npm run test",
+          toolName: "command.execute",
+        },
+        stopWhenSuccessful: true,
+        summary: "Tests pass after the change.",
+        type: "tool",
+      },
+    ]);
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 20,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: 0,
+          role: "engineer",
+          stderr: "",
+          stdout: "tests passed\n",
+          timestamp: "2026-04-14T12:03:00.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeArchitectEngineerRun({
+      architectModelClient: architect.client,
+      createdAt: new Date("2026-04-14T12:00:00.000Z"),
+      engineerModelClient: engineer.client,
+      loadedConfig,
+      now: () => new Date("2026-04-14T12:03:00.000Z"),
+      projectCommandRunner: fakeCommandRunner,
+      runId: "20260414T120000.000Z-abc135",
+      task: "Update `src/example.ts` and satisfy the Architect follow-up goals.",
+    });
+
+    expect(execution.result.status).toBe("success");
+    expect(
+      engineer.requests.some((request) =>
+        request.messages.some(
+          (message) =>
+            message.role === "user" &&
+            message.content.includes(
+              "Required check `npm run test` has not passed yet.",
+            ),
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      readFileSync(
+        execution.dossier.paths.files.finalReport.absolutePath,
+        "utf8",
+      ),
+    ).toContain("Mandatory test gate");
+  });
 });

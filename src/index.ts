@@ -2,6 +2,11 @@ export {
   DEFAULT_PROMPT_VERSION,
   DEFAULT_SCHEMA_VERSION,
 } from "./versioning.js";
+export {
+  detectProjectAdapter,
+  getResolvedProjectCommand,
+  resolveProjectContext,
+} from "./adapters/detect-project.js";
 
 export {
   DEFAULT_ARTIFACTS_ROOT_DIR,
@@ -87,6 +92,15 @@ export {
   parseGitStatusPorcelain,
 } from "./git/status.js";
 export type { HarnessConfig, LoadedHarnessConfig } from "./types/config.js";
+export type {
+  DetectedProjectAdapter,
+  ProjectAdapterId,
+  ProjectCommandName,
+  ProjectCommandResolution,
+  ProjectCommandSource,
+  ResolvedProjectCommands,
+  ResolvedProjectContext,
+} from "./adapters/types.js";
 export type { CreateBuiltInToolExecutorOptions } from "./tools/built-in-tools.js";
 export type {
   BuiltInToolExecutionContext,
@@ -148,6 +162,10 @@ export {
   normalizeOpenAiCompatibleBaseUrl,
   resolveModelConfigForRole,
 } from "./models/provider-factory.js";
+export {
+  renderAcceptanceCriteriaLines,
+  resolveAcceptanceCriteriaPolicy,
+} from "./runtime/acceptance-criteria.js";
 export { executeEngineerTask } from "./runtime/engineer-task.js";
 export { executeArchitectEngineerRun } from "./runtime/architect-engineer-run.js";
 export {

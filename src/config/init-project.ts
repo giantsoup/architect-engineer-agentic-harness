@@ -1,7 +1,14 @@
 import path from "node:path";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 
+import {
+  getResolvedProjectCommand,
+  resolveProjectContext,
+} from "../adapters/detect-project.js";
+import type { HarnessConfig } from "../types/config.js";
+import type { ResolvedProjectContext } from "../adapters/types.js";
 import { HARNESS_CONFIG_FILENAME } from "./defaults.js";
+import { DEFAULT_HARNESS_CONFIG } from "./defaults.js";
 import { loadHarnessConfig } from "./load-config.js";
 import { renderHarnessConfigTemplate } from "./template.js";
 
@@ -15,6 +22,7 @@ export interface InitializeProjectResult {
   runsDirAction: "created" | "existing";
   gitignorePath: string;
   gitignoreAction: "created" | "updated" | "unchanged";
+  resolvedProject: ResolvedProjectContext;
 }
 
 export async function initializeProject(
@@ -22,17 +30,31 @@ export async function initializeProject(
 ): Promise<InitializeProjectResult> {
   const resolvedProjectRoot = path.resolve(projectRoot);
   const configPath = path.join(resolvedProjectRoot, HARNESS_CONFIG_FILENAME);
+  const detectedProject = await resolveProjectContext({
+    commands: {},
+    projectRoot: resolvedProjectRoot,
+  });
 
   let configAction: InitializeProjectResult["configAction"] = "preserved";
 
   if (!(await pathExists(configPath))) {
-    await writeFile(configPath, renderHarnessConfigTemplate(), "utf8");
+    const initialConfig = createInitialHarnessConfig(detectedProject);
+
+    await writeFile(
+      configPath,
+      renderHarnessConfigTemplate({
+        config: initialConfig,
+        detectedProject: detectedProject.adapter,
+      }),
+      "utf8",
+    );
     configAction = "created";
   }
 
-  const { config } = await loadHarnessConfig({
+  const loadedConfig = await loadHarnessConfig({
     projectRoot: resolvedProjectRoot,
   });
+  const { config } = loadedConfig;
   const artifactRootPath = path.join(
     resolvedProjectRoot,
     config.artifacts.rootDir,
@@ -56,6 +78,7 @@ export async function initializeProject(
     runsDirAction,
     gitignorePath,
     gitignoreAction,
+    resolvedProject: loadedConfig.resolvedProject,
   };
 }
 
@@ -70,6 +93,7 @@ export function formatInitializeProjectSummary(
     `- Artifact root: ${describeDirectoryAction(result.artifactRootAction, result.artifactRootDir)}`,
     `- Runs directory: ${describeDirectoryAction(result.runsDirAction, result.runsDir)}`,
     `- .gitignore: ${describeGitignoreAction(result.gitignoreAction, gitignoreEntry)}`,
+    `- Project adapter: ${formatProjectAdapter(result.resolvedProject)}`,
   ].join("\n");
 }
 
@@ -195,6 +219,73 @@ function describeGitignoreAction(
     case "unchanged":
       return `already contains ${ignoreEntry}`;
   }
+}
+
+function createInitialHarnessConfig(
+  resolvedProject: ResolvedProjectContext,
+): HarnessConfig {
+  const commands: HarnessConfig["commands"] =
+    resolvedProject.adapter.id === "laravel-generic"
+      ? {
+          ...(getResolvedProjectCommand(resolvedProject, "install") ===
+          undefined
+            ? {}
+            : {
+                install: getResolvedProjectCommand(resolvedProject, "install"),
+              }),
+          ...(getResolvedProjectCommand(resolvedProject, "test") === undefined
+            ? {}
+            : { test: getResolvedProjectCommand(resolvedProject, "test") }),
+          ...(getResolvedProjectCommand(resolvedProject, "lint") === undefined
+            ? {}
+            : { lint: getResolvedProjectCommand(resolvedProject, "lint") }),
+          ...(getResolvedProjectCommand(resolvedProject, "typecheck") ===
+          undefined
+            ? {}
+            : {
+                typecheck: getResolvedProjectCommand(
+                  resolvedProject,
+                  "typecheck",
+                ),
+              }),
+        }
+      : {
+          ...DEFAULT_HARNESS_CONFIG.commands,
+          ...(getResolvedProjectCommand(resolvedProject, "install") ===
+          undefined
+            ? {}
+            : {
+                install: getResolvedProjectCommand(resolvedProject, "install"),
+              }),
+          ...(getResolvedProjectCommand(resolvedProject, "test") === undefined
+            ? {}
+            : { test: getResolvedProjectCommand(resolvedProject, "test") }),
+          ...(getResolvedProjectCommand(resolvedProject, "lint") === undefined
+            ? {}
+            : { lint: getResolvedProjectCommand(resolvedProject, "lint") }),
+          ...(getResolvedProjectCommand(resolvedProject, "typecheck") ===
+          undefined
+            ? {}
+            : {
+                typecheck: getResolvedProjectCommand(
+                  resolvedProject,
+                  "typecheck",
+                ),
+              }),
+        };
+
+  return {
+    ...DEFAULT_HARNESS_CONFIG,
+    commands,
+  };
+}
+
+function formatProjectAdapter(resolvedProject: ResolvedProjectContext): string {
+  if (resolvedProject.adapter.id === "unknown") {
+    return "not detected";
+  }
+
+  return `${resolvedProject.adapter.label} (${resolvedProject.adapter.markers.join(", ")})`;
 }
 
 async function pathExists(targetPath: string): Promise<boolean> {

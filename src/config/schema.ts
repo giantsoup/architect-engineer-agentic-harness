@@ -48,11 +48,13 @@ export const harnessConfigSchema: z.ZodType<HarnessConfig> = z
       .strict(),
     commands: z
       .object({
-        setup: nonEmptyStringSchema,
-        build: nonEmptyStringSchema,
-        test: nonEmptyStringSchema,
-        lint: nonEmptyStringSchema,
-        format: nonEmptyStringSchema,
+        build: nonEmptyStringSchema.optional(),
+        format: nonEmptyStringSchema.optional(),
+        install: nonEmptyStringSchema.optional(),
+        lint: nonEmptyStringSchema.optional(),
+        setup: nonEmptyStringSchema.optional(),
+        test: nonEmptyStringSchema.optional(),
+        typecheck: nonEmptyStringSchema.optional(),
       })
       .strict(),
     mcp: z

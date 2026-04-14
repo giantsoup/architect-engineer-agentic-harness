@@ -1,3 +1,5 @@
+import type { ResolvedProjectContext } from "../adapters/types.js";
+
 export interface ModelConfig {
   provider: string;
   model: string;
@@ -19,11 +21,13 @@ export interface HarnessConfig {
     containerName?: string | undefined;
   };
   commands: {
-    setup: string;
-    build: string;
-    test: string;
-    lint: string;
-    format: string;
+    build?: string | undefined;
+    format?: string | undefined;
+    install?: string | undefined;
+    lint?: string | undefined;
+    setup?: string | undefined;
+    test?: string | undefined;
+    typecheck?: string | undefined;
   };
   mcp: {
     allowlist: string[];
@@ -49,4 +53,5 @@ export interface LoadedHarnessConfig {
   config: HarnessConfig;
   configPath: string;
   projectRoot: string;
+  resolvedProject: ResolvedProjectContext;
 }

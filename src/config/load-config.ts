@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { parse } from "smol-toml";
 import type { ZodIssue } from "zod";
 
+import { resolveProjectContext } from "../adapters/detect-project.js";
 import type { LoadedHarnessConfig } from "../types/config.js";
 import { HARNESS_CONFIG_FILENAME } from "./defaults.js";
 import { resolveEnvironmentReferences } from "./resolve-env.js";
@@ -64,10 +65,24 @@ export async function loadHarnessConfig(
     );
   }
 
+  const resolvedProject = await resolveProjectContext({
+    commands: validationResult.data.commands,
+    projectRoot,
+  });
+  const issues = validateResolvedProject(
+    resolvedProject,
+    validationResult.data,
+  );
+
+  if (issues.length > 0) {
+    throw new HarnessConfigError(configPath, issues);
+  }
+
   return {
     config: validationResult.data,
     configPath,
     projectRoot,
+    resolvedProject,
   };
 }
 
@@ -130,4 +145,22 @@ function formatHarnessConfigError(
     `Invalid harness config at ${configPath}:`,
     ...issues.map((issue) => `- ${issue}`),
   ].join("\n");
+}
+
+function validateResolvedProject(
+  resolvedProject: Awaited<ReturnType<typeof resolveProjectContext>>,
+  config: LoadedHarnessConfig["config"],
+): string[] {
+  const issues: string[] = [];
+
+  if (
+    config.stopConditions.requirePassingChecks &&
+    resolvedProject.commands.test.command === undefined
+  ) {
+    issues.push(
+      "commands.test: Could not resolve a required test command from config or project detection.",
+    );
+  }
+
+  return issues;
 }

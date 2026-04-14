@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 
+import { getResolvedProjectCommand } from "../adapters/detect-project.js";
 import type { LoadedHarnessConfig } from "../types/config.js";
 import type {
   ModelChatRequest,
@@ -52,6 +53,10 @@ import {
   executeEngineerTask,
   type EngineerTaskModelClient,
 } from "./engineer-task.js";
+import {
+  renderAcceptanceCriteriaLines,
+  resolveAcceptanceCriteriaPolicy,
+} from "./acceptance-criteria.js";
 import type { ProjectCommandRunnerLike } from "../sandbox/command-runner.js";
 import type { RunProcess } from "../sandbox/process-runner.js";
 import {
@@ -106,7 +111,9 @@ export async function prepareArchitectEngineerRunNode(
   await appendRunEvent(dossier.paths, {
     maxConsecutiveFailedChecks:
       state.stopConditions.maxConsecutiveFailedRequiredChecks,
-    requiredCheckCommand: context.loadedConfig.config.commands.test,
+    projectAdapter: context.loadedConfig.resolvedProject.adapter,
+    resolvedCommands: toResolvedCommandRecord(context.loadedConfig),
+    requiredCheckCommand: getRequiredCheckCommand(context.loadedConfig),
     task: state.metadata.task,
     timeoutMs: state.metadata.timeoutMs,
     timestamp,
@@ -391,7 +398,11 @@ export async function architectReviewNode(
           role: "developer",
         },
         {
-          content: renderReviewRequest(state, workspaceSnapshot),
+          content: renderReviewRequest(
+            state,
+            context.loadedConfig,
+            workspaceSnapshot,
+          ),
           role: "user",
         },
       ],
@@ -514,6 +525,7 @@ export async function finalizeArchitectEngineerRunNode(
   const finalReport = renderFinalReport(
     finalizedState,
     resolvedFinalOutcome,
+    context.loadedConfig,
     workspaceSnapshot,
   );
 
@@ -658,6 +670,8 @@ function renderPlanningRequest(
   loadedConfig: LoadedHarnessConfig,
   workspaceSnapshot: ArchitectWorkspaceSnapshot,
 ): string {
+  const requiredCheckCommand = getRequiredCheckCommand(loadedConfig);
+
   return [
     "# Task",
     "",
@@ -665,9 +679,17 @@ function renderPlanningRequest(
     "",
     "## Run Constraints",
     "",
-    `- Required check command: \`${loadedConfig.config.commands.test}\``,
+    `- Project adapter: ${formatProjectAdapter(loadedConfig.resolvedProject.adapter)}`,
+    `- Required check command: \`${requiredCheckCommand}\``,
     `- Global timeout: ${state.metadata.timeoutMs}ms`,
     `- Failed required-check threshold: ${state.stopConditions.maxConsecutiveFailedRequiredChecks}`,
+    "",
+    "## Resolved Commands",
+    "",
+    ...Object.entries(toResolvedCommandRecord(loadedConfig)).map(
+      ([commandName, command]) =>
+        `- ${commandName}: ${command === undefined ? "not resolved" : `\`${command}\``}`,
+    ),
     "",
     "## Workspace Snapshot",
     "",
@@ -685,9 +707,16 @@ function renderPlanningRequest(
 
 function renderReviewRequest(
   state: ArchitectEngineerState,
+  loadedConfig: LoadedHarnessConfig,
   workspaceSnapshot: ArchitectWorkspaceSnapshot,
 ): string {
   const execution = state.engineerExecution!;
+  const acceptanceCriteriaPolicy = resolveAcceptanceCriteriaPolicy({
+    architectPlan: state.architectPlan,
+    requiredTestCommand: getRequiredCheckCommand(loadedConfig),
+    requirePassingChecks:
+      loadedConfig.config.stopConditions.requirePassingChecks,
+  });
   const lines = [
     "# Task",
     "",
@@ -700,14 +729,8 @@ function renderReviewRequest(
     ...state.architectPlan!.steps.map((step) => `- ${step}`),
   ];
 
-  if ((state.architectPlan!.acceptanceCriteria?.length ?? 0) > 0) {
-    lines.push("", "## Acceptance Criteria", "");
-    lines.push(
-      ...((state.architectPlan!.acceptanceCriteria ?? []).map(
-        (criterion) => `- ${criterion}`,
-      ) as string[]),
-    );
-  }
+  lines.push("", "## Acceptance Criteria", "");
+  lines.push(...renderAcceptanceCriteriaLines(acceptanceCriteriaPolicy));
 
   lines.push(
     "",
@@ -719,6 +742,7 @@ function renderReviewRequest(
     `- Engineer attempts so far: ${state.iterations.engineerAttempts}`,
     `- Review cycles so far: ${state.iterations.reviewCycles}`,
     `- Consecutive failed required checks: ${execution.consecutiveFailedChecks}`,
+    `- Project adapter: ${formatProjectAdapter(loadedConfig.resolvedProject.adapter)}`,
   );
 
   const lastCheck = execution.checks.at(-1);
@@ -732,6 +756,14 @@ function renderReviewRequest(
   if (workspaceSnapshot.gitStatus !== undefined) {
     lines.push("", "## Workspace Snapshot", "", workspaceSnapshot.gitStatus);
   }
+
+  lines.push("", "## Resolved Commands", "");
+  lines.push(
+    ...Object.entries(toResolvedCommandRecord(loadedConfig)).map(
+      ([commandName, command]) =>
+        `- ${commandName}: ${command === undefined ? "not resolved" : `\`${command}\``}`,
+    ),
+  );
 
   if (workspaceSnapshot.checksJson !== undefined) {
     lines.push(
@@ -785,6 +817,12 @@ function renderEngineerExecutionTask(
   state: ArchitectEngineerState,
   loadedConfig: LoadedHarnessConfig,
 ): string {
+  const acceptanceCriteriaPolicy = resolveAcceptanceCriteriaPolicy({
+    architectPlan: state.architectPlan,
+    requiredTestCommand: getRequiredCheckCommand(loadedConfig),
+    requirePassingChecks:
+      loadedConfig.config.stopConditions.requirePassingChecks,
+  });
   const lines = [
     "# Objective",
     "",
@@ -799,20 +837,23 @@ function renderEngineerExecutionTask(
     ) as string[]),
   ];
 
-  if ((state.architectPlan?.acceptanceCriteria?.length ?? 0) > 0) {
-    lines.push("", "## Acceptance Criteria", "");
-
-    for (const criterion of state.architectPlan?.acceptanceCriteria ?? []) {
-      lines.push(`- ${criterion}`);
-    }
-  }
+  lines.push("", "## Acceptance Criteria", "");
+  lines.push(...renderAcceptanceCriteriaLines(acceptanceCriteriaPolicy));
 
   lines.push(
     "",
     "## Required Check",
     "",
-    `- Command: \`${loadedConfig.config.commands.test}\``,
+    `- Command: \`${getRequiredCheckCommand(loadedConfig)}\``,
     `- Passing checks must be recorded before completion: ${loadedConfig.config.stopConditions.requirePassingChecks ? "yes" : "no"}`,
+    "",
+    "## Project Adapter",
+    "",
+    `- Adapter: ${formatProjectAdapter(loadedConfig.resolvedProject.adapter)}`,
+    ...Object.entries(toResolvedCommandRecord(loadedConfig)).map(
+      ([commandName, command]) =>
+        `- ${commandName}: ${command === undefined ? "not resolved" : `\`${command}\``}`,
+    ),
   );
 
   if (state.architectReview?.decision === "revise") {
@@ -843,8 +884,15 @@ function renderEngineerExecutionTask(
 function renderFinalReport(
   state: ArchitectEngineerState,
   finalOutcome: ArchitectEngineerFinalOutcome,
+  loadedConfig: LoadedHarnessConfig,
   workspaceSnapshot: ArchitectWorkspaceSnapshot,
 ): string {
+  const acceptanceCriteriaPolicy = resolveAcceptanceCriteriaPolicy({
+    architectPlan: state.architectPlan,
+    requiredTestCommand: getRequiredCheckCommand(loadedConfig),
+    requirePassingChecks:
+      loadedConfig.config.stopConditions.requirePassingChecks,
+  });
   const lines = [
     "# Final Report",
     "",
@@ -868,6 +916,8 @@ function renderFinalReport(
       `- Summary: ${state.architectPlan.summary}`,
     );
     lines.push(...state.architectPlan.steps.map((step) => `- ${step}`));
+    lines.push("", "## Acceptance Criteria", "");
+    lines.push(...renderAcceptanceCriteriaLines(acceptanceCriteriaPolicy));
   }
 
   if (state.architectReview !== undefined) {
@@ -896,6 +946,17 @@ function renderFinalReport(
       `- Latest summary: ${state.engineerExecution.result.summary}`,
     );
   }
+
+  lines.push(
+    "",
+    "## Project Adapter",
+    "",
+    `- Adapter: ${formatProjectAdapter(loadedConfig.resolvedProject.adapter)}`,
+    ...Object.entries(toResolvedCommandRecord(loadedConfig)).map(
+      ([commandName, command]) =>
+        `- ${commandName}: ${command === undefined ? "not resolved" : `\`${command}\``}`,
+    ),
+  );
 
   lines.push("", ...renderRunGitSection(state.git));
 
@@ -1101,6 +1162,38 @@ function withBoundRoleTimeout(
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function getRequiredCheckCommand(loadedConfig: LoadedHarnessConfig): string {
+  const requiredCheckCommand = getResolvedProjectCommand(
+    loadedConfig.resolvedProject,
+    "test",
+  );
+
+  if (requiredCheckCommand === undefined) {
+    throw new Error("No required test command was resolved for this project.");
+  }
+
+  return requiredCheckCommand;
+}
+
+function toResolvedCommandRecord(
+  loadedConfig: LoadedHarnessConfig,
+): Record<string, string | undefined> {
+  return {
+    install: loadedConfig.resolvedProject.commands.install.command,
+    lint: loadedConfig.resolvedProject.commands.lint.command,
+    test: loadedConfig.resolvedProject.commands.test.command,
+    typecheck: loadedConfig.resolvedProject.commands.typecheck.command,
+  };
+}
+
+function formatProjectAdapter(
+  adapter: LoadedHarnessConfig["resolvedProject"]["adapter"],
+): string {
+  return adapter.id === "unknown"
+    ? "Unknown"
+    : `${adapter.label} (${adapter.markers.join(", ")})`;
 }
 
 function capitalize(value: string): string {
