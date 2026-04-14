@@ -75,6 +75,9 @@ export async function executeArchitectEngineerRun(
     ...(options.engineerModelClient === undefined
       ? {}
       : { engineerModelClient: options.engineerModelClient }),
+    ...(options.runProcess === undefined
+      ? {}
+      : { runProcess: options.runProcess }),
   };
   const ownsProjectCommandRunner = options.projectCommandRunner === undefined;
   const projectCommandRunner =

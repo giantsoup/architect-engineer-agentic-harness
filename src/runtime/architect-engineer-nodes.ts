@@ -52,6 +52,7 @@ import {
   type EngineerTaskModelClient,
 } from "./engineer-task.js";
 import type { ProjectCommandRunnerLike } from "../sandbox/command-runner.js";
+import type { RunProcess } from "../sandbox/process-runner.js";
 
 export interface ArchitectRunModelClient {
   chat<TStructured = never>(
@@ -65,6 +66,7 @@ export interface ArchitectEngineerNodeContext {
   loadedConfig: LoadedHarnessConfig;
   now: () => Date;
   projectCommandRunner?: ProjectCommandRunnerLike;
+  runProcess?: RunProcess;
 }
 
 interface ArchitectWorkspaceSnapshot {
@@ -234,6 +236,9 @@ export async function engineerExecutionNode(
       ...(context.projectCommandRunner === undefined
         ? {}
         : { projectCommandRunner: context.projectCommandRunner }),
+      ...(context.runProcess === undefined
+        ? {}
+        : { runProcess: context.runProcess }),
     });
   } catch (error) {
     return withFinalOutcome(state, {
@@ -851,6 +856,9 @@ async function captureArchitectWorkspaceSnapshot(
     ...(context.projectCommandRunner === undefined
       ? {}
       : { projectCommandRunner: context.projectCommandRunner }),
+    ...(context.runProcess === undefined
+      ? {}
+      : { runProcess: context.runProcess }),
   });
   const notes: string[] = [];
 
