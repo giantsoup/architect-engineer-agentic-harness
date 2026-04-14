@@ -669,7 +669,10 @@ function isNativeStructuredOutputUnsupportedStatus(
     normalizedMessage.includes("response_format") ||
     normalizedMessage.includes("json_schema") ||
     normalizedMessage.includes("schema") ||
-    normalizedMessage.includes("unsupported")
+    normalizedMessage.includes("unsupported") ||
+    normalizedMessage.includes("iterating prediction stream") ||
+    normalizedMessage.includes("'type' must be a string") ||
+    normalizedMessage.includes('"type" must be a string')
   );
 }
 

@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   createArchitectStructuredOutputFormat,
+  createEngineerStructuredOutputFormat,
   createRoleModelClient,
   initializeProject,
   initializeRunDossier,
@@ -893,6 +894,81 @@ describe("OpenAiCompatibleChatClient", () => {
       summary: "Inspect then implement",
       steps: ["inspect the repo", "make one small change", "run tests"],
     });
+  });
+
+  it("falls back to local structured-output validation when LM Studio rejects the native schema payload", async () => {
+    let attempts = 0;
+    const seenBodies: Array<Record<string, unknown>> = [];
+    const mockServer = await startMockServer((request, response) => {
+      attempts += 1;
+      seenBodies.push(JSON.parse(request.bodyText) as Record<string, unknown>);
+
+      if (attempts === 1) {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error:
+              "Error in iterating prediction stream: ValueError: 'type' must be a string",
+          }),
+        );
+        return;
+      }
+
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  request: {
+                    toolName: "file.list",
+                    path: ".",
+                  },
+                  summary: "Inspect the repository root.",
+                  type: "tool",
+                }),
+                role: "assistant",
+              },
+            },
+          ],
+          id: "chatcmpl-lmstudio-fallback",
+        }),
+      );
+    });
+    servers.push(mockServer);
+
+    const { loadedConfig, projectRoot } = await createLoadedConfig(
+      renderConfig({
+        architectBaseUrl: `${mockServer.url}/remote/v1`,
+        engineerBaseUrl: `${mockServer.url}/local/v1`,
+        engineerMaxRetries: 0,
+        engineerProvider: "openai-compatible",
+      }),
+    );
+    projectRoots.push(projectRoot);
+
+    const client = new OpenAiCompatibleChatClient({
+      config: resolveModelConfigForRole(loadedConfig, "engineer"),
+      retryDelayMs: 0,
+    });
+
+    const response = await client.chat({
+      messages: [{ content: "Return an engineer action.", role: "user" }],
+      structuredOutput: await createEngineerStructuredOutputFormat(),
+    });
+
+    expect(response.structuredOutput).toEqual({
+      request: {
+        path: ".",
+        toolName: "file.list",
+      },
+      summary: "Inspect the repository root.",
+      type: "tool",
+    });
+    expect(attempts).toBe(2);
+    expect(seenBodies[0]?.response_format).toBeDefined();
+    expect(seenBodies[1]?.response_format).toBeUndefined();
   });
 
   it("classifies malformed successful provider payloads as invalid responses", async () => {
