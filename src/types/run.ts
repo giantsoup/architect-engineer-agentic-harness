@@ -75,11 +75,16 @@ export interface StructuredMessageRecord {
 }
 
 export interface CommandLogRecord {
+  accessMode?: "inspect" | "mutate";
   command: string;
+  containerName?: string;
   durationMs: number;
-  exitCode: number;
+  environment?: Record<string, string>;
+  executionTarget?: "docker" | "host";
+  exitCode: number | null;
   role?: "architect" | "engineer" | "system";
   stderr?: string;
+  status?: "cancelled" | "completed" | "failed-to-start" | "timed-out";
   stdout?: string;
   timestamp: string;
   workingDirectory?: string;

@@ -46,10 +46,40 @@ export {
   writeRunResult,
 } from "./runtime/run-dossier.js";
 export {
+  buildDockerExecArgs,
+  ContainerCommandCancelledError,
+  ContainerCommandTimeoutError,
+  ContainerNotFoundError,
+  ContainerRuntimeError,
+  ContainerSessionConfigError,
+  ContainerSessionError,
+  ContainerSessionStateError,
+  createDockerContainerSession,
+} from "./sandbox/container-session.js";
+export {
+  createProjectCommandRunner,
+  ProjectCommandRunner,
+} from "./sandbox/command-runner.js";
+export {
   RunResultValidationError,
   validateRunResult,
 } from "./runtime/run-result.js";
 export type { HarnessConfig, LoadedHarnessConfig } from "./types/config.js";
+export type {
+  CommandExecutionRequest,
+  CreateProjectCommandRunnerOptions,
+  EngineerCommandExecutionRequest,
+} from "./sandbox/command-runner.js";
+export type {
+  ContainerCommandAccessMode,
+  ContainerCommandEnvironment,
+  ContainerCommandRequest,
+  ContainerCommandResult,
+  ContainerCommandRole,
+  ContainerSession,
+  ContainerSessionMetadata,
+  CreateDockerContainerSessionOptions,
+} from "./sandbox/container-session.js";
 export {
   ArchitectControlOutputValidationError,
   createArchitectStructuredOutputFormat,

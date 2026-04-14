@@ -64,12 +64,18 @@ describe("CLI help", () => {
     });
   });
 
-  it("returns a non-zero exit code for placeholder commands", () => {
+  it("shows the run command help and required options", () => {
+    const helpResult = runCli(["run", "--help"]);
+
+    expect(helpResult.status).toBe(0);
+    expect(helpResult.stdout).toContain("--command <command>");
+    expect(helpResult.stdout).toContain("--role <role>");
+
     const result = runCli(["run"]);
 
     expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("not implemented yet");
-    expect(result.stderr).toContain("Milestone 2+");
+    expect(result.stderr).toContain(
+      "required option '-c, --command <command>'",
+    );
   });
 });
