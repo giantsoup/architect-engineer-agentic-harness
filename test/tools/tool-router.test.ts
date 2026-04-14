@@ -317,4 +317,46 @@ args = ["repo-mcp.js"]`,
       await router.close();
     }
   });
+
+  it("keeps MCP restricted to the Engineer role", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    writeHarnessConfig(
+      projectRoot,
+      `allowlist = ["repo"]
+
+[mcp.servers.repo]
+transport = "stdio"
+command = "node"
+args = ["repo-mcp.js"]`,
+    );
+
+    const loadedConfig = await loadConfig(projectRoot);
+    const fakeMcp = createFakeMcpClientFactory({
+      repo: {
+        listTools: [{ name: "lookup", server: "repo" }],
+      },
+    });
+    const router = createToolRouter({
+      loadedConfig,
+      mcpClientFactory: fakeMcp.factory,
+    });
+
+    try {
+      await router.prepare();
+
+      await expect(
+        router.execute(
+          { role: "architect" },
+          {
+            name: "lookup",
+            server: "repo",
+            toolName: "mcp.call",
+          },
+        ),
+      ).rejects.toBeInstanceOf(McpToolNotAllowedError);
+    } finally {
+      await router.close();
+    }
+  });
 });

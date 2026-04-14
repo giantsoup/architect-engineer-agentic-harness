@@ -12,6 +12,7 @@ import {
   McpServerUnavailableError,
   McpToolCallError,
   McpToolError,
+  McpToolNotAllowedError,
   McpToolNotFoundError,
 } from "./errors.js";
 import {
@@ -133,7 +134,7 @@ export class ToolRouter {
       return this.#builtInExecutor.execute(context, request);
     }
 
-    return this.#executeMcpTool(request);
+    return this.#executeMcpTool(context, request);
   }
 
   getExecutionSummary(): ToolExecutionSummary {
@@ -147,11 +148,20 @@ export class ToolRouter {
     };
   }
 
-  async #executeMcpTool(request: McpToolCallRequest): Promise<ToolResult> {
+  async #executeMcpTool(
+    context: ToolExecutionContext,
+    request: McpToolCallRequest,
+  ): Promise<ToolResult> {
     const startedAt = process.hrtime.bigint();
     const timestamp = this.#now().toISOString();
 
     try {
+      if (context.role !== "engineer") {
+        throw new McpToolNotAllowedError(
+          `${context.role} cannot invoke MCP tools. MCP is restricted to the Engineer tool path.`,
+        );
+      }
+
       assertMcpServerAllowed(this.#loadedConfig, request.server);
       const state = await this.#prepareMcpServer(request.server);
 
@@ -180,7 +190,7 @@ export class ToolRouter {
         durationMs: getDurationMs(startedAt),
         request: summarizeMcpRequest(request),
         result: summarizeMcpResult(result),
-        role: "engineer",
+        role: context.role,
         status: "completed",
         timestamp,
         toolName: request.toolName,
@@ -203,7 +213,7 @@ export class ToolRouter {
           name: normalizedError.name,
         },
         request: summarizeMcpRequest(request),
-        role: "engineer",
+        role: context.role,
         status: "failed",
         timestamp,
         toolName: request.toolName,
