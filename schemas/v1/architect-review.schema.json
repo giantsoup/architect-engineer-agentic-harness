@@ -2,24 +2,48 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/giantsoup/architect-engineer-agentic-harness/schemas/v1/architect-review.schema.json",
   "title": "ArchitectReview",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["decision", "summary"],
-  "properties": {
-    "decision": {
-      "type": "string",
-      "enum": ["approve", "revise", "fail"]
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision", "summary"],
+      "properties": {
+        "type": {
+          "const": "review"
+        },
+        "decision": {
+          "type": "string",
+          "enum": ["approve", "revise", "fail"]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "nextActions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
     },
-    "summary": {
-      "type": "string",
-      "minLength": 1
-    },
-    "nextActions": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "minLength": 1
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request", "summary", "type"],
+      "properties": {
+        "type": {
+          "const": "tool"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request": {
+          "$ref": "engineer-action.schema.json#/oneOf/0/properties/request"
+        }
       }
     }
-  }
+  ]
 }

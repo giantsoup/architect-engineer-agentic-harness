@@ -142,6 +142,24 @@ export type ArchitectStructuredOutputValue =
   | ArchitectPlanOutput
   | ArchitectReviewOutput;
 
-export type ArchitectStructuredOutputSchema<
-  TStructured extends ArchitectStructuredOutputValue,
-> = ModelStructuredOutputSpec<TStructured>;
+export interface ArchitectToolAction {
+  request: import("../tools/types.js").ToolRequest;
+  summary: string;
+  type: "tool";
+}
+
+export interface ArchitectPlanAction extends ArchitectPlanOutput {
+  type: "plan";
+}
+
+export interface ArchitectReviewAction extends ArchitectReviewOutput {
+  type: "review";
+}
+
+export type ArchitectControlAction =
+  | ArchitectPlanAction
+  | ArchitectReviewAction
+  | ArchitectToolAction;
+
+export type ArchitectStructuredOutputSchema<TStructured> =
+  ModelStructuredOutputSpec<TStructured>;

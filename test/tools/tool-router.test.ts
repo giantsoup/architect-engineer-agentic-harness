@@ -318,7 +318,7 @@ args = ["repo-mcp.js"]`,
     }
   });
 
-  it("keeps MCP restricted to the Engineer role", async () => {
+  it("allows the Architect role to invoke allowlisted MCP tools", async () => {
     const projectRoot = createTempProject();
     projectRoots.push(projectRoot);
     writeHarnessConfig(
@@ -334,6 +334,13 @@ args = ["repo-mcp.js"]`,
     const loadedConfig = await loadConfig(projectRoot);
     const fakeMcp = createFakeMcpClientFactory({
       repo: {
+        callResult: {
+          content: [{ text: "architect context", type: "text" }],
+          isError: false,
+          name: "lookup",
+          server: "repo",
+          toolName: "mcp.call",
+        },
         listTools: [{ name: "lookup", server: "repo" }],
       },
     });
@@ -354,7 +361,11 @@ args = ["repo-mcp.js"]`,
             toolName: "mcp.call",
           },
         ),
-      ).rejects.toBeInstanceOf(McpToolNotAllowedError);
+      ).resolves.toMatchObject({
+        content: [{ text: "architect context", type: "text" }],
+        server: "repo",
+        toolName: "mcp.call",
+      });
     } finally {
       await router.close();
     }

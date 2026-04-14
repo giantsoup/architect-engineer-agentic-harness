@@ -10,6 +10,38 @@ describe("architect output validation", () => {
   it("accepts a valid Architect plan and review payload", async () => {
     await expect(
       validateArchitectControlOutput("plan", {
+        type: "plan",
+        acceptanceCriteria: ["Tests pass"],
+        steps: ["Inspect the failing module", "Apply a focused fix"],
+        summary: "Fix the regression and verify it.",
+      }),
+    ).resolves.toEqual({
+      type: "plan",
+      acceptanceCriteria: ["Tests pass"],
+      steps: ["Inspect the failing module", "Apply a focused fix"],
+      summary: "Fix the regression and verify it.",
+    });
+
+    const reviewFormat = await createArchitectStructuredOutputFormat("review");
+
+    await expect(
+      reviewFormat.validate({
+        type: "review",
+        decision: "approve",
+        nextActions: ["Ship the change"],
+        summary: "The task is complete.",
+      }),
+    ).resolves.toEqual({
+      type: "review",
+      decision: "approve",
+      nextActions: ["Ship the change"],
+      summary: "The task is complete.",
+    });
+  });
+
+  it("accepts legacy final Architect plan and review payloads without a type discriminator", async () => {
+    await expect(
+      validateArchitectControlOutput("plan", {
         acceptanceCriteria: ["Tests pass"],
         steps: ["Inspect the failing module", "Apply a focused fix"],
         summary: "Fix the regression and verify it.",
@@ -20,10 +52,8 @@ describe("architect output validation", () => {
       summary: "Fix the regression and verify it.",
     });
 
-    const reviewFormat = await createArchitectStructuredOutputFormat("review");
-
     await expect(
-      reviewFormat.validate({
+      validateArchitectControlOutput("review", {
         decision: "approve",
         nextActions: ["Ship the change"],
         summary: "The task is complete.",
@@ -38,6 +68,7 @@ describe("architect output validation", () => {
   it("rejects unexpected properties and invalid decisions", async () => {
     await expect(
       validateArchitectControlOutput("plan", {
+        type: "plan",
         steps: ["Only step"],
         summary: "Plan summary",
         unexpected: true,
@@ -46,6 +77,7 @@ describe("architect output validation", () => {
 
     await expect(
       validateArchitectControlOutput("review", {
+        type: "review",
         decision: "retry",
         summary: "Not a valid decision",
       }),
@@ -56,6 +88,28 @@ describe("architect output validation", () => {
       );
 
       return true;
+    });
+  });
+
+  it("accepts tool actions for Architect planning and review", async () => {
+    await expect(
+      validateArchitectControlOutput("plan", {
+        request: {
+          name: "lookup",
+          server: "repo",
+          toolName: "mcp.call",
+        },
+        summary: "Consult MCP context before planning.",
+        type: "tool",
+      }),
+    ).resolves.toEqual({
+      request: {
+        name: "lookup",
+        server: "repo",
+        toolName: "mcp.call",
+      },
+      summary: "Consult MCP context before planning.",
+      type: "tool",
     });
   });
 });

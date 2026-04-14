@@ -16,7 +16,11 @@ import {
   initializeProject,
   loadHarnessConfig,
   type ContainerCommandResult,
+  type CreateMcpServerClient,
   type LoadedHarnessConfig,
+  type McpAvailableTool,
+  type McpToolCallRequest,
+  type McpToolCallResult,
   type ModelChatRequest,
   type ModelChatResponse,
 } from "../../src/index.js";
@@ -27,8 +31,22 @@ function createTempProject(): string {
 
 async function createLoadedConfig(
   projectRoot: string,
+  options: {
+    mcpBlock?: string;
+  } = {},
 ): Promise<LoadedHarnessConfig> {
   await initializeProject(projectRoot);
+  const configPath = path.join(projectRoot, "agent-harness.toml");
+
+  if (options.mcpBlock !== undefined) {
+    const updatedConfig = readFileSync(configPath, "utf8").replace(
+      "allowlist = []",
+      options.mcpBlock,
+    );
+
+    writeFileSync(configPath, updatedConfig, "utf8");
+  }
+
   expect(
     spawnSync(
       "git",
@@ -195,6 +213,66 @@ function createQueuedModelClient<TStructured>(
   };
 }
 
+function createFakeMcpClientFactory(
+  behaviors: Record<
+    string,
+    {
+      callResult?: McpToolCallResult | Error | undefined;
+      listTools?: McpAvailableTool[] | Error | undefined;
+    }
+  >,
+): {
+  calls: McpToolCallRequest[];
+  factory: CreateMcpServerClient;
+} {
+  const calls: McpToolCallRequest[] = [];
+
+  return {
+    calls,
+    factory: (server) => {
+      const behavior = behaviors[server.id];
+
+      return {
+        async close() {},
+        async connect() {},
+        getStderrSummary() {
+          return undefined;
+        },
+        async listTools() {
+          const outcome = behavior?.listTools ?? [];
+
+          if (outcome instanceof Error) {
+            throw outcome;
+          }
+
+          return outcome.map((tool) => ({
+            ...tool,
+            server: server.id,
+          }));
+        },
+        async runTool(request) {
+          calls.push(request);
+          const outcome = behavior?.callResult;
+
+          if (outcome instanceof Error) {
+            throw outcome;
+          }
+
+          return (
+            outcome ?? {
+              content: [{ text: "ok", type: "text" }],
+              isError: false,
+              name: request.name,
+              server: server.id,
+              toolName: "mcp.call",
+            }
+          );
+        },
+      };
+    },
+  };
+}
+
 describe("executeArchitectEngineerRun", () => {
   const projectRoots: string[] = [];
 
@@ -216,10 +294,12 @@ describe("executeArchitectEngineerRun", () => {
         acceptanceCriteria: ["`npm run test` passes"],
         steps: ["Update the source file", "Run the required test command"],
         summary: "Change the export and verify it.",
+        type: "plan",
       },
       {
         decision: "approve",
         summary: "The change is complete and verified.",
+        type: "review",
       },
     ]);
     const engineer = createQueuedModelClient([
@@ -376,6 +456,146 @@ describe("executeArchitectEngineerRun", () => {
     ).toBe(true);
   });
 
+  it("lets the Architect use allowlisted MCP tools during planning and review", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+    commitFile(projectRoot, "src/example.ts", "export const value = 1;\n");
+
+    const loadedConfig = await createLoadedConfig(projectRoot, {
+      mcpBlock: `allowlist = ["repo"]
+
+[mcp.servers.repo]
+transport = "stdio"
+command = "node"
+args = ["repo-mcp.js"]`,
+    });
+    const architect = createQueuedModelClient([
+      {
+        request: {
+          name: "laravel-best-practices",
+          server: "repo",
+          toolName: "mcp.call",
+        },
+        summary: "Consult MCP best-practices guidance before planning.",
+        type: "tool",
+      },
+      {
+        acceptanceCriteria: ["`npm run test` passes"],
+        steps: ["Update the source file", "Run the required test command"],
+        summary: "Use the best-practices context and then verify.",
+        type: "plan",
+      },
+      {
+        request: {
+          name: "laravel-best-practices",
+          server: "repo",
+          toolName: "mcp.call",
+        },
+        summary: "Re-check the final state against MCP guidance.",
+        type: "tool",
+      },
+      {
+        decision: "approve",
+        summary:
+          "The implementation aligns with the MCP guidance and passes verification.",
+        type: "review",
+      },
+    ]);
+    const engineer = createQueuedModelClient([
+      {
+        request: {
+          content: "export const value = 2;\n",
+          path: "src/example.ts",
+          toolName: "file.write",
+        },
+        summary: "Apply the requested change.",
+        type: "tool",
+      },
+      {
+        request: {
+          accessMode: "mutate",
+          command: "npm run test",
+          toolName: "command.execute",
+        },
+        stopWhenSuccessful: true,
+        summary: "Verification passed after the update.",
+        type: "tool",
+      },
+    ]);
+    const fakeMcp = createFakeMcpClientFactory({
+      repo: {
+        callResult: {
+          content: [{ text: "Prefer framework conventions.", type: "text" }],
+          isError: false,
+          name: "laravel-best-practices",
+          server: "repo",
+          toolName: "mcp.call",
+        },
+        listTools: [{ name: "laravel-best-practices", server: "repo" }],
+      },
+    });
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 20,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: 0,
+          role: "engineer",
+          stderr: "",
+          stdout: "tests passed\n",
+          timestamp: "2026-04-14T12:00:30.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeArchitectEngineerRun({
+      architectModelClient: architect.client,
+      createdAt: new Date("2026-04-14T12:00:00.000Z"),
+      engineerModelClient: engineer.client,
+      loadedConfig,
+      mcpClientFactory: fakeMcp.factory,
+      now: () => new Date("2026-04-14T12:00:30.000Z"),
+      projectCommandRunner: fakeCommandRunner,
+      runId: "20260414T120000.000Z-abc136",
+      task: "Update `src/example.ts` using Architect MCP guidance before review.",
+    });
+    const events = parseJsonLines(
+      execution.dossier.paths.files.events.absolutePath,
+    );
+    const architectMcpCalls = events.filter(
+      (event) =>
+        event.type === "tool-call" &&
+        event.role === "architect" &&
+        event.toolName === "mcp.call",
+    );
+
+    expect(execution.result.status).toBe("success");
+    expect(fakeMcp.calls).toHaveLength(2);
+    expect(architectMcpCalls).toHaveLength(2);
+    expect(
+      architect.requests.some((request) =>
+        request.messages.some(
+          (message) =>
+            message.role === "tool" &&
+            message.content.includes("Prefer framework conventions."),
+        ),
+      ),
+    ).toBe(true);
+  });
+
   it("stops safely before branching when the repository starts dirty", async () => {
     const projectRoot = createTempProject();
     projectRoots.push(projectRoot);
@@ -391,6 +611,7 @@ describe("executeArchitectEngineerRun", () => {
       {
         steps: ["This should not run"],
         summary: "Dirty-tree policy should stop earlier.",
+        type: "plan",
       },
     ]);
 
@@ -435,10 +656,12 @@ describe("executeArchitectEngineerRun", () => {
         acceptanceCriteria: ["`npm run test` passes"],
         steps: ["Run the required test command"],
         summary: "Verify without changing the source.",
+        type: "plan",
       },
       {
         decision: "approve",
         summary: "Verification is complete.",
+        type: "review",
       },
     ]);
     const engineer = createQueuedModelClient([
@@ -516,16 +739,19 @@ describe("executeArchitectEngineerRun", () => {
         acceptanceCriteria: ["Export `2`", "Add a second named export"],
         steps: ["Update the value", "Add the follow-up export", "Run tests"],
         summary: "Make the requested code change and verify it.",
+        type: "plan",
       },
       {
         decision: "revise",
         nextActions: ["Add `nextValue`", "Rerun `npm run test`"],
         summary:
           "The main fix landed, but the follow-up export is still missing.",
+        type: "review",
       },
       {
         decision: "approve",
         summary: "The revised implementation is now complete.",
+        type: "review",
       },
     ]);
     const engineer = createQueuedModelClient([
@@ -651,11 +877,13 @@ describe("executeArchitectEngineerRun", () => {
       {
         steps: ["Run the required check"],
         summary: "Verify the state before deciding.",
+        type: "plan",
       },
       {
         decision: "fail",
         nextActions: ["Stop the run"],
         summary: "The requested outcome is not acceptable.",
+        type: "review",
       },
     ]);
     const engineer = createQueuedModelClient([
@@ -745,6 +973,7 @@ describe("executeArchitectEngineerRun", () => {
       {
         steps: ["This should never be used."],
         summary: "Timeout should stop first.",
+        type: "plan",
       },
     ]);
 
@@ -779,6 +1008,7 @@ describe("executeArchitectEngineerRun", () => {
       {
         steps: ["Keep running the required check until it passes"],
         summary: "Focus on the verification loop.",
+        type: "plan",
       },
     ]);
     const engineer = createQueuedModelClient([
@@ -865,10 +1095,12 @@ describe("executeArchitectEngineerRun", () => {
         acceptanceCriteria: ["Export `2`", "Update the summary line"],
         steps: ["Update the file", "Verify with tests"],
         summary: "Make the code change and meet the extra review goals.",
+        type: "plan",
       },
       {
         decision: "approve",
         summary: "The change and follow-up goals are complete.",
+        type: "review",
       },
     ]);
     const engineer = createQueuedModelClient([

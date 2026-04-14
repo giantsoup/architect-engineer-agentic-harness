@@ -12,7 +12,6 @@ import {
   McpServerUnavailableError,
   McpToolCallError,
   McpToolError,
-  McpToolNotAllowedError,
   McpToolNotFoundError,
 } from "./errors.js";
 import {
@@ -156,12 +155,6 @@ export class ToolRouter {
     const timestamp = this.#now().toISOString();
 
     try {
-      if (context.role !== "engineer") {
-        throw new McpToolNotAllowedError(
-          `${context.role} cannot invoke MCP tools. MCP is restricted to the Engineer tool path.`,
-        );
-      }
-
       assertMcpServerAllowed(this.#loadedConfig, request.server);
       const state = await this.#prepareMcpServer(request.server);
 

@@ -261,9 +261,13 @@ export type {
   EngineerToolAction,
 } from "./models/engineer-output.js";
 export type {
+  ArchitectControlAction,
+  ArchitectPlanAction,
   ArchitectPlanOutput,
   ArchitectReview,
+  ArchitectReviewAction,
   ArchitectReviewOutput,
+  ArchitectToolAction,
   ArchitectStructuredOutputKind,
   ArchitectStructuredOutputSchema,
   ArchitectStructuredOutputValue,

@@ -25,6 +25,7 @@ import type { RunDossier } from "./run-dossier.js";
 import type { RunResult } from "../types/run.js";
 import { createProjectCommandRunner } from "../sandbox/command-runner.js";
 import { createRunId } from "../artifacts/run-id.js";
+import type { CreateMcpServerClient } from "../tools/mcp/client.js";
 
 const DEFAULT_TIMEOUT_MS = 60 * 60 * 1000;
 const DEFAULT_MAX_CONSECUTIVE_FAILED_CHECKS = 5;
@@ -35,6 +36,7 @@ export interface ExecuteArchitectEngineerRunOptions {
   engineerModelClient?: EngineerTaskModelClient;
   loadedConfig: LoadedHarnessConfig;
   maxConsecutiveFailedChecks?: number;
+  mcpClientFactory?: CreateMcpServerClient;
   now?: () => Date;
   projectCommandRunner?: ProjectCommandRunnerLike;
   runId?: string;
@@ -75,6 +77,9 @@ export async function executeArchitectEngineerRun(
     ...(options.engineerModelClient === undefined
       ? {}
       : { engineerModelClient: options.engineerModelClient }),
+    ...(options.mcpClientFactory === undefined
+      ? {}
+      : { mcpClientFactory: options.mcpClientFactory }),
     ...(options.runProcess === undefined
       ? {}
       : { runProcess: options.runProcess }),

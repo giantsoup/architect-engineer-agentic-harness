@@ -2,27 +2,51 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/giantsoup/architect-engineer-agentic-harness/schemas/v1/architect-plan.schema.json",
   "title": "ArchitectPlan",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["summary", "steps"],
-  "properties": {
-    "summary": {
-      "type": "string",
-      "minLength": 1
-    },
-    "steps": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "minLength": 1
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "steps"],
+      "properties": {
+        "type": {
+          "const": "plan"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "acceptanceCriteria": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
       }
     },
-    "acceptanceCriteria": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "minLength": 1
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request", "summary", "type"],
+      "properties": {
+        "type": {
+          "const": "tool"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request": {
+          "$ref": "engineer-action.schema.json#/oneOf/0/properties/request"
+        }
       }
     }
-  }
+  ]
 }

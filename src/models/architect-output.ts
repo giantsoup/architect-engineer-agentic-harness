@@ -3,16 +3,20 @@ import { fileURLToPath } from "node:url";
 
 import { DEFAULT_SCHEMA_VERSION } from "../versioning.js";
 import type {
-  ArchitectPlanOutput,
-  ArchitectReviewOutput,
+  ArchitectControlAction,
+  ArchitectPlanAction,
+  ArchitectReviewAction,
   ArchitectStructuredOutputKind,
   ArchitectStructuredOutputSchema,
 } from "./types.js";
+import { validateEngineerControlOutput } from "./engineer-output.js";
 
-type ArchitectOutputByKind = {
-  plan: ArchitectPlanOutput;
-  review: ArchitectReviewOutput;
+type ArchitectActionByKind = {
+  plan: ArchitectPlanAction | ArchitectToolAction;
+  review: ArchitectReviewAction | ArchitectToolAction;
 };
+
+type ArchitectToolAction = Extract<ArchitectControlAction, { type: "tool" }>;
 
 export class ArchitectControlOutputValidationError extends Error {
   readonly issues: readonly string[];
@@ -62,7 +66,7 @@ export async function createArchitectStructuredOutputFormat<
 >(
   kind: TKind,
   options: ArchitectControlOutputOptions = {},
-): Promise<ArchitectStructuredOutputSchema<ArchitectOutputByKind[TKind]>> {
+): Promise<ArchitectStructuredOutputSchema<ArchitectActionByKind[TKind]>> {
   const schema = await loadArchitectControlSchema(kind, options);
 
   return {
@@ -84,7 +88,7 @@ export async function validateArchitectControlOutput<
   kind: TKind,
   value: unknown,
   options: ArchitectControlOutputOptions = {},
-): Promise<ArchitectOutputByKind[TKind]> {
+): Promise<ArchitectActionByKind[TKind]> {
   const schemaVersion = options.schemaVersion ?? DEFAULT_SCHEMA_VERSION;
   const schemaPath = await resolveArchitectControlSchemaPath(
     kind,
@@ -100,20 +104,21 @@ export async function validateArchitectControlOutput<
     ]);
   }
 
-  switch (kind) {
-    case "plan":
-      validateArchitectPlan(value, issues);
-      break;
-    case "review":
-      validateArchitectReview(value, issues);
-      break;
+  const actionType = value.type;
+
+  if (actionType === "tool") {
+    await validateArchitectToolAction(value, kind, issues);
+  } else if (kind === "plan") {
+    validateArchitectPlanAction(value, issues);
+  } else {
+    validateArchitectReviewAction(value, issues);
   }
 
   if (issues.length > 0) {
     throw new ArchitectControlOutputValidationError(schemaPath, issues);
   }
 
-  return value as unknown as ArchitectOutputByKind[TKind];
+  return value as unknown as ArchitectActionByKind[TKind];
 }
 
 async function loadSchemaFromDisk(
@@ -184,13 +189,23 @@ function getArchitectControlSchemaCandidates(
   ];
 }
 
-function validateArchitectPlan(
+function validateArchitectPlanAction(
   value: Record<string, unknown>,
   issues: string[],
 ): void {
-  const allowedKeys = new Set(["acceptanceCriteria", "steps", "summary"]);
+  const allowedKeys = new Set([
+    "acceptanceCriteria",
+    "steps",
+    "summary",
+    "type",
+  ]);
 
   pushUnexpectedProperties("plan", value, allowedKeys, issues);
+
+  if (value.type !== undefined && value.type !== "plan") {
+    issues.push('plan.type: Expected `"plan"`.');
+  }
+
   validateNonEmptyString(value.summary, "plan.summary", issues);
   validateStringArray(value.steps, "plan.steps", issues);
 
@@ -203,13 +218,18 @@ function validateArchitectPlan(
   }
 }
 
-function validateArchitectReview(
+function validateArchitectReviewAction(
   value: Record<string, unknown>,
   issues: string[],
 ): void {
-  const allowedKeys = new Set(["decision", "nextActions", "summary"]);
+  const allowedKeys = new Set(["decision", "nextActions", "summary", "type"]);
 
   pushUnexpectedProperties("review", value, allowedKeys, issues);
+
+  if (value.type !== undefined && value.type !== "review") {
+    issues.push('review.type: Expected `"review"`.');
+  }
+
   validateNonEmptyString(value.summary, "review.summary", issues);
 
   if (typeof value.decision !== "string") {
@@ -222,6 +242,35 @@ function validateArchitectReview(
 
   if (value.nextActions !== undefined) {
     validateStringArray(value.nextActions, "review.nextActions", issues);
+  }
+}
+
+async function validateArchitectToolAction(
+  value: Record<string, unknown>,
+  kind: ArchitectStructuredOutputKind,
+  issues: string[],
+): Promise<void> {
+  const allowedKeys = new Set(["request", "summary", "type"]);
+
+  pushUnexpectedProperties(kind, value, allowedKeys, issues);
+  validateNonEmptyString(value.summary, `${kind}.summary`, issues);
+
+  try {
+    await validateEngineerControlOutput({
+      request: value.request,
+      summary: String(value.summary ?? ""),
+      type: "tool",
+    });
+  } catch (error) {
+    if (error instanceof Error) {
+      for (const line of error.message.split("\n")) {
+        if (line.startsWith("- engineer_action.request")) {
+          issues.push(
+            line.replace("- engineer_action.request", `${kind}.request`).trim(),
+          );
+        }
+      }
+    }
   }
 }
 

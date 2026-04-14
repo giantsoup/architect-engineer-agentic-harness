@@ -3,21 +3,32 @@ import { readFile } from "node:fs/promises";
 import { getResolvedProjectCommand } from "../adapters/detect-project.js";
 import type { LoadedHarnessConfig } from "../types/config.js";
 import type {
+  ModelChatMessage,
   ModelChatRequest,
   ModelChatResponse,
+  ArchitectPlanAction,
+  ArchitectReviewAction,
   ArchitectPlanOutput,
   ArchitectReviewOutput,
+  ArchitectToolAction,
 } from "../models/types.js";
 import {
   createArchitectStructuredOutputFormat,
   type ArchitectControlOutputOptions,
 } from "../models/architect-output.js";
 import { createRoleModelClient } from "../models/provider-factory.js";
-import {
-  createBuiltInToolExecutor,
-  type BuiltInToolExecutor,
-} from "../tools/built-in-tools.js";
-import type { GitStatusToolResult } from "../tools/types.js";
+import { createBuiltInToolExecutor } from "../tools/built-in-tools.js";
+import type { BuiltInToolExecutor } from "../tools/built-in-tools.js";
+import { createToolRouter, type ToolRouter } from "../tools/tool-router.js";
+import type { CreateMcpServerClient } from "../tools/mcp/client.js";
+import type {
+  GitStatusToolResult,
+  ToolCatalog,
+  ToolExecutionSummary,
+  ToolRequest,
+  ToolResult,
+} from "../tools/types.js";
+import { BuiltInToolError, McpToolError } from "../tools/errors.js";
 import {
   appendRunEvent,
   appendStructuredMessage,
@@ -75,6 +86,7 @@ export interface ArchitectEngineerNodeContext {
   architectModelClient?: ArchitectRunModelClient;
   engineerModelClient?: EngineerTaskModelClient;
   loadedConfig: LoadedHarnessConfig;
+  mcpClientFactory?: CreateMcpServerClient;
   now: () => Date;
   projectCommandRunner?: ProjectCommandRunnerLike;
   runProcess?: RunProcess;
@@ -90,6 +102,7 @@ interface ArchitectWorkspaceSnapshot {
 
 const DEFAULT_ARCHITECT_SCHEMA_OPTIONS: ArchitectControlOutputOptions =
   Object.freeze({});
+const MAX_ARCHITECT_TOOL_STEPS = 8;
 
 export async function prepareArchitectEngineerRunNode(
   state: ArchitectEngineerState,
@@ -162,92 +175,55 @@ export async function architectPlanningNode(
     dossier,
     context,
   );
-  const [systemPrompt, planningPrompt, structuredOutput] = await Promise.all([
+  const [systemPrompt, planningPrompt] = await Promise.all([
     loadPromptAsset("prompts/v1/architect/system.md"),
     loadPromptAsset("prompts/v1/architect/planning.md"),
-    createArchitectStructuredOutputFormat(
-      "plan",
-      DEFAULT_ARCHITECT_SCHEMA_OPTIONS,
-    ),
   ]);
-  const modelClient =
-    context.architectModelClient ??
-    createRoleModelClient({
-      dossierPaths: dossier.paths,
-      loadedConfig: withBoundRoleTimeout(
-        context.loadedConfig,
-        "architect",
-        remainingTimeMs,
-      ),
-      role: "architect",
-    });
-  const userPrompt = renderPlanningRequest(
+  const architectLoop = await runArchitectLoop({
+    context,
+    developerPrompt: planningPrompt.trim(),
+    dossier,
+    kind: "plan",
+    remainingTimeMs,
     state,
-    context.loadedConfig,
-    workspaceSnapshot,
-  );
-  let modelResponse: ModelChatResponse<ArchitectPlanOutput>;
+    systemPrompt,
+    userPrompt: renderPlanningRequest(
+      state,
+      context.loadedConfig,
+      workspaceSnapshot,
+    ),
+  });
 
-  try {
-    modelResponse = await modelClient.chat({
-      messages: [
-        { content: systemPrompt, role: "system" },
-        {
-          content: [
-            planningPrompt.trim(),
-            "",
-            "Return strict JSON only, matching the architect plan schema.",
-          ].join("\n"),
-          role: "developer",
-        },
-        { content: userPrompt, role: "user" },
-      ],
-      metadata: {
-        phase: "architect-plan",
-        remainingTimeMs,
-        runId: state.metadata.runId,
-      },
-      structuredOutput,
-    });
-  } catch (error) {
+  if (architectLoop.ok === false) {
     return withFinalOutcome(state, {
       status: "failed",
       stopReason: "architect-model-error",
-      summary: `Architect planning failed: ${describeError(error)}`,
-    });
-  }
-
-  const plan = modelResponse.structuredOutput;
-
-  if (plan === undefined) {
-    return withFinalOutcome(state, {
-      status: "failed",
-      stopReason: "architect-model-error",
-      summary: "Architect planning returned no structured output.",
+      summary: architectLoop.message,
     });
   }
 
   const timestamp = context.now().toISOString();
 
   await appendStructuredMessage(dossier.paths, {
-    content: modelResponse.rawContent,
+    content: architectLoop.rawContent,
     format: "json",
     role: "architect",
     timestamp,
   });
   await writeArchitectPlan(
     dossier.paths,
-    renderArchitectPlanMarkdown(plan, timestamp),
+    renderArchitectPlanMarkdown(architectLoop.output, timestamp),
     timestamp,
   );
   await appendRunEvent(dossier.paths, {
-    steps: plan.steps,
-    summary: plan.summary,
+    steps: architectLoop.output.steps,
+    summary: architectLoop.output.summary,
+    toolSummary: architectLoop.toolSummary,
     timestamp,
     type: "architect-plan-created",
   });
 
-  return withArchitectPlan(state, plan);
+  return withArchitectPlan(state, architectLoop.output);
 }
 
 export async function engineerExecutionNode(
@@ -275,6 +251,9 @@ export async function engineerExecutionNode(
       ...(context.engineerModelClient === undefined
         ? {}
         : { modelClient: context.engineerModelClient }),
+      ...(context.mcpClientFactory === undefined
+        ? {}
+        : { mcpClientFactory: context.mcpClientFactory }),
       ...(context.projectCommandRunner === undefined
         ? {}
         : { projectCommandRunner: context.projectCommandRunner }),
@@ -364,103 +343,62 @@ export async function architectReviewNode(
     dossier,
     context,
   );
-  const [systemPrompt, reviewPrompt, structuredOutput] = await Promise.all([
+  const [systemPrompt, reviewPrompt] = await Promise.all([
     loadPromptAsset("prompts/v1/architect/system.md"),
     loadPromptAsset("prompts/v1/architect/review.md"),
-    createArchitectStructuredOutputFormat(
-      "review",
-      DEFAULT_ARCHITECT_SCHEMA_OPTIONS,
-    ),
   ]);
-  const modelClient =
-    context.architectModelClient ??
-    createRoleModelClient({
-      dossierPaths: dossier.paths,
-      loadedConfig: withBoundRoleTimeout(
-        context.loadedConfig,
-        "architect",
-        remainingTimeMs,
-      ),
-      role: "architect",
-    });
-  let modelResponse: ModelChatResponse<ArchitectReviewOutput>;
+  const architectLoop = await runArchitectLoop({
+    context,
+    developerPrompt: reviewPrompt.trim(),
+    dossier,
+    kind: "review",
+    remainingTimeMs,
+    state,
+    systemPrompt,
+    userPrompt: renderReviewRequest(
+      state,
+      context.loadedConfig,
+      workspaceSnapshot,
+    ),
+  });
 
-  try {
-    modelResponse = await modelClient.chat({
-      messages: [
-        { content: systemPrompt, role: "system" },
-        {
-          content: [
-            reviewPrompt.trim(),
-            "",
-            "Return strict JSON only, matching the architect review schema.",
-          ].join("\n"),
-          role: "developer",
-        },
-        {
-          content: renderReviewRequest(
-            state,
-            context.loadedConfig,
-            workspaceSnapshot,
-          ),
-          role: "user",
-        },
-      ],
-      metadata: {
-        engineerAttempts: state.iterations.engineerAttempts,
-        phase: "architect-review",
-        remainingTimeMs,
-        reviewCycles: state.iterations.reviewCycles,
-        runId: state.metadata.runId,
-      },
-      structuredOutput,
-    });
-  } catch (error) {
+  if (architectLoop.ok === false) {
     return withFinalOutcome(state, {
       status: "failed",
       stopReason: "architect-model-error",
-      summary: `Architect review failed: ${describeError(error)}`,
-    });
-  }
-
-  const review = modelResponse.structuredOutput;
-
-  if (review === undefined) {
-    return withFinalOutcome(state, {
-      status: "failed",
-      stopReason: "architect-model-error",
-      summary: "Architect review returned no structured output.",
+      summary: architectLoop.message,
     });
   }
 
   const timestamp = context.now().toISOString();
 
   await appendStructuredMessage(dossier.paths, {
-    content: modelResponse.rawContent,
+    content: architectLoop.rawContent,
     format: "json",
     role: "architect",
     timestamp,
   });
   await writeArchitectReview(
     dossier.paths,
-    renderArchitectReviewMarkdown(review, timestamp),
+    renderArchitectReviewMarkdown(architectLoop.output, timestamp),
     timestamp,
   );
   await appendRunEvent(dossier.paths, {
-    decision: review.decision,
-    nextActions: review.nextActions,
-    summary: review.summary,
+    decision: architectLoop.output.decision,
+    nextActions: architectLoop.output.nextActions,
+    summary: architectLoop.output.summary,
+    toolSummary: architectLoop.toolSummary,
     timestamp,
     type: "architect-review-created",
   });
 
-  let nextState = withArchitectReview(state, review);
-  const reviewOutcome = getReviewOutcome(review);
+  let nextState = withArchitectReview(state, architectLoop.output);
+  const reviewOutcome = getReviewOutcome(architectLoop.output);
 
-  if (review.decision !== "approve") {
+  if (architectLoop.output.decision !== "approve") {
     nextState = appendFailureNote(
       nextState,
-      createArchitectFailureNote(review, timestamp),
+      createArchitectFailureNote(architectLoop.output, timestamp),
     );
   }
 
@@ -578,6 +516,204 @@ export async function finalizeArchitectEngineerRunNode(
   return finalizedState;
 }
 
+async function runArchitectLoop<TKind extends "plan" | "review">(options: {
+  context: ArchitectEngineerNodeContext;
+  developerPrompt: string;
+  dossier: RunDossier;
+  kind: TKind;
+  remainingTimeMs: number;
+  state: ArchitectEngineerState;
+  systemPrompt: string;
+  userPrompt: string;
+}): Promise<
+  | {
+      ok: false;
+      message: string;
+    }
+  | {
+      ok: true;
+      output: TKind extends "plan"
+        ? ArchitectPlanOutput
+        : ArchitectReviewOutput;
+      rawContent: string;
+      toolSummary: ToolExecutionSummary;
+    }
+> {
+  const toolRouter = createToolRouter({
+    dossierPaths: options.dossier.paths,
+    loadedConfig: options.context.loadedConfig,
+    ...(options.context.mcpClientFactory === undefined
+      ? {}
+      : { mcpClientFactory: options.context.mcpClientFactory }),
+    now: options.context.now,
+    ...(options.context.projectCommandRunner === undefined
+      ? {}
+      : { projectCommandRunner: options.context.projectCommandRunner }),
+    ...(options.context.runProcess === undefined
+      ? {}
+      : { runProcess: options.context.runProcess }),
+  });
+
+  try {
+    const toolCatalog = await toolRouter.prepare();
+    const structuredOutput = await createArchitectStructuredOutputFormat(
+      options.kind,
+      DEFAULT_ARCHITECT_SCHEMA_OPTIONS,
+    );
+    const modelClient =
+      options.context.architectModelClient ??
+      createRoleModelClient({
+        dossierPaths: options.dossier.paths,
+        loadedConfig: withBoundRoleTimeout(
+          options.context.loadedConfig,
+          "architect",
+          options.remainingTimeMs,
+        ),
+        role: "architect",
+      });
+    const messages: ModelChatMessage[] = [
+      { content: options.systemPrompt, role: "system" as const },
+      {
+        content: [
+          options.developerPrompt,
+          "",
+          renderArchitectToolProtocol(options.kind, toolCatalog),
+        ].join("\n"),
+        role: "developer" as const,
+      },
+      { content: options.userPrompt, role: "user" as const },
+    ];
+
+    for (
+      let iteration = 1;
+      iteration <= MAX_ARCHITECT_TOOL_STEPS;
+      iteration += 1
+    ) {
+      let modelResponse: ModelChatResponse<
+        ArchitectPlanAction | ArchitectReviewAction | ArchitectToolAction
+      >;
+
+      try {
+        modelResponse = await modelClient.chat({
+          messages,
+          metadata: {
+            architectToolIteration: iteration,
+            engineerAttempts: options.state.iterations.engineerAttempts,
+            phase:
+              options.kind === "plan" ? "architect-plan" : "architect-review",
+            remainingTimeMs: options.remainingTimeMs,
+            reviewCycles: options.state.iterations.reviewCycles,
+            runId: options.state.metadata.runId,
+          },
+          structuredOutput,
+        });
+      } catch (error) {
+        return {
+          message: `Architect ${options.kind} failed: ${describeError(error)}`,
+          ok: false,
+        };
+      }
+
+      messages.push({
+        content: modelResponse.rawContent,
+        role: "assistant",
+      });
+
+      const action = modelResponse.structuredOutput;
+
+      if (action === undefined) {
+        return {
+          message: `Architect ${options.kind} returned no structured output.`,
+          ok: false,
+        };
+      }
+
+      await appendRunEvent(options.dossier.paths, {
+        actionType: action.type,
+        iteration,
+        phase: options.kind === "plan" ? "architect-plan" : "architect-review",
+        summary: action.summary,
+        timestamp: options.context.now().toISOString(),
+        type: "architect-action-selected",
+      });
+
+      if (action.type !== "tool") {
+        return {
+          ok: true,
+          output: stripArchitectActionType(action) as TKind extends "plan"
+            ? ArchitectPlanOutput
+            : ArchitectReviewOutput,
+          rawContent: modelResponse.rawContent,
+          toolSummary: toolRouter.getExecutionSummary(),
+        };
+      }
+
+      const toolFeedback = await executeArchitectTool(
+        toolRouter,
+        action.request,
+      );
+
+      messages.push({
+        content: JSON.stringify(toolFeedback),
+        name: action.request.toolName,
+        role: "tool",
+      });
+    }
+
+    return {
+      message: `Architect ${options.kind} exceeded the configured tool-step limit of ${MAX_ARCHITECT_TOOL_STEPS}.`,
+      ok: false,
+    };
+  } finally {
+    await toolRouter.close();
+  }
+}
+
+async function executeArchitectTool(
+  toolRouter: ToolRouter,
+  request: ToolRequest,
+): Promise<
+  | {
+      ok: false;
+      toolName: string;
+      error: { code: string; message: string; name: string };
+    }
+  | { ok: true; toolName: string; result: ToolResult }
+> {
+  try {
+    const result = await toolRouter.execute({ role: "architect" }, request);
+
+    return {
+      ok: true,
+      result,
+      toolName: request.toolName,
+    };
+  } catch (error) {
+    if (error instanceof BuiltInToolError || error instanceof McpToolError) {
+      return {
+        error: {
+          code: error.code,
+          message: error.message,
+          name: error.name,
+        },
+        ok: false,
+        toolName: request.toolName,
+      };
+    }
+
+    throw error;
+  }
+}
+
+function stripArchitectActionType(
+  action: ArchitectPlanAction | ArchitectReviewAction,
+): ArchitectPlanOutput | ArchitectReviewOutput {
+  const { type, ...rest } = action;
+
+  void type;
+  return rest;
+}
+
 export function renderArchitectPlanMarkdown(
   plan: ArchitectPlanOutput,
   timestamp?: string,
@@ -659,6 +795,90 @@ export function renderFailureNotesMarkdown(
       for (const detail of failureNote.details) {
         lines.push(`  - ${detail}`);
       }
+    }
+  }
+
+  return lines.join("\n");
+}
+
+function renderArchitectToolProtocol(
+  kind: "plan" | "review",
+  toolCatalog: ToolCatalog,
+): string {
+  const finalType = kind === "plan" ? "plan" : "review";
+  const lines = [
+    "Return exactly one JSON action per turn.",
+    "",
+    "Rules:",
+    `- Use \`type: "tool"\` to request exactly one built-in tool or \`mcp.call\`.`,
+    `- Use \`type: "${finalType}"\` only when you are ready to deliver the final ${kind}.`,
+    "- Built-in tool restrictions still apply to the Architect role.",
+    "- MCP servers are additive and controlled by the project allowlist.",
+    "",
+    "## Available Built-in Tools",
+    "",
+    renderArchitectBuiltInToolsMarkdown(),
+    "",
+    "## Available MCP Tools",
+    "",
+    renderArchitectMcpToolsMarkdown(toolCatalog),
+  ];
+
+  return lines.join("\n");
+}
+
+function renderArchitectBuiltInToolsMarkdown(): string {
+  return [
+    "### `file.list`",
+    "- List directory entries.",
+    '- Request shape: `{ "toolName": "file.list", "path": "." }`',
+    "",
+    "### `file.read`",
+    "- Read a file from the workspace or artifacts.",
+    '- Request shape: `{ "toolName": "file.read", "path": "src/example.ts" }`',
+    "",
+    "### `command.execute`",
+    "- Run one shell command through the configured execution target.",
+    '- Request shape: `{ "toolName": "command.execute", "command": "npm test", "accessMode": "inspect" }`',
+    "",
+    "### `git.status`",
+    "- Inspect working tree state.",
+    '- Request shape: `{ "toolName": "git.status" }`',
+    "",
+    "### `git.diff`",
+    "- Capture the current patch.",
+    '- Request shape: `{ "toolName": "git.diff", "staged": false }`',
+  ].join("\n");
+}
+
+function renderArchitectMcpToolsMarkdown(toolCatalog: ToolCatalog): string {
+  const lines = [
+    `- Configured servers: ${formatList(toolCatalog.mcpServers.configured)}`,
+    `- Allowlisted and available servers: ${formatList(toolCatalog.mcpServers.available)}`,
+  ];
+
+  if (toolCatalog.mcpTools.length === 0) {
+    lines.push("- Allowlisted MCP tools available now: none");
+  } else {
+    for (const tool of toolCatalog.mcpTools) {
+      lines.push("", `### \`${tool.server}.${tool.name}\``);
+      lines.push(`- Server: \`${tool.server}\``);
+
+      if (tool.description !== undefined) {
+        lines.push(`- Description: ${tool.description}`);
+      }
+
+      lines.push(
+        `- Request shape: \`{ "toolName": "mcp.call", "server": "${tool.server}", "name": "${tool.name}", "arguments": {} }\``,
+      );
+    }
+  }
+
+  if (toolCatalog.mcpServers.unavailable.length > 0) {
+    lines.push("", "### Diagnostics");
+
+    for (const diagnostic of toolCatalog.mcpServers.unavailable) {
+      lines.push(`- ${diagnostic.message}`);
     }
   }
 
@@ -1210,6 +1430,10 @@ function formatProjectAdapter(
   return adapter.id === "unknown"
     ? "Unknown"
     : `${adapter.label} (${adapter.markers.join(", ")})`;
+}
+
+function formatList(values: readonly string[]): string {
+  return values.length === 0 ? "none" : values.join(", ");
 }
 
 function capitalize(value: string): string {
