@@ -47,7 +47,7 @@ export async function validateRunResult(
     ]);
   }
 
-  const allowedKeys = new Set(["artifacts", "status", "summary"]);
+  const allowedKeys = new Set(["artifacts", "git", "status", "summary"]);
 
   for (const key of Object.keys(value)) {
     if (!allowedKeys.has(key)) {
@@ -94,6 +94,12 @@ export async function validateRunResult(
     }
   }
 
+  const git = value.git;
+
+  if (git !== undefined) {
+    validateGitMetadata(git, issues);
+  }
+
   if (issues.length > 0) {
     throw new RunResultValidationError(schemaPath, issues);
   }
@@ -101,9 +107,12 @@ export async function validateRunResult(
   const validatedArtifacts = Array.isArray(artifacts)
     ? ([...artifacts] as string[])
     : undefined;
+  const validatedGit =
+    git === undefined ? undefined : (git as RunResult["git"]);
 
   return {
     artifacts: validatedArtifacts,
+    ...(validatedGit === undefined ? {} : { git: validatedGit }),
     status: status as RunResult["status"],
     summary: summary as string,
   };
@@ -168,4 +177,221 @@ function getRunResultSchemaCandidates(schemaVersion: string): URL[] {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function validateGitMetadata(value: unknown, issues: string[]): void {
+  if (!isPlainObject(value)) {
+    issues.push("result.git: Expected an object.");
+    return;
+  }
+
+  const allowedKeys = new Set([
+    "createdCommits",
+    "dirtyWorkingTreeOutcome",
+    "dirtyWorkingTreePolicy",
+    "errors",
+    "finalCommit",
+    "initialWorkingTree",
+    "runBranch",
+    "startingBranch",
+    "startingCommit",
+    "warnings",
+  ]);
+
+  for (const key of Object.keys(value)) {
+    if (!allowedKeys.has(key)) {
+      issues.push(`result.git.${key}: Unexpected property.`);
+    }
+  }
+
+  if (value.dirtyWorkingTreePolicy !== "stop") {
+    issues.push('result.git.dirtyWorkingTreePolicy: Expected "stop".');
+  }
+
+  if (
+    value.dirtyWorkingTreeOutcome !== undefined &&
+    value.dirtyWorkingTreeOutcome !== "clean" &&
+    value.dirtyWorkingTreeOutcome !== "stopped"
+  ) {
+    issues.push(
+      'result.git.dirtyWorkingTreeOutcome: Expected "clean" or "stopped".',
+    );
+  }
+
+  validateOptionalString(
+    value.startingBranch,
+    "result.git.startingBranch",
+    issues,
+  );
+  validateOptionalString(
+    value.startingCommit,
+    "result.git.startingCommit",
+    issues,
+  );
+  validateOptionalString(value.runBranch, "result.git.runBranch", issues);
+  validateOptionalString(value.finalCommit, "result.git.finalCommit", issues);
+  validateStringArray(value.warnings, "result.git.warnings", issues);
+  validateStringArray(value.errors, "result.git.errors", issues);
+
+  if (!Array.isArray(value.createdCommits)) {
+    issues.push("result.git.createdCommits: Expected an array.");
+  } else {
+    for (const [index, commit] of value.createdCommits.entries()) {
+      validateGitCommitSummary(
+        commit,
+        `result.git.createdCommits[${index}]`,
+        issues,
+      );
+    }
+  }
+
+  if (value.initialWorkingTree !== undefined) {
+    validateGitWorkingTreeSummary(
+      value.initialWorkingTree,
+      "result.git.initialWorkingTree",
+      issues,
+    );
+  }
+}
+
+function validateGitCommitSummary(
+  value: unknown,
+  path: string,
+  issues: string[],
+): void {
+  if (!isPlainObject(value)) {
+    issues.push(`${path}: Expected an object.`);
+    return;
+  }
+
+  const allowedKeys = new Set(["commitHash", "message", "phase", "recordedAt"]);
+
+  for (const key of Object.keys(value)) {
+    if (!allowedKeys.has(key)) {
+      issues.push(`${path}.${key}: Unexpected property.`);
+    }
+  }
+
+  validateRequiredString(value.commitHash, `${path}.commitHash`, issues);
+  validateRequiredString(value.message, `${path}.message`, issues);
+  validateRequiredString(value.recordedAt, `${path}.recordedAt`, issues);
+
+  if (value.phase !== "engineer-milestone" && value.phase !== "final-state") {
+    issues.push(
+      `${path}.phase: Expected "engineer-milestone" or "final-state".`,
+    );
+  }
+}
+
+function validateGitWorkingTreeSummary(
+  value: unknown,
+  path: string,
+  issues: string[],
+): void {
+  if (!isPlainObject(value)) {
+    issues.push(`${path}: Expected an object.`);
+    return;
+  }
+
+  const allowedKeys = new Set([
+    "changedPaths",
+    "hasStagedChanges",
+    "hasUnstagedChanges",
+    "hasUntrackedChanges",
+    "isDirty",
+  ]);
+
+  for (const key of Object.keys(value)) {
+    if (!allowedKeys.has(key)) {
+      issues.push(`${path}.${key}: Unexpected property.`);
+    }
+  }
+
+  if (!Array.isArray(value.changedPaths)) {
+    issues.push(`${path}.changedPaths: Expected an array.`);
+  } else {
+    for (const [index, changedPath] of value.changedPaths.entries()) {
+      if (typeof changedPath !== "string" || changedPath.length === 0) {
+        issues.push(
+          `${path}.changedPaths[${index}]: Expected a non-empty string.`,
+        );
+      }
+    }
+  }
+
+  validateRequiredBoolean(
+    value.hasStagedChanges,
+    `${path}.hasStagedChanges`,
+    issues,
+  );
+  validateRequiredBoolean(
+    value.hasUnstagedChanges,
+    `${path}.hasUnstagedChanges`,
+    issues,
+  );
+  validateRequiredBoolean(
+    value.hasUntrackedChanges,
+    `${path}.hasUntrackedChanges`,
+    issues,
+  );
+  validateRequiredBoolean(value.isDirty, `${path}.isDirty`, issues);
+}
+
+function validateStringArray(
+  value: unknown,
+  path: string,
+  issues: string[],
+): void {
+  if (!Array.isArray(value)) {
+    issues.push(`${path}: Expected an array.`);
+    return;
+  }
+
+  for (const [index, item] of value.entries()) {
+    if (typeof item !== "string") {
+      issues.push(`${path}[${index}]: Expected a string.`);
+      continue;
+    }
+
+    if (item.length === 0) {
+      issues.push(`${path}[${index}]: Expected at least 1 character.`);
+    }
+  }
+}
+
+function validateOptionalString(
+  value: unknown,
+  path: string,
+  issues: string[],
+): void {
+  if (value === undefined) {
+    return;
+  }
+
+  validateRequiredString(value, path, issues);
+}
+
+function validateRequiredString(
+  value: unknown,
+  path: string,
+  issues: string[],
+): void {
+  if (typeof value !== "string") {
+    issues.push(`${path}: Expected a string.`);
+    return;
+  }
+
+  if (value.length === 0) {
+    issues.push(`${path}: Expected at least 1 character.`);
+  }
+}
+
+function validateRequiredBoolean(
+  value: unknown,
+  path: string,
+  issues: string[],
+): void {
+  if (typeof value !== "boolean") {
+    issues.push(`${path}: Expected a boolean.`);
+  }
 }

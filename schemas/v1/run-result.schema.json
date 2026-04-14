@@ -20,6 +20,114 @@
         "type": "string",
         "minLength": 1
       }
+    },
+    "git": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "createdCommits",
+        "dirtyWorkingTreePolicy",
+        "errors",
+        "warnings"
+      ],
+      "properties": {
+        "dirtyWorkingTreePolicy": {
+          "type": "string",
+          "enum": ["stop"]
+        },
+        "dirtyWorkingTreeOutcome": {
+          "type": "string",
+          "enum": ["clean", "stopped"]
+        },
+        "startingBranch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "startingCommit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runBranch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "finalCommit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "createdCommits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["commitHash", "message", "phase", "recordedAt"],
+            "properties": {
+              "commitHash": {
+                "type": "string",
+                "minLength": 1
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1
+              },
+              "phase": {
+                "type": "string",
+                "enum": ["engineer-milestone", "final-state"]
+              },
+              "recordedAt": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "initialWorkingTree": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "changedPaths",
+            "hasStagedChanges",
+            "hasUnstagedChanges",
+            "hasUntrackedChanges",
+            "isDirty"
+          ],
+          "properties": {
+            "changedPaths": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "hasStagedChanges": {
+              "type": "boolean"
+            },
+            "hasUnstagedChanges": {
+              "type": "boolean"
+            },
+            "hasUntrackedChanges": {
+              "type": "boolean"
+            },
+            "isDirty": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
     }
   }
 }

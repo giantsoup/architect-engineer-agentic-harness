@@ -29,6 +29,41 @@ async function createLoadedConfig(
   projectRoot: string,
 ): Promise<LoadedHarnessConfig> {
   await initializeProject(projectRoot);
+  expect(
+    spawnSync(
+      "git",
+      [
+        "-c",
+        "user.name=Test User",
+        "-c",
+        "user.email=test@example.com",
+        "add",
+        "--all",
+      ],
+      {
+        cwd: projectRoot,
+        encoding: "utf8",
+      },
+    ).status,
+  ).toBe(0);
+  expect(
+    spawnSync(
+      "git",
+      [
+        "-c",
+        "user.name=Test User",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "harness init",
+      ],
+      {
+        cwd: projectRoot,
+        encoding: "utf8",
+      },
+    ).status,
+  ).toBe(0);
   return loadHarnessConfig({ projectRoot });
 }
 
@@ -85,6 +120,30 @@ function commitFile(
       },
     ).status,
   ).toBe(0);
+}
+
+function runGit(projectRoot: string, args: string[]): string {
+  const result = spawnSync("git", args, {
+    cwd: projectRoot,
+    encoding: "utf8",
+  });
+
+  expect(result.status).toBe(0);
+  return result.stdout.trim();
+}
+
+function readCurrentBranch(projectRoot: string): string {
+  return runGit(projectRoot, ["branch", "--show-current"]);
+}
+
+function readHeadCommit(projectRoot: string): string {
+  return runGit(projectRoot, ["rev-parse", "HEAD"]);
+}
+
+function readCommitSubjects(projectRoot: string): string[] {
+  const output = runGit(projectRoot, ["log", "--format=%s"]);
+
+  return output.length === 0 ? [] : output.split(/\r?\n/u);
 }
 
 function parseJsonLines(filePath: string): Record<string, unknown>[] {
@@ -230,6 +289,9 @@ describe("executeArchitectEngineerRun", () => {
       runId: "20260414T120000.000Z-abc128",
       task: "Update `src/example.ts` so it exports `2` instead of `1`.",
     });
+    const currentBranch = readCurrentBranch(projectRoot);
+    const headCommit = readHeadCommit(projectRoot);
+    const commitSubjects = readCommitSubjects(projectRoot);
 
     expect(execution.result.status).toBe("success");
     expect(execution.stopReason).toBe("architect-approved");
@@ -239,6 +301,25 @@ describe("executeArchitectEngineerRun", () => {
     expect(commandRunnerCalls).toEqual([
       { command: "npm run test", role: "engineer" },
     ]);
+    expect(currentBranch).toBe(
+      "ae/run-20260414t120000-000z-abc128-update-src-example-ts-so-it-exports-2-instead-of",
+    );
+    expect(commitSubjects[0]).toBe(
+      "ae(20260414T120000.000Z-abc128): engineer milestone 1",
+    );
+    expect(execution.result.git).toMatchObject({
+      createdCommits: [
+        {
+          commitHash: headCommit,
+          phase: "engineer-milestone",
+        },
+      ],
+      dirtyWorkingTreeOutcome: "clean",
+      dirtyWorkingTreePolicy: "stop",
+      finalCommit: headCommit,
+      runBranch: currentBranch,
+      startingBranch: "main",
+    });
 
     const runDir = execution.dossier.paths.runDirAbsolutePath;
     const finalReport = readFileSync(
@@ -247,7 +328,11 @@ describe("executeArchitectEngineerRun", () => {
     );
     const result = JSON.parse(
       readFileSync(execution.dossier.paths.files.result.absolutePath, "utf8"),
-    ) as { artifacts: string[]; status: string };
+    ) as {
+      artifacts: string[];
+      git?: { finalCommit?: string };
+      status: string;
+    };
     const events = parseJsonLines(
       execution.dossier.paths.files.events.absolutePath,
     );
@@ -265,8 +350,13 @@ describe("executeArchitectEngineerRun", () => {
       readFileSync(path.join(runDir, "engineer-task.md"), "utf8"),
     ).toContain("## Architect Plan");
     expect(finalReport).toContain("## Final Architect Review");
+    expect(finalReport).toContain("## Git");
+    expect(finalReport).toContain("Starting branch: main");
+    expect(finalReport).toContain(`Run branch: ${currentBranch}`);
+    expect(finalReport).toContain(headCommit);
     expect(finalReport).toContain("Stop reason: architect-approved");
     expect(result.status).toBe("success");
+    expect(result.git?.finalCommit).toBe(headCommit);
     expect(result.artifacts).toEqual(
       expect.arrayContaining([
         execution.dossier.paths.files.architectPlan.relativePath,
@@ -276,11 +366,142 @@ describe("executeArchitectEngineerRun", () => {
       ]),
     );
     expect(
+      readFileSync(execution.dossier.paths.files.diff.absolutePath, "utf8"),
+    ).toContain("+export const value = 2;");
+    expect(
       architectToolCalls.every(
         (event) =>
           event.toolName === "git.status" || event.toolName === "file.read",
       ),
     ).toBe(true);
+  });
+
+  it("stops safely before branching when the repository starts dirty", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+    commitFile(projectRoot, "src/example.ts", "export const value = 1;\n");
+    const loadedConfig = await createLoadedConfig(projectRoot);
+    writeFileSync(
+      path.join(projectRoot, "src/example.ts"),
+      "export const value = 99;\n",
+      "utf8",
+    );
+    const architect = createQueuedModelClient([
+      {
+        steps: ["This should not run"],
+        summary: "Dirty-tree policy should stop earlier.",
+      },
+    ]);
+
+    const execution = await executeArchitectEngineerRun({
+      architectModelClient: architect.client,
+      createdAt: new Date("2026-04-14T12:00:00.000Z"),
+      loadedConfig,
+      now: () => new Date("2026-04-14T12:00:05.000Z"),
+      runId: "20260414T120000.000Z-abc133",
+      task: "Attempt a run from a dirty repository.",
+    });
+
+    expect(execution.result.status).toBe("stopped");
+    expect(execution.stopReason).toBe("dirty-working-tree");
+    expect(architect.requests).toHaveLength(0);
+    expect(readCurrentBranch(projectRoot)).toBe("main");
+    expect(execution.result.git).toMatchObject({
+      createdCommits: [],
+      dirtyWorkingTreeOutcome: "stopped",
+      dirtyWorkingTreePolicy: "stop",
+      startingBranch: "main",
+    });
+    expect(execution.result.git?.initialWorkingTree?.isDirty).toBe(true);
+    expect(
+      readFileSync(
+        execution.dossier.paths.files.finalReport.absolutePath,
+        "utf8",
+      ),
+    ).toContain("Run branch: not created");
+  });
+
+  it("creates no empty commit when the run succeeds without a source diff", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+    commitFile(projectRoot, "src/example.ts", "export const value = 1;\n");
+
+    const loadedConfig = await createLoadedConfig(projectRoot);
+    const startingCommit = readHeadCommit(projectRoot);
+    const architect = createQueuedModelClient([
+      {
+        acceptanceCriteria: ["`npm run test` passes"],
+        steps: ["Run the required test command"],
+        summary: "Verify without changing the source.",
+      },
+      {
+        decision: "approve",
+        summary: "Verification is complete.",
+      },
+    ]);
+    const engineer = createQueuedModelClient([
+      {
+        request: {
+          accessMode: "mutate",
+          command: "npm run test",
+          toolName: "command.execute",
+        },
+        stopWhenSuccessful: true,
+        summary: "Verification passed immediately.",
+        type: "tool",
+      },
+    ]);
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 10,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: 0,
+          role: "engineer",
+          stderr: "",
+          stdout: "tests passed\n",
+          timestamp: "2026-04-14T12:00:10.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeArchitectEngineerRun({
+      architectModelClient: architect.client,
+      createdAt: new Date("2026-04-14T12:00:00.000Z"),
+      engineerModelClient: engineer.client,
+      loadedConfig,
+      now: () => new Date("2026-04-14T12:00:10.000Z"),
+      projectCommandRunner: fakeCommandRunner,
+      runId: "20260414T120000.000Z-abc134",
+      task: "Verify the repository without changing any source files.",
+    });
+
+    expect(execution.result.status).toBe("success");
+    expect(execution.result.git).toMatchObject({
+      createdCommits: [],
+      dirtyWorkingTreeOutcome: "clean",
+      dirtyWorkingTreePolicy: "stop",
+      finalCommit: startingCommit,
+      startingCommit,
+    });
+    expect(readCommitSubjects(projectRoot)).toEqual([
+      "harness init",
+      "initial",
+    ]);
   });
 
   it("carries failure notes across a revise cycle and reruns the Engineer with review feedback", async () => {
@@ -485,9 +706,16 @@ describe("executeArchitectEngineerRun", () => {
       runId: "20260414T120000.000Z-abc130",
       task: "Run the review flow.",
     });
+    const currentBranch = readCurrentBranch(projectRoot);
 
     expect(execution.result.status).toBe("failed");
     expect(execution.stopReason).toBe("architect-failed");
+    expect(execution.result.git).toMatchObject({
+      dirtyWorkingTreeOutcome: "clean",
+      dirtyWorkingTreePolicy: "stop",
+      runBranch: currentBranch,
+      startingBranch: "main",
+    });
     expect(
       readFileSync(
         execution.dossier.paths.files.architectReview.absolutePath,

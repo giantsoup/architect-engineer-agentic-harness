@@ -8,6 +8,10 @@ import type {
   EngineerTaskStopReason,
 } from "./engineer-task.js";
 import type { RunCheckResult, RunResult } from "../types/run.js";
+import {
+  createInitialRunGitMetadata,
+  type RuntimeRunGitMetadata,
+} from "./run-git-state.js";
 
 export type ArchitectEngineerNodeName =
   | "prepare"
@@ -20,6 +24,8 @@ export type ArchitectEngineerStopReason =
   | "architect-approved"
   | "architect-failed"
   | "architect-model-error"
+  | "dirty-working-tree"
+  | "git-automation-error"
   | "max-consecutive-failed-checks"
   | "timeout"
   | `engineer-${EngineerTaskStopReason}`;
@@ -73,6 +79,7 @@ export interface ArchitectEngineerState {
   engineerExecution?: ArchitectEngineerExecutionSnapshot | undefined;
   failureNotes: ArchitectEngineerFailureNote[];
   finalOutcome?: ArchitectEngineerFinalOutcome | undefined;
+  git: RuntimeRunGitMetadata;
   iterations: ArchitectEngineerIterationState;
   metadata: ArchitectEngineerRunMetadata;
   nextNode: ArchitectEngineerNodeName;
@@ -95,6 +102,7 @@ export function createArchitectEngineerState(
   return {
     checks: [],
     failureNotes: [],
+    git: createInitialRunGitMetadata(),
     iterations: {
       engineerAttempts: 0,
       reviewCycles: 0,
@@ -126,6 +134,16 @@ export function withPreparedDossier(
     ...state,
     dossier,
     nextNode: "plan",
+  };
+}
+
+export function withRunGitMetadata(
+  state: ArchitectEngineerState,
+  git: RuntimeRunGitMetadata,
+): ArchitectEngineerState {
+  return {
+    ...state,
+    git,
   };
 }
 

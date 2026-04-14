@@ -1,6 +1,7 @@
 import path from "node:path";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 
+import { GitStatusParseError, parseGitStatusPorcelain } from "../git/status.js";
 import { appendToolCall } from "../runtime/run-dossier.js";
 import {
   ContainerCommandCancelledError,
@@ -54,8 +55,6 @@ import type {
   FileReadToolResult,
   FileWriteToolResult,
   GitDiffToolResult,
-  GitStatusBranchSummary,
-  GitStatusEntry,
   GitStatusToolResult,
 } from "./types.js";
 
@@ -417,7 +416,19 @@ export class BuiltInToolExecutor {
       "--porcelain=v1",
       "--branch",
     ]);
-    const status = parseGitStatus(result.stdout);
+    let status;
+
+    try {
+      status = parseGitStatusPorcelain(result.stdout);
+    } catch (error) {
+      if (error instanceof GitStatusParseError) {
+        throw new BuiltInToolGitError("git.status", error.message, {
+          cause: error,
+        });
+      }
+
+      throw error;
+    }
 
     return {
       branch: status.branch,
@@ -677,113 +688,6 @@ function normalizeToolError(
     `Unexpected failure while executing ${toolName}: ${describeUnknownError(error)}`,
     { cause: error instanceof Error ? error : undefined },
   );
-}
-
-function parseGitStatus(stdout: string): {
-  branch: GitStatusBranchSummary;
-  entries: GitStatusEntry[];
-} {
-  const lines = stdout
-    .split(/\r?\n/u)
-    .map((line) => line.trimEnd())
-    .filter((line) => line.length > 0);
-  const branchLine = lines.shift();
-
-  if (branchLine === undefined || !branchLine.startsWith("## ")) {
-    throw new BuiltInToolGitError(
-      "git.status",
-      "Git status output did not include a porcelain branch header.",
-    );
-  }
-
-  return {
-    branch: parseGitBranchSummary(branchLine.slice(3)),
-    entries: lines.map(parseGitStatusEntry),
-  };
-}
-
-function parseGitBranchSummary(line: string): GitStatusBranchSummary {
-  if (line === "HEAD (no branch)") {
-    return {
-      ahead: 0,
-      behind: 0,
-      detached: true,
-      head: "HEAD",
-    };
-  }
-
-  const [rawHeadSection, trackingSection] = line.split(" [", 2);
-  const headSection = rawHeadSection ?? "";
-  const headSegments = headSection.split("...", 2);
-  const head = headSegments[0] ?? "";
-  const upstream = headSegments[1];
-
-  if (head.length === 0) {
-    throw new BuiltInToolGitError(
-      "git.status",
-      `Git branch header is malformed: \`${line}\`.`,
-    );
-  }
-
-  const branch: GitStatusBranchSummary = {
-    ahead: 0,
-    behind: 0,
-    detached: false,
-    head,
-    ...(upstream === undefined ? {} : { upstream }),
-  };
-
-  if (trackingSection === undefined) {
-    return branch;
-  }
-
-  const tracking = trackingSection.endsWith("]")
-    ? trackingSection.slice(0, -1)
-    : trackingSection;
-
-  for (const part of tracking.split(", ")) {
-    const match = /^(ahead|behind) (\d+)$/u.exec(part);
-
-    if (match?.[1] === "ahead" && match[2] !== undefined) {
-      branch.ahead = Number.parseInt(match[2], 10);
-    }
-
-    if (match?.[1] === "behind" && match[2] !== undefined) {
-      branch.behind = Number.parseInt(match[2], 10);
-    }
-  }
-
-  return branch;
-}
-
-function parseGitStatusEntry(line: string): GitStatusEntry {
-  if (line.length < 4) {
-    throw new BuiltInToolGitError(
-      "git.status",
-      `Git status entry is malformed: \`${line}\`.`,
-    );
-  }
-
-  const pathSection = line.slice(3);
-  const renameSegments = pathSection.split(" -> ");
-  const originalPath =
-    renameSegments.length === 2 ? renameSegments[0] : undefined;
-  const nextPath =
-    renameSegments.length === 2 ? renameSegments[1] : pathSection;
-
-  if (nextPath === undefined || nextPath.length === 0) {
-    throw new BuiltInToolGitError(
-      "git.status",
-      `Git status entry is missing a path: \`${line}\`.`,
-    );
-  }
-
-  return {
-    indexStatus: line[0] ?? " ",
-    ...(originalPath === undefined ? {} : { originalPath }),
-    path: nextPath,
-    workingTreeStatus: line[1] ?? " ",
-  };
 }
 
 function getDurationMs(startedAt: bigint): number {

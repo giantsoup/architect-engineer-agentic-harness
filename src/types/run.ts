@@ -130,8 +130,37 @@ export interface RunChecksSummary {
   recordedAt?: string;
 }
 
+export interface GitWorkingTreeSummary {
+  changedPaths: string[];
+  hasStagedChanges: boolean;
+  hasUnstagedChanges: boolean;
+  hasUntrackedChanges: boolean;
+  isDirty: boolean;
+}
+
+export interface RunGitCommitSummary {
+  commitHash: string;
+  message: string;
+  phase: "engineer-milestone" | "final-state";
+  recordedAt: string;
+}
+
+export interface RunGitMetadata {
+  createdCommits: RunGitCommitSummary[];
+  dirtyWorkingTreeOutcome?: "clean" | "stopped";
+  dirtyWorkingTreePolicy: "stop";
+  errors: string[];
+  finalCommit?: string;
+  initialWorkingTree?: GitWorkingTreeSummary;
+  runBranch?: string;
+  startingBranch?: string;
+  startingCommit?: string;
+  warnings: string[];
+}
+
 export interface RunResult {
   artifacts?: string[] | undefined;
+  git?: RunGitMetadata | undefined;
   status: "failed" | "stopped" | "success";
   summary: string;
 }

@@ -79,6 +79,13 @@ export {
   RunResultValidationError,
   validateRunResult,
 } from "./runtime/run-result.js";
+export { createRunBranchName } from "./git/branch.js";
+export { createRunCommitMessage, isCommitNeeded } from "./git/commit.js";
+export {
+  classifyGitWorkingTree,
+  GitStatusParseError,
+  parseGitStatusPorcelain,
+} from "./git/status.js";
 export type { HarnessConfig, LoadedHarnessConfig } from "./types/config.js";
 export type { CreateBuiltInToolExecutorOptions } from "./tools/built-in-tools.js";
 export type {
@@ -166,6 +173,12 @@ export type {
   ArchitectEngineerNodeName,
 } from "./runtime/architect-engineer-state.js";
 export type {
+  DirtyWorkingTreeOutcome,
+  DirtyWorkingTreePolicy,
+  RuntimeRunGitMetadata,
+  RunGitCommitRecord,
+} from "./runtime/run-git-state.js";
+export type {
   CommandLogRecord,
   DossierArtifactKind,
   JsonPrimitive,
@@ -173,6 +186,8 @@ export type {
   RunArtifactFileReference,
   RunCheckResult,
   RunChecksSummary,
+  RunGitCommitSummary,
+  RunGitMetadata,
   RunLifecycleStatus,
   RunManifest,
   RunManifestFiles,

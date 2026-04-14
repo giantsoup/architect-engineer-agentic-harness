@@ -207,6 +207,31 @@ describe("run dossier", () => {
         dossier.paths,
         {
           artifacts: [dossier.paths.files.finalReport.relativePath],
+          git: {
+            createdCommits: [
+              {
+                commitHash: "abc123",
+                message: "ae(run): engineer milestone 1",
+                phase: "engineer-milestone",
+                recordedAt: "2026-04-13T12:00:04.000Z",
+              },
+            ],
+            dirtyWorkingTreeOutcome: "clean",
+            dirtyWorkingTreePolicy: "stop",
+            errors: [],
+            finalCommit: "abc123",
+            initialWorkingTree: {
+              changedPaths: [],
+              hasStagedChanges: false,
+              hasUnstagedChanges: false,
+              hasUntrackedChanges: false,
+              isDirty: false,
+            },
+            runBranch: "ae/run-branch",
+            startingBranch: "main",
+            startingCommit: "def456",
+            warnings: [],
+          },
           status: "success",
           summary: "All checks passed.",
         },
@@ -220,6 +245,31 @@ describe("run dossier", () => {
       expect(nextManifest.updatedAt).toBe("2026-04-13T12:00:05.000Z");
       expect(await validateRunResult(persistedResult)).toEqual({
         artifacts: [dossier.paths.files.finalReport.relativePath],
+        git: {
+          createdCommits: [
+            {
+              commitHash: "abc123",
+              message: "ae(run): engineer milestone 1",
+              phase: "engineer-milestone",
+              recordedAt: "2026-04-13T12:00:04.000Z",
+            },
+          ],
+          dirtyWorkingTreeOutcome: "clean",
+          dirtyWorkingTreePolicy: "stop",
+          errors: [],
+          finalCommit: "abc123",
+          initialWorkingTree: {
+            changedPaths: [],
+            hasStagedChanges: false,
+            hasUnstagedChanges: false,
+            hasUntrackedChanges: false,
+            isDirty: false,
+          },
+          runBranch: "ae/run-branch",
+          startingBranch: "main",
+          startingCommit: "def456",
+          warnings: [],
+        },
         status: "success",
         summary: "All checks passed.",
       });

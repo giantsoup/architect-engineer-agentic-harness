@@ -150,6 +150,7 @@ export async function executeArchitectEngineerRun(
             ? []
             : [state.dossier!.paths.files.failureNotes.relativePath]),
         ],
+        git: state.git,
         status: state.finalOutcome?.status ?? "stopped",
         summary:
           state.finalOutcome?.summary ??

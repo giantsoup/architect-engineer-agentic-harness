@@ -38,6 +38,7 @@ import {
   withEngineerExecution,
   withFinalOutcome,
   withPreparedDossier,
+  withRunGitMetadata,
   type ArchitectEngineerFailureNote,
   type ArchitectEngineerFinalOutcome,
   type ArchitectEngineerState,
@@ -53,6 +54,11 @@ import {
 } from "./engineer-task.js";
 import type { ProjectCommandRunnerLike } from "../sandbox/command-runner.js";
 import type { RunProcess } from "../sandbox/process-runner.js";
+import {
+  commitRunGitChanges,
+  prepareRunGitAutomation,
+  renderRunGitSection,
+} from "./run-git-automation.js";
 
 export interface ArchitectRunModelClient {
   chat<TStructured = never>(
@@ -107,7 +113,36 @@ export async function prepareArchitectEngineerRunNode(
     type: "architect-engineer-run-started",
   });
 
-  return withPreparedDossier(state, dossier);
+  const preparedState = withPreparedDossier(state, dossier);
+  const gitPreparation = await prepareRunGitAutomation({
+    dossier,
+    loadedConfig: context.loadedConfig,
+    now: context.now,
+    runId: state.metadata.runId,
+    ...(context.runProcess === undefined
+      ? {}
+      : { runProcess: context.runProcess }),
+    task: state.metadata.task,
+  });
+  const preparedWithGit = withRunGitMetadata(preparedState, gitPreparation.git);
+
+  if (gitPreparation.kind === "blocked") {
+    return withFinalOutcome(preparedWithGit, {
+      status: "stopped",
+      stopReason: "dirty-working-tree",
+      summary: gitPreparation.summary,
+    });
+  }
+
+  if (gitPreparation.kind === "failed") {
+    return withFinalOutcome(preparedWithGit, {
+      status: "failed",
+      stopReason: "git-automation-error",
+      summary: gitPreparation.summary,
+    });
+  }
+
+  return preparedWithGit;
 }
 
 export async function architectPlanningNode(
@@ -262,6 +297,33 @@ export async function engineerExecutionNode(
 
   await syncFailureNotesArtifact(nextState, context.now().toISOString());
 
+  if (execution.result.status === "success") {
+    const commitResult = await commitRunGitChanges({
+      dossier,
+      engineerAttempt: nextState.iterations.engineerAttempts,
+      git: nextState.git,
+      loadedConfig: context.loadedConfig,
+      now: context.now,
+      phase: "engineer-milestone",
+      reviewCycle: nextState.iterations.reviewCycles,
+      runId: nextState.metadata.runId,
+      ...(context.runProcess === undefined
+        ? {}
+        : { runProcess: context.runProcess }),
+      task: nextState.metadata.task,
+    });
+
+    nextState = withRunGitMetadata(nextState, commitResult.git);
+
+    if (commitResult.kind === "failed") {
+      return withFinalOutcome(nextState, {
+        status: "failed",
+        stopReason: "git-automation-error",
+        summary: commitResult.summary ?? "Git automation failed.",
+      });
+    }
+  }
+
   const forcedOutcome = getEngineerStopOutcome(
     execution.stopReason,
     execution.result.summary,
@@ -412,16 +474,53 @@ export async function finalizeArchitectEngineerRunNode(
     summary: `Run timed out after ${state.metadata.timeoutMs}ms.`,
   };
   const timestamp = context.now().toISOString();
+  let finalizedState = state;
+  let resolvedFinalOutcome = finalOutcome;
+
+  if (resolvedFinalOutcome.status === "success") {
+    const finalCommitResult = await commitRunGitChanges({
+      dossier,
+      engineerAttempt: finalizedState.iterations.engineerAttempts,
+      git: finalizedState.git,
+      loadedConfig: context.loadedConfig,
+      now: context.now,
+      phase: "final-state",
+      reviewCycle: finalizedState.iterations.reviewCycles,
+      runId: finalizedState.metadata.runId,
+      ...(context.runProcess === undefined
+        ? {}
+        : { runProcess: context.runProcess }),
+      task: finalizedState.metadata.task,
+    });
+
+    finalizedState = withRunGitMetadata(finalizedState, finalCommitResult.git);
+
+    if (finalCommitResult.kind === "failed") {
+      resolvedFinalOutcome = {
+        status: "failed",
+        stopReason: "git-automation-error",
+        summary:
+          finalCommitResult.summary ??
+          "Git automation failed during finalization.",
+      };
+      finalizedState = withFinalOutcome(finalizedState, resolvedFinalOutcome);
+    }
+  }
+
   const workspaceSnapshot = await captureArchitectWorkspaceSnapshot(
     dossier,
     context,
   );
-  const finalReport = renderFinalReport(state, finalOutcome, workspaceSnapshot);
+  const finalReport = renderFinalReport(
+    finalizedState,
+    resolvedFinalOutcome,
+    workspaceSnapshot,
+  );
 
-  if (state.failureNotes.length > 0) {
+  if (finalizedState.failureNotes.length > 0) {
     await writeFailureNotes(
       dossier.paths,
-      renderFailureNotesMarkdown(state.failureNotes),
+      renderFailureNotesMarkdown(finalizedState.failureNotes),
       timestamp,
     );
   }
@@ -441,14 +540,15 @@ export async function finalizeArchitectEngineerRunNode(
     dossier.paths.files.result.relativePath,
   ];
 
-  if (state.failureNotes.length > 0) {
+  if (finalizedState.failureNotes.length > 0) {
     resultArtifacts.push(dossier.paths.files.failureNotes.relativePath);
   }
 
   await appendRunEvent(dossier.paths, {
-    status: finalOutcome.status,
-    stopReason: finalOutcome.stopReason,
-    summary: finalOutcome.summary,
+    git: finalizedState.git,
+    status: resolvedFinalOutcome.status,
+    stopReason: resolvedFinalOutcome.stopReason,
+    summary: resolvedFinalOutcome.summary,
     timestamp,
     type: "architect-engineer-run-finished",
   });
@@ -456,13 +556,14 @@ export async function finalizeArchitectEngineerRunNode(
     dossier.paths,
     {
       artifacts: resultArtifacts,
-      status: finalOutcome.status,
-      summary: finalOutcome.summary,
+      git: finalizedState.git,
+      status: resolvedFinalOutcome.status,
+      summary: resolvedFinalOutcome.summary,
     },
     timestamp,
   );
 
-  return state;
+  return finalizedState;
 }
 
 export function renderArchitectPlanMarkdown(
@@ -795,6 +896,8 @@ function renderFinalReport(
       `- Latest summary: ${state.engineerExecution.result.summary}`,
     );
   }
+
+  lines.push("", ...renderRunGitSection(state.git));
 
   lines.push(
     "",
