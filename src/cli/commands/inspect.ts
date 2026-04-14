@@ -1,16 +1,25 @@
 import { Command } from "commander";
 
-import { createPlaceholderAction } from "../placeholder.js";
+import { loadHarnessConfig } from "../../index.js";
+import {
+  readRunInspection,
+  resolveRunDossierPaths,
+} from "../../runtime/run-history.js";
+import { renderInspectSummary } from "../../ui/summary-renderer.js";
 
 export function createInspectCommand(): Command {
   return new Command("inspect")
-    .description("Inspect harness metadata, assets, and generated artifacts")
-    .action(
-      createPlaceholderAction({
-        commandName: "inspect",
-        followUp:
-          "Later milestones will use this command for prompt, schema, and artifact inspection.",
-        milestone: "Milestone 2+",
-      }),
-    );
+    .description(
+      "List artifact paths for the latest run or a specific run by ID",
+    )
+    .argument("[run-id]", "Run ID to inspect; defaults to the latest run")
+    .action(async (runId?: string) => {
+      const loadedConfig = await loadHarnessConfig({
+        projectRoot: process.cwd(),
+      });
+      const dossierPaths = await resolveRunDossierPaths(loadedConfig, runId);
+      const inspection = await readRunInspection(dossierPaths);
+
+      process.stdout.write(renderInspectSummary(inspection));
+    });
 }

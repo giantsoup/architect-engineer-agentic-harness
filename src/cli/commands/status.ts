@@ -1,16 +1,23 @@
 import { Command } from "commander";
 
-import { createPlaceholderAction } from "../placeholder.js";
+import { loadHarnessConfig } from "../../index.js";
+import {
+  readRunInspection,
+  resolveRunDossierPaths,
+} from "../../runtime/run-history.js";
+import { renderStatusSummary } from "../../ui/summary-renderer.js";
 
 export function createStatusCommand(): Command {
   return new Command("status")
-    .description("Inspect bootstrap and run status for the current project")
-    .action(
-      createPlaceholderAction({
-        commandName: "status",
-        followUp:
-          "Later milestones will use this command to inspect repo-local run state.",
-        milestone: "Milestone 2+",
-      }),
-    );
+    .description("Summarize the latest run or a specific run by ID")
+    .argument("[run-id]", "Run ID to inspect; defaults to the latest run")
+    .action(async (runId?: string) => {
+      const loadedConfig = await loadHarnessConfig({
+        projectRoot: process.cwd(),
+      });
+      const dossierPaths = await resolveRunDossierPaths(loadedConfig, runId);
+      const inspection = await readRunInspection(dossierPaths);
+
+      process.stdout.write(renderStatusSummary(inspection));
+    });
 }

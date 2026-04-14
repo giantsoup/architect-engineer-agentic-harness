@@ -4,11 +4,16 @@ import { readFile } from "node:fs/promises";
 import { Command, InvalidArgumentError } from "commander";
 
 import {
+  buildRunDossierPaths,
   createProjectCommandRunner,
+  createRunId,
   executeArchitectEngineerRun,
   initializeRunDossier,
   loadHarnessConfig,
 } from "../../index.js";
+import { readRunInspection } from "../../runtime/run-history.js";
+import { createLiveConsoleRenderer } from "../../ui/live-console.js";
+import { renderRunCompletionSummary } from "../../ui/summary-renderer.js";
 
 interface RunCommandOptions {
   command?: string;
@@ -52,24 +57,48 @@ export function createRunCommand(): Command {
       });
 
       if (runMode.type === "engineer-task") {
-        const execution = await executeArchitectEngineerRun({
-          loadedConfig,
-          task: runMode.task,
-          ...(options.timeoutMs === undefined
-            ? {}
-            : { timeoutMs: options.timeoutMs }),
+        const runId = createRunId();
+        const dossierPaths = buildRunDossierPaths({
+          artifactsRootDir: loadedConfig.config.artifacts.rootDir,
+          projectRoot: loadedConfig.projectRoot,
+          runId,
+          runsDir: loadedConfig.config.artifacts.runsDir,
         });
+        const liveConsole = createLiveConsoleRenderer({
+          paths: dossierPaths,
+        });
+
+        liveConsole.start();
+        let execution: Awaited<ReturnType<typeof executeArchitectEngineerRun>>;
+
+        try {
+          execution = await executeArchitectEngineerRun({
+            loadedConfig,
+            runId,
+            task: runMode.task,
+            ...(options.timeoutMs === undefined
+              ? {}
+              : { timeoutMs: options.timeoutMs }),
+          });
+        } finally {
+          await liveConsole.stop();
+        }
+
         const unavailableMcpServers =
           execution.state.engineerExecution?.toolSummary.mcpServers
             .unavailable ?? [];
+        const inspection = await readRunInspection(execution.dossier.paths);
 
-        for (const diagnostic of unavailableMcpServers) {
-          console.error(`MCP warning: ${diagnostic.message}`);
+        process.stderr.write(renderRunCompletionSummary(inspection));
+
+        if (unavailableMcpServers.length > 0) {
+          process.stderr.write("MCP warnings:\n");
+
+          for (const diagnostic of unavailableMcpServers) {
+            process.stderr.write(`- ${diagnostic.message}\n`);
+          }
         }
 
-        console.error(
-          `Run ${execution.result.status}: ${execution.result.summary}. Dossier: ${execution.dossier.paths.runDirRelativePath}`,
-        );
         process.exitCode = execution.result.status === "success" ? 0 : 1;
         return;
       }

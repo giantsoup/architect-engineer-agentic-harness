@@ -308,6 +308,9 @@ export async function executeEngineerTask(
       await appendRunEvent(dossier.paths, {
         actionType: action.type,
         iteration: iterationCount,
+        ...(action.type === "tool"
+          ? { toolRequest: summarizeToolRequestForEvent(action.request) }
+          : { outcome: action.outcome }),
         summary: action.summary,
         timestamp: now().toISOString(),
         type: "engineer-action-selected",
@@ -652,6 +655,40 @@ function applyRemainingTimeToToolRequest(
     ...request,
     timeoutMs: boundedTimeoutMs,
   };
+}
+
+function summarizeToolRequestForEvent(
+  request: ToolRequest,
+): Record<string, string> {
+  switch (request.toolName) {
+    case "command.execute":
+      return {
+        command: request.command,
+        toolName: request.toolName,
+      };
+    case "file.list":
+      return {
+        path: request.path ?? ".",
+        toolName: request.toolName,
+      };
+    case "file.read":
+    case "file.write":
+      return {
+        path: request.path,
+        toolName: request.toolName,
+      };
+    case "git.diff":
+    case "git.status":
+      return {
+        toolName: request.toolName,
+      };
+    case "mcp.call":
+      return {
+        name: request.name,
+        server: request.server,
+        toolName: request.toolName,
+      };
+  }
 }
 
 function isRequiredCheckCommand(

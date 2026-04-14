@@ -634,6 +634,9 @@ async function runArchitectLoop<TKind extends "plan" | "review">(options: {
         actionType,
         iteration,
         phase: options.kind === "plan" ? "architect-plan" : "architect-review",
+        ...(action.type === "tool"
+          ? { toolRequest: summarizeToolRequestForEvent(action.request) }
+          : {}),
         summary: action.summary,
         timestamp: options.context.now().toISOString(),
         type: "architect-action-selected",
@@ -704,6 +707,40 @@ async function executeArchitectTool(
     }
 
     throw error;
+  }
+}
+
+function summarizeToolRequestForEvent(
+  request: ToolRequest,
+): Record<string, string> {
+  switch (request.toolName) {
+    case "command.execute":
+      return {
+        command: request.command,
+        toolName: request.toolName,
+      };
+    case "file.list":
+      return {
+        path: request.path ?? ".",
+        toolName: request.toolName,
+      };
+    case "file.read":
+    case "file.write":
+      return {
+        path: request.path,
+        toolName: request.toolName,
+      };
+    case "git.diff":
+    case "git.status":
+      return {
+        toolName: request.toolName,
+      };
+    case "mcp.call":
+      return {
+        name: request.name,
+        server: request.server,
+        toolName: request.toolName,
+      };
   }
 }
 
