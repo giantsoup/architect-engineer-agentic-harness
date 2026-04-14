@@ -1,25 +1,31 @@
+import path from "node:path";
+import { readFile } from "node:fs/promises";
+
 import { Command, InvalidArgumentError } from "commander";
 
 import {
   createProjectCommandRunner,
+  executeEngineerTask,
   initializeRunDossier,
   loadHarnessConfig,
 } from "../../index.js";
 
 interface RunCommandOptions {
-  command: string;
+  command?: string;
   cwd?: string;
   env: string[];
   role: "architect" | "engineer";
+  task?: string;
+  taskFile?: string;
   timeoutMs?: number;
 }
 
 export function createRunCommand(): Command {
   return new Command("run")
-    .description(
-      "Execute a single configured command inside the project container",
-    )
-    .requiredOption("-c, --command <command>", "Shell command to execute")
+    .description("Execute a single configured command or an Engineer task run")
+    .option("-c, --command <command>", "Shell command to execute")
+    .option("--task <markdown>", "Engineer task brief markdown")
+    .option("--task-file <path>", "Read the Engineer task brief from a file")
     .option(
       "--cwd <directory>",
       "Working directory inside the project container",
@@ -38,9 +44,27 @@ export function createRunCommand(): Command {
     )
     .action(async (options: RunCommandOptions) => {
       const environment = parseEnvironmentEntries(options.env);
+      const runMode = await resolveRunMode(options);
       const loadedConfig = await loadHarnessConfig({
         projectRoot: process.cwd(),
       });
+
+      if (runMode.type === "engineer-task") {
+        const execution = await executeEngineerTask({
+          loadedConfig,
+          task: runMode.task,
+          ...(options.timeoutMs === undefined
+            ? {}
+            : { timeoutMs: options.timeoutMs }),
+        });
+
+        console.error(
+          `Run ${execution.result.status}: ${execution.result.summary}. Dossier: ${execution.dossier.paths.runDirRelativePath}`,
+        );
+        process.exitCode = execution.result.status === "success" ? 0 : 1;
+        return;
+      }
+
       const dossier = await initializeRunDossier(loadedConfig);
       const runner = createProjectCommandRunner({
         dossierPaths: dossier.paths,
@@ -51,7 +75,7 @@ export function createRunCommand(): Command {
         const result =
           options.role === "architect"
             ? await runner.executeArchitectCommand({
-                command: options.command,
+                command: runMode.command,
                 ...(options.cwd === undefined
                   ? {}
                   : { workingDirectory: options.cwd }),
@@ -63,7 +87,7 @@ export function createRunCommand(): Command {
                   : { environment }),
               })
             : await runner.executeEngineerCommand({
-                command: options.command,
+                command: runMode.command,
                 ...(options.cwd === undefined
                   ? {}
                   : { workingDirectory: options.cwd }),
@@ -131,4 +155,68 @@ function parseRole(value: string): "architect" | "engineer" {
   throw new InvalidArgumentError(
     "Expected `architect` or `engineer` for --role.",
   );
+}
+
+async function resolveRunMode(
+  options: RunCommandOptions,
+): Promise<
+  | { command: string; type: "single-command" }
+  | { task: string; type: "engineer-task" }
+> {
+  if (options.command !== undefined) {
+    if (options.task !== undefined || options.taskFile !== undefined) {
+      throw new InvalidArgumentError(
+        "Use either `--command` or `--task`/`--task-file`, not both.",
+      );
+    }
+
+    return {
+      command: options.command,
+      type: "single-command",
+    };
+  }
+
+  if (options.task !== undefined && options.taskFile !== undefined) {
+    throw new InvalidArgumentError(
+      "Use either `--task` or `--task-file`, not both.",
+    );
+  }
+
+  if (options.role !== "engineer") {
+    throw new InvalidArgumentError(
+      "Engineer task mode currently supports `--role engineer` only.",
+    );
+  }
+
+  if (options.task !== undefined) {
+    return {
+      task: options.task,
+      type: "engineer-task",
+    };
+  }
+
+  if (options.taskFile !== undefined) {
+    return {
+      task: await readTaskFile(options.taskFile),
+      type: "engineer-task",
+    };
+  }
+
+  throw new InvalidArgumentError(
+    "Provide `--command` for single-command mode or `--task`/`--task-file` for Engineer task mode.",
+  );
+}
+
+async function readTaskFile(taskFile: string): Promise<string> {
+  const absolutePath = path.resolve(process.cwd(), taskFile);
+
+  try {
+    return await readFile(absolutePath, "utf8");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    throw new InvalidArgumentError(
+      `Could not read task file \`${taskFile}\`: ${message}`,
+    );
+  }
 }

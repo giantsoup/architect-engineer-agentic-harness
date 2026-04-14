@@ -144,7 +144,7 @@ runsDir = ".agent-harness/runs"
 
 [stopConditions]
 maxIterations = 12
-maxEngineerAttempts = 3
+maxEngineerAttempts = 5
 requirePassingChecks = true
 `;
 }

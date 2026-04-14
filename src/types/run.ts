@@ -90,6 +90,29 @@ export interface CommandLogRecord {
   workingDirectory?: string;
 }
 
+export interface ToolCallErrorRecord {
+  code:
+    | "command-failed"
+    | "git-failed"
+    | "invalid-input"
+    | "invalid-state"
+    | "path-violation"
+    | "permission-denied";
+  message: string;
+  name: string;
+}
+
+export interface ToolCallRecord {
+  durationMs: number;
+  error?: ToolCallErrorRecord;
+  request: { [key: string]: JsonValue | undefined };
+  result?: { [key: string]: JsonValue | undefined };
+  role: "architect" | "engineer";
+  status: "completed" | "failed";
+  timestamp: string;
+  toolName: string;
+}
+
 export interface RunCheckResult {
   command?: string;
   durationMs?: number;

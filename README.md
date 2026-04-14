@@ -44,13 +44,16 @@ blueprint --help
 
 ## Current Status
 
-This package is not feature-complete yet. The current published surface is the Milestone 1 bootstrap slice:
+This package is still pre-v1, but the local execution path is now real:
 
 - `init` creates a repo-local config file
 - `init` creates the default artifact directory structure
 - `init` updates `.gitignore` to ignore verbose run artifacts safely
+- `run --command ...` executes a single configured command and writes a dossier entry
+- built-in tools support file reads, file writes, file listing, command execution, `git status`, and `git diff`
+- `run --task ...` and `run --task-file ...` execute the single-Engineer loop with dossier artifacts, final reports, and stop-condition enforcement
 
-Commands such as `run`, `status`, and `inspect` are still placeholders for later milestones.
+`status` and `inspect` are still placeholders for later milestones.
 
 ## Quick Start
 
@@ -68,6 +71,18 @@ blueprint init
 
 Then edit `agent-harness.toml` for the target project before running real tasks.
 
+Run a one-off configured command:
+
+```bash
+npx architect-engineer-agentic-harness run --command "npm test"
+```
+
+Run the single-Engineer execution slice with a markdown task brief:
+
+```bash
+npx architect-engineer-agentic-harness run --task-file task.md
+```
+
 Secrets should stay in environment variables. Use TOML values like `"${OPENAI_API_KEY}"` instead of storing raw secrets in the config file.
 
 Initial project planning documents:
@@ -77,14 +92,17 @@ Initial project planning documents:
 - [Bootstrap Architecture Notes](./docs/bootstrap-architecture.md)
 - [Prompt and Schema Versioning](./docs/prompt-schema-versioning.md)
 
-## Initial Focus
+## Current Focus
 
-The current implementation target is Milestone 1: Init Command and Config System:
+The current implementation covers Milestones 1-6:
 
 - repo-local `init` bootstrap flow
 - TOML config loading and validation
 - artifact directory creation
 - safe `.gitignore` updates
+- command execution against the configured project target
+- built-in tool execution with role-aware write permissions
+- single-Engineer task execution with dossier logging and final reports
 
 ## Notes
 

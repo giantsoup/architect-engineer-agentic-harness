@@ -30,7 +30,17 @@ export interface CreateProjectCommandRunnerOptions extends Omit<
   loadedConfig: LoadedHarnessConfig;
 }
 
-export class ProjectCommandRunner {
+export interface ProjectCommandRunnerLike {
+  close(reason?: string): void;
+  executeArchitectCommand(
+    request: CommandExecutionRequest,
+  ): Promise<ContainerCommandResult>;
+  executeEngineerCommand(
+    request: EngineerCommandExecutionRequest,
+  ): Promise<ContainerCommandResult>;
+}
+
+export class ProjectCommandRunner implements ProjectCommandRunnerLike {
   readonly #dossierPaths: RunDossierPaths | undefined;
   readonly #session: ContainerSession;
 

@@ -44,7 +44,7 @@ export const DEFAULT_HARNESS_CONFIG: HarnessConfig = {
   },
   stopConditions: {
     maxIterations: 12,
-    maxEngineerAttempts: 3,
+    maxEngineerAttempts: 5,
     requirePassingChecks: true,
   },
 };

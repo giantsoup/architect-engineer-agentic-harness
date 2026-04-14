@@ -68,6 +68,7 @@ runsDir = ${quoteTomlString(config.artifacts.runsDir)}
 
 [stopConditions]
 maxIterations = ${config.stopConditions.maxIterations}
+# During the single-Engineer execution slice, this acts as the consecutive failed-check threshold.
 maxEngineerAttempts = ${config.stopConditions.maxEngineerAttempts}
 requirePassingChecks = ${config.stopConditions.requirePassingChecks}
 `;

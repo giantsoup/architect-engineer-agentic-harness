@@ -10,6 +10,7 @@ import type {
   RunPromptReference,
   RunResult,
   StructuredMessageRecord,
+  ToolCallRecord,
 } from "../types/run.js";
 import {
   DEFAULT_PROMPT_VERSION,
@@ -208,6 +209,23 @@ export async function appendCommandLog(
   });
 }
 
+export async function appendToolCall(
+  paths: RunDossierPaths,
+  toolCall: ToolCallRecord,
+): Promise<RunManifest> {
+  return appendRunEvent(paths, {
+    durationMs: toolCall.durationMs,
+    error: toolCall.error,
+    request: toolCall.request,
+    result: toolCall.result,
+    role: toolCall.role,
+    status: toolCall.status,
+    timestamp: toolCall.timestamp,
+    toolName: toolCall.toolName,
+    type: "tool-call",
+  });
+}
+
 export async function writeArchitectPlan(
   paths: RunDossierPaths,
   markdown: string,
@@ -280,6 +298,17 @@ export async function writeRunResult(
   await writeJsonFile(paths.files.result.absolutePath, validatedResult);
   return updateRunManifest(paths, {
     status: validatedResult.status,
+    updatedAt: timestamp,
+  });
+}
+
+export async function writeRunLifecycleStatus(
+  paths: RunDossierPaths,
+  status: RunLifecycleStatus,
+  timestamp: string = new Date().toISOString(),
+): Promise<RunManifest> {
+  return updateRunManifest(paths, {
+    status,
     updatedAt: timestamp,
   });
 }

@@ -64,18 +64,20 @@ describe("CLI help", () => {
     });
   });
 
-  it("shows the run command help and required options", () => {
+  it("shows the run command help and validates the selected mode", () => {
     const helpResult = runCli(["run", "--help"]);
 
     expect(helpResult.status).toBe(0);
     expect(helpResult.stdout).toContain("--command <command>");
+    expect(helpResult.stdout).toContain("--task <markdown>");
+    expect(helpResult.stdout).toContain("--task-file <path>");
     expect(helpResult.stdout).toContain("--role <role>");
 
     const result = runCli(["run"]);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
-      "required option '-c, --command <command>'",
+      "Provide `--command` for single-command mode or `--task`/`--task-file` for Engineer task mode.",
     );
   });
 });

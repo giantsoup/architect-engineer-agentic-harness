@@ -33,6 +33,7 @@ export {
   appendModelEvent,
   appendRunEvent,
   appendStructuredMessage,
+  appendToolCall,
   initializeRunDossier,
   readRunManifest,
   RunDossierError,
@@ -43,8 +44,18 @@ export {
   writeEngineerTask,
   writeFailureNotes,
   writeFinalReport,
+  writeRunLifecycleStatus,
   writeRunResult,
 } from "./runtime/run-dossier.js";
+export {
+  BuiltInToolCommandError,
+  BuiltInToolError,
+  BuiltInToolGitError,
+  BuiltInToolInputError,
+  BuiltInToolPathError,
+  BuiltInToolPermissionError,
+  BuiltInToolStateError,
+} from "./tools/errors.js";
 export {
   buildDockerExecArgs,
   ContainerCommandCancelledError,
@@ -57,6 +68,10 @@ export {
   createDockerContainerSession,
 } from "./sandbox/container-session.js";
 export {
+  createBuiltInToolExecutor,
+  BuiltInToolExecutor,
+} from "./tools/built-in-tools.js";
+export {
   createProjectCommandRunner,
   ProjectCommandRunner,
 } from "./sandbox/command-runner.js";
@@ -65,10 +80,33 @@ export {
   validateRunResult,
 } from "./runtime/run-result.js";
 export type { HarnessConfig, LoadedHarnessConfig } from "./types/config.js";
+export type { CreateBuiltInToolExecutorOptions } from "./tools/built-in-tools.js";
+export type {
+  BuiltInToolExecutionContext,
+  BuiltInToolName,
+  BuiltInToolRequest,
+  BuiltInToolResult,
+  CommandExecutionToolRequest,
+  CommandExecutionToolResult,
+  FileListEntry,
+  FileListToolRequest,
+  FileListToolResult,
+  FileReadToolRequest,
+  FileReadToolResult,
+  FileWriteToolRequest,
+  FileWriteToolResult,
+  GitDiffToolRequest,
+  GitDiffToolResult,
+  GitStatusBranchSummary,
+  GitStatusEntry,
+  GitStatusToolRequest,
+  GitStatusToolResult,
+} from "./tools/types.js";
 export type {
   CommandExecutionRequest,
   CreateProjectCommandRunnerOptions,
   EngineerCommandExecutionRequest,
+  ProjectCommandRunnerLike,
 } from "./sandbox/command-runner.js";
 export type {
   ContainerCommandAccessMode,
@@ -91,12 +129,19 @@ export {
   redactModelHeaders,
 } from "./models/dossier-logger.js";
 export {
+  createEngineerStructuredOutputFormat,
+  EngineerControlOutputValidationError,
+  loadEngineerControlSchema,
+  validateEngineerControlOutput,
+} from "./models/engineer-output.js";
+export {
   DEFAULT_MODEL_MAX_RETRIES,
   DEFAULT_MODEL_TIMEOUT_MS,
   createRoleModelClient,
   normalizeOpenAiCompatibleBaseUrl,
   resolveModelConfigForRole,
 } from "./models/provider-factory.js";
+export { executeEngineerTask } from "./runtime/engineer-task.js";
 export {
   ModelClientConfigError,
   ModelClientError,
@@ -123,7 +168,14 @@ export type {
   RunResult,
   RunSchemaReference,
   StructuredMessageRecord,
+  ToolCallErrorRecord,
+  ToolCallRecord,
 } from "./types/run.js";
+export type {
+  EngineerAction,
+  EngineerFinalAction,
+  EngineerToolAction,
+} from "./models/engineer-output.js";
 export type {
   ArchitectPlanOutput,
   ArchitectReview,
@@ -146,3 +198,8 @@ export type {
   ResolvedModelConfig,
   SupportedModelProvider,
 } from "./models/types.js";
+export type {
+  EngineerTaskExecution,
+  EngineerTaskModelClient,
+  ExecuteEngineerTaskOptions,
+} from "./runtime/engineer-task.js";

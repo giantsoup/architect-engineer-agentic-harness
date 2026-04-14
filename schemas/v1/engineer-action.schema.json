@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/giantsoup/architect-engineer-agentic-harness/schemas/v1/engineer-action.schema.json",
+  "title": "Engineer Action",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request", "summary", "type"],
+      "properties": {
+        "request": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["path", "toolName"],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "toolName": {
+                  "const": "file.read"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["content", "path", "toolName"],
+              "properties": {
+                "content": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "toolName": {
+                  "const": "file.write"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["toolName"],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "toolName": {
+                  "const": "file.list"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["command", "toolName"],
+              "properties": {
+                "accessMode": {
+                  "enum": ["inspect", "mutate"]
+                },
+                "command": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "environment": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": ["boolean", "number", "string"]
+                  }
+                },
+                "timeoutMs": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "toolName": {
+                  "const": "command.execute"
+                },
+                "workingDirectory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["toolName"],
+              "properties": {
+                "toolName": {
+                  "const": "git.status"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["toolName"],
+              "properties": {
+                "staged": {
+                  "type": "boolean"
+                },
+                "toolName": {
+                  "const": "git.diff"
+                }
+              }
+            }
+          ]
+        },
+        "stopWhenSuccessful": {
+          "type": "boolean"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "const": "tool"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outcome", "summary", "type"],
+      "properties": {
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "outcome": {
+          "enum": ["blocked", "complete"]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "const": "final"
+        }
+      }
+    }
+  ]
+}
