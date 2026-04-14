@@ -125,12 +125,25 @@ export class ModelStructuredOutputError extends ModelClientError {
     options: {
       cause?: unknown;
       issues?: readonly string[] | undefined;
+      retryable?: boolean;
       schemaName?: string | undefined;
     } = {},
   ) {
-    super("invalid-structured-output", message, {
+    const baseOptions: {
+      cause?: unknown;
+      issues?: readonly string[] | undefined;
+      retryable?: boolean;
+    } = {
       cause: options.cause,
       issues: options.issues,
+    };
+
+    if (options.retryable !== undefined) {
+      baseOptions.retryable = options.retryable;
+    }
+
+    super("invalid-structured-output", message, {
+      ...baseOptions,
     });
 
     this.schemaName = options.schemaName;
@@ -446,6 +459,12 @@ export class OpenAiCompatibleChatClient {
           ? ((lastValidationError as { schemaPath?: string }).schemaPath ??
               undefined)
           : undefined;
+      const retryable = isRetryableStructuredOutputFailure({
+        candidateCount: candidateJsonSnippets.length,
+        formatName: structuredOutput.formatName,
+        issues,
+        rawContent,
+      });
 
       throw new ModelStructuredOutputError(
         schemaPath === undefined
@@ -454,15 +473,23 @@ export class OpenAiCompatibleChatClient {
         {
           cause: lastValidationError,
           issues,
+          retryable,
           schemaName: structuredOutput.formatName,
         },
       );
     }
 
+    const retryable = isRetryableStructuredOutputFailure({
+      candidateCount: candidateJsonSnippets.length,
+      formatName: structuredOutput.formatName,
+      rawContent,
+    });
+
     throw new ModelStructuredOutputError(
       `Expected valid JSON for structured output from ${this.describeTarget()}, but the response could not be parsed.`,
       {
         cause: lastParseError,
+        retryable,
         schemaName: structuredOutput.formatName,
       },
     );
@@ -749,11 +776,19 @@ function collectStructuredOutputCandidates(rawContent: string): string[] {
   const fencedJson = extractJsonCodeFence(trimmedContent);
   addCandidate(fencedJson);
 
+  for (const candidate of extractLikelyStructuredObjectCandidates(trimmedContent)) {
+    addCandidate(candidate);
+  }
+
   for (const candidate of extractTopLevelJsonCandidates(trimmedContent)) {
     addCandidate(candidate);
   }
 
   if (fencedJson !== undefined) {
+    for (const candidate of extractLikelyStructuredObjectCandidates(fencedJson)) {
+      addCandidate(candidate);
+    }
+
     for (const candidate of extractTopLevelJsonCandidates(fencedJson)) {
       addCandidate(candidate);
     }
@@ -780,6 +815,30 @@ function extractTopLevelJsonCandidates(rawContent: string): string[] {
 
     candidates.push(rawContent.slice(index, endIndex + 1));
     index = endIndex;
+  }
+
+  return candidates;
+}
+
+function extractLikelyStructuredObjectCandidates(rawContent: string): string[] {
+  const candidates: string[] = [];
+  const anchorPattern =
+    /\{\s*"type"\s*:|\{\s*"summary"\s*:|\{\s*"request"\s*:|\{\s*"outcome"\s*:/gu;
+
+  for (const match of rawContent.matchAll(anchorPattern)) {
+    const startIndex = match.index;
+
+    if (startIndex === undefined) {
+      continue;
+    }
+
+    const endIndex = findBalancedJsonEnd(rawContent, startIndex);
+
+    if (endIndex === undefined) {
+      continue;
+    }
+
+    candidates.push(rawContent.slice(startIndex, endIndex + 1));
   }
 
   return candidates;
@@ -841,6 +900,31 @@ function findBalancedJsonEnd(
   }
 
   return undefined;
+}
+
+function isRetryableStructuredOutputFailure(options: {
+  candidateCount: number;
+  formatName: string;
+  issues?: readonly string[] | undefined;
+  rawContent: string;
+}): boolean {
+  if (options.formatName !== "engineer_action") {
+    return false;
+  }
+
+  if (
+    options.rawContent.includes("{") ||
+    options.rawContent.includes("[") ||
+    options.rawContent.includes("```")
+  ) {
+    return true;
+  }
+
+  if ((options.issues?.length ?? 0) > 0 && options.candidateCount > 0) {
+    return true;
+  }
+
+  return false;
 }
 
 function renderStructuredOutputFallbackInstruction<TStructured>(

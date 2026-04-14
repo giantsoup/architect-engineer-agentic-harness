@@ -971,6 +971,150 @@ describe("OpenAiCompatibleChatClient", () => {
     expect(seenBodies[1]?.response_format).toBeUndefined();
   });
 
+  it("accepts prose-wrapped Engineer JSON during local validation fallback", async () => {
+    const mockServer = await startMockServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: [
+                  "The proposed change is acceptable, but tests have not run yet.",
+                  "- Run npm run test and confirm it passes.",
+                  "",
+                  "Let's proceed with the engineer task.",
+                  '{"request":{"command":"npm run test","toolName":"command.execute","accessMode":"mutate"},"summary":"Run npm run test and confirm it passes.","type":"tool","stopWhenSuccessful":true}',
+                ].join("\n"),
+                role: "assistant",
+              },
+            },
+          ],
+          id: "chatcmpl-engineer-prose-wrapped",
+        }),
+      );
+    });
+    servers.push(mockServer);
+
+    const { loadedConfig, projectRoot } = await createLoadedConfig(
+      renderConfig({
+        architectBaseUrl: `${mockServer.url}/remote/v1`,
+        engineerBaseUrl: `${mockServer.url}/local/v1`,
+      }),
+    );
+    projectRoots.push(projectRoot);
+
+    const client = new OpenAiCompatibleChatClient({
+      config: resolveModelConfigForRole(loadedConfig, "engineer"),
+      retryDelayMs: 0,
+    });
+
+    const response = await client.chat({
+      messages: [{ content: "Return an engineer action.", role: "user" }],
+      structuredOutput: await createEngineerStructuredOutputFormat(),
+    });
+
+    expect(response.structuredOutput).toEqual({
+      request: {
+        accessMode: "mutate",
+        command: "npm run test",
+        toolName: "command.execute",
+      },
+      stopWhenSuccessful: true,
+      summary: "Run npm run test and confirm it passes.",
+      type: "tool",
+    });
+  });
+
+  it("retries retryable invalid Engineer structured output and succeeds on a clean follow-up", async () => {
+    let attempts = 0;
+    const mockServer = await startMockServer((_request, response) => {
+      attempts += 1;
+
+      response.writeHead(200, { "content-type": "application/json" });
+
+      if (attempts === 1) {
+        response.end(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    request: {
+                      path: "src/cli/program.ts",
+                      toolName: "git.status",
+                    },
+                    summary:
+                      "Inspect src/cli/program.ts to identify a small wording or DX improvement.",
+                    type: "tool",
+                  }),
+                  role: "assistant",
+                },
+              },
+            ],
+            id: "chatcmpl-engineer-invalid-first",
+          }),
+        );
+        return;
+      }
+
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  request: {
+                    accessMode: "mutate",
+                    command: "npm run test",
+                    toolName: "command.execute",
+                  },
+                  summary: "Run npm run test and confirm it passes.",
+                  stopWhenSuccessful: true,
+                  type: "tool",
+                }),
+                role: "assistant",
+              },
+            },
+          ],
+          id: "chatcmpl-engineer-valid-second",
+        }),
+      );
+    });
+    servers.push(mockServer);
+
+    const { loadedConfig, projectRoot } = await createLoadedConfig(
+      renderConfig({
+        architectBaseUrl: `${mockServer.url}/remote/v1`,
+        engineerBaseUrl: `${mockServer.url}/local/v1`,
+        engineerMaxRetries: 1,
+      }),
+    );
+    projectRoots.push(projectRoot);
+
+    const client = new OpenAiCompatibleChatClient({
+      config: resolveModelConfigForRole(loadedConfig, "engineer"),
+      retryDelayMs: 0,
+    });
+
+    const response = await client.chat({
+      messages: [{ content: "Return an engineer action.", role: "user" }],
+      structuredOutput: await createEngineerStructuredOutputFormat(),
+    });
+
+    expect(response.structuredOutput).toEqual({
+      request: {
+        accessMode: "mutate",
+        command: "npm run test",
+        toolName: "command.execute",
+      },
+      stopWhenSuccessful: true,
+      summary: "Run npm run test and confirm it passes.",
+      type: "tool",
+    });
+    expect(attempts).toBe(2);
+  });
+
   it("classifies malformed successful provider payloads as invalid responses", async () => {
     const mockServer = await startMockServer((_request, response) => {
       response.writeHead(200, { "content-type": "application/json" });
