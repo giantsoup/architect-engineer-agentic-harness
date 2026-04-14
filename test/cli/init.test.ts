@@ -44,7 +44,16 @@ describe("CLI init", () => {
 
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("Setup Complete");
+      expect(result.stdout).toContain("____  _");
       expect(result.stdout).toContain("created agent-harness.toml");
+      expect(result.stdout).toContain("Files");
+      expect(result.stdout).toContain("Detected defaults");
+      expect(result.stdout).toContain("Next steps");
+      expect(result.stdout).toContain("Execution target: host");
+      expect(result.stdout).toContain(
+        'Smoke test the command path with `blueprint run --command "npm test"`.',
+      );
       expect(
         readFileSync(path.join(projectRoot, "agent-harness.toml"), "utf8"),
       ).toContain("[models.architect]");
@@ -87,14 +96,20 @@ describe("CLI init", () => {
       );
 
       expect(secondRun.status).toBe(0);
+      expect(secondRun.stdout).toContain("Setup Complete");
       expect(secondRun.stdout).toContain(
         "preserved existing agent-harness.toml",
       );
+      expect(secondRun.stdout).toContain("Next steps");
       expect(readFileSync(configPath, "utf8")).toContain(
         'executionTarget = "docker"',
       );
       expect(readFileSync(configPath, "utf8")).toContain(
         'containerName = "web"',
+      );
+      expect(secondRun.stdout).toContain("Execution target: docker");
+      expect(secondRun.stdout).toContain(
+        "Make sure the configured project container is already running before `blueprint run`.",
       );
       expect(gitignoreContents.match(/\/\.agent-harness\//gu)).toHaveLength(1);
     } finally {
@@ -182,6 +197,9 @@ requirePassingChecks = true
 
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("already contains /.agent-harness/");
+      expect(result.stdout).toContain(
+        "Keeps generated harness artifacts out of version control.",
+      );
       expect(gitignoreContents).toBe(".agent-harness/\n");
     } finally {
       rmSync(projectRoot, { recursive: true, force: true });

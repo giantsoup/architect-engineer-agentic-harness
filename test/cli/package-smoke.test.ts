@@ -53,7 +53,9 @@ describe.sequential("packaged CLI smoke", () => {
       const initResult = runBuiltCli(["init"], projectRoot);
 
       expect(initResult.status).toBe(0);
+      expect(initResult.stdout).toContain("Setup Complete");
       expect(initResult.stdout).toContain("created agent-harness.toml");
+      expect(initResult.stdout).toContain("Next steps");
       expect(
         readFileSync(path.join(projectRoot, "agent-harness.toml"), "utf8"),
       ).toContain('executionTarget = "host"');
@@ -188,7 +190,9 @@ describe.sequential("packaged CLI smoke", () => {
         env,
       });
       expect(initResult.status).toBe(0);
+      expect(initResult.stdout).toContain("Setup Complete");
       expect(initResult.stdout).toContain("created agent-harness.toml");
+      expect(initResult.stdout).toContain("Files");
       expect(
         readFileSync(path.join(projectRoot, "agent-harness.toml"), "utf8"),
       ).toContain('executionTarget = "host"');

@@ -15,6 +15,7 @@ import { renderHarnessConfigTemplate } from "./template.js";
 export interface InitializeProjectResult {
   projectRoot: string;
   configPath: string;
+  config: HarnessConfig;
   configAction: "created" | "preserved";
   artifactRootDir: string;
   artifactRootAction: "created" | "existing";
@@ -71,6 +72,7 @@ export async function initializeProject(
   return {
     projectRoot: resolvedProjectRoot,
     configPath,
+    config,
     configAction,
     artifactRootDir: config.artifacts.rootDir,
     artifactRootAction,
@@ -86,14 +88,50 @@ export function formatInitializeProjectSummary(
   result: InitializeProjectResult,
 ): string {
   const gitignoreEntry = toGitignoreEntry(result.artifactRootDir);
+  const configFileName = path.basename(result.configPath);
+  const resolvedCommands = [
+    ["install", getResolvedProjectCommand(result.resolvedProject, "install")],
+    ["test", getResolvedProjectCommand(result.resolvedProject, "test")],
+    ["lint", getResolvedProjectCommand(result.resolvedProject, "lint")],
+    [
+      "typecheck",
+      getResolvedProjectCommand(result.resolvedProject, "typecheck"),
+    ],
+    ["build", getResolvedProjectCommand(result.resolvedProject, "build")],
+    ["format", getResolvedProjectCommand(result.resolvedProject, "format")],
+  ].filter((entry): entry is [string, string] => entry[1] !== undefined);
 
   return [
+    ...renderInitWelcomeBanner(),
+    "",
     `Initialized architect-engineer-agentic-harness in ${result.projectRoot}`,
-    `- Config: ${describeConfigAction(result.configAction, path.basename(result.configPath))}`,
-    `- Artifact root: ${describeDirectoryAction(result.artifactRootAction, result.artifactRootDir)}`,
-    `- Runs directory: ${describeDirectoryAction(result.runsDirAction, result.runsDir)}`,
+    "",
+    "Files",
+    `- ${describeConfigAction(result.configAction, configFileName)}`,
+    `  Main repo-local config for model endpoints, execution mode, project commands, MCP allowlist, and stop conditions.`,
+    `- ${describeDirectoryAction(result.artifactRootAction, result.artifactRootDir)}`,
+    "  Artifact root for harness output such as run manifests, logs, and summaries.",
+    `- ${describeDirectoryAction(result.runsDirAction, result.runsDir)}`,
+    "  Per-run dossiers are written here.",
     `- .gitignore: ${describeGitignoreAction(result.gitignoreAction, gitignoreEntry)}`,
+    "  Keeps generated harness artifacts out of version control.",
+    "",
+    "Detected defaults",
     `- Project adapter: ${formatProjectAdapter(result.resolvedProject)}`,
+    `- Execution target: ${result.config.project.executionTarget}`,
+    `- Sandbox mode: ${result.config.sandbox.mode}`,
+    `- MCP allowlist: ${formatMcpAllowlist(result.config.mcp.allowlist)}`,
+    ...(resolvedCommands.length === 0
+      ? ["- Commands: none detected automatically"]
+      : [
+          "- Commands:",
+          ...resolvedCommands.map(
+            ([name, command]) => `  ${name}: ${command}`,
+          ),
+        ]),
+    "",
+    "Next steps",
+    ...formatNextSteps(result, configFileName),
   ].join("\n");
 }
 
@@ -314,6 +352,55 @@ function formatProjectAdapter(resolvedProject: ResolvedProjectContext): string {
   }
 
   return `${resolvedProject.adapter.label} (${resolvedProject.adapter.markers.join(", ")})`;
+}
+
+function formatMcpAllowlist(allowlist: readonly string[]): string {
+  return allowlist.length === 0 ? "empty" : allowlist.join(", ");
+}
+
+function renderInitWelcomeBanner(): string[] {
+  return [
+    "+------------------------------------------------------+",
+    "|                                                      |",
+    "|  ____  _                 _       _       _           |",
+    "| | __ )| |_   _  ___ _ __(_)_ __ | |_    (_)_ __      |",
+    "| |  _ \\| | | | |/ _ \\ '__| | '_ \\| __|   | | '_ \\     |",
+    "| | |_) | | |_| |  __/ |  | | |_) | |_ _  | | | | |    |",
+    "| |____/|_|\\__,_|\\___|_|  |_| .__/ \\__(_) |_|_| |_|    |",
+    "|                           |_|                        |",
+    "|                                                      |",
+    "|               Setup Complete                         |",
+    "|                                                      |",
+    "+------------------------------------------------------+",
+  ];
+}
+
+function formatNextSteps(
+  result: InitializeProjectResult,
+  configFileName: string,
+): string[] {
+  const configPrefix =
+    result.configAction === "created"
+      ? `Open ${configFileName} and replace the example`
+      : `Review ${configFileName} and confirm the`;
+  const steps = [
+    `1. ${configPrefix} \`models.architect\` values for your real Architect endpoint.`,
+    `2. ${configPrefix} \`models.engineer\` values for your real Engineer endpoint.`,
+    `3. Review the detected commands under \`[commands]\` and adjust any repo-specific overrides.`,
+    "4. Optional: add allowlisted MCP servers under `[mcp]` before task runs.",
+  ];
+
+  if (result.config.project.executionTarget === "docker") {
+    steps.push(
+      "5. Make sure the configured project container is already running before `blueprint run`.",
+    );
+  } else {
+    steps.push(
+      '5. Smoke test the command path with `blueprint run --command "npm test"`.',
+    );
+  }
+
+  return steps;
 }
 
 async function pathExists(targetPath: string): Promise<boolean> {
