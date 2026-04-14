@@ -347,6 +347,18 @@ function createRunManifest(options: {
     runsDir: paths.runsDirRelativePath,
     schemaVersion,
     schemas: {
+      architectPlan: {
+        id: "architect-plan",
+        sourcePath: `schemas/${schemaVersion}/architect-plan.schema.json`,
+        sourceRoot: "package",
+        version: schemaVersion,
+      },
+      architectReview: {
+        id: "architect-review",
+        sourcePath: `schemas/${schemaVersion}/architect-review.schema.json`,
+        sourceRoot: "package",
+        version: schemaVersion,
+      },
       runResult: {
         id: "run-result",
         sourcePath: `schemas/${schemaVersion}/run-result.schema.json`,

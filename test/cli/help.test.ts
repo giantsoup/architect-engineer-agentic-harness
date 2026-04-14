@@ -77,7 +77,7 @@ describe("CLI help", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
-      "Provide `--command` for single-command mode or `--task`/`--task-file` for Engineer task mode.",
+      "Provide `--command` for single-command mode or `--task`/`--task-file` for Architect-Engineer task mode.",
     );
   });
 });

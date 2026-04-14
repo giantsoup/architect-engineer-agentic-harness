@@ -5,7 +5,7 @@ import { Command, InvalidArgumentError } from "commander";
 
 import {
   createProjectCommandRunner,
-  executeEngineerTask,
+  executeArchitectEngineerRun,
   initializeRunDossier,
   loadHarnessConfig,
 } from "../../index.js";
@@ -22,7 +22,9 @@ interface RunCommandOptions {
 
 export function createRunCommand(): Command {
   return new Command("run")
-    .description("Execute a single configured command or an Engineer task run")
+    .description(
+      "Execute a single configured command or an Architect-Engineer task run",
+    )
     .option("-c, --command <command>", "Shell command to execute")
     .option("--task <markdown>", "Engineer task brief markdown")
     .option("--task-file <path>", "Read the Engineer task brief from a file")
@@ -50,7 +52,7 @@ export function createRunCommand(): Command {
       });
 
       if (runMode.type === "engineer-task") {
-        const execution = await executeEngineerTask({
+        const execution = await executeArchitectEngineerRun({
           loadedConfig,
           task: runMode.task,
           ...(options.timeoutMs === undefined
@@ -182,12 +184,6 @@ async function resolveRunMode(
     );
   }
 
-  if (options.role !== "engineer") {
-    throw new InvalidArgumentError(
-      "Engineer task mode currently supports `--role engineer` only.",
-    );
-  }
-
   if (options.task !== undefined) {
     return {
       task: options.task,
@@ -203,7 +199,7 @@ async function resolveRunMode(
   }
 
   throw new InvalidArgumentError(
-    "Provide `--command` for single-command mode or `--task`/`--task-file` for Engineer task mode.",
+    "Provide `--command` for single-command mode or `--task`/`--task-file` for Architect-Engineer task mode.",
   );
 }
 

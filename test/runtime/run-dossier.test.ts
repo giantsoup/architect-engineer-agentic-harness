@@ -118,6 +118,18 @@ describe("run dossier", () => {
         sourceRoot: "package",
         version: "v1",
       });
+      expect(manifest.schemas.architectPlan).toEqual({
+        id: "architect-plan",
+        sourcePath: "schemas/v1/architect-plan.schema.json",
+        sourceRoot: "package",
+        version: "v1",
+      });
+      expect(manifest.schemas.architectReview).toEqual({
+        id: "architect-review",
+        sourcePath: "schemas/v1/architect-review.schema.json",
+        sourceRoot: "package",
+        version: "v1",
+      });
       expect(manifest.prompts.map((prompt) => prompt.sourcePath)).toEqual([
         "prompts/v1/architect/system.md",
         "prompts/v1/architect/planning.md",

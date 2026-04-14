@@ -60,6 +60,8 @@ export interface RunManifest {
   runsDir: string;
   schemaVersion: string;
   schemas: {
+    architectPlan: RunSchemaReference;
+    architectReview: RunSchemaReference;
     runResult: RunSchemaReference;
   };
   status: RunLifecycleStatus;

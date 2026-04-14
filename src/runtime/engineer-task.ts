@@ -37,7 +37,7 @@ import {
 
 const DEFAULT_RUN_TIMEOUT_MS = 60 * 60 * 1000;
 
-type EngineerTaskStopReason =
+export type EngineerTaskStopReason =
   | "blocked"
   | "engineer-complete"
   | "max-consecutive-failed-checks"
@@ -54,11 +54,15 @@ export interface EngineerTaskModelClient {
 
 export interface ExecuteEngineerTaskOptions {
   createdAt?: Date;
+  dossier?: RunDossier;
+  initialChecks?: readonly RunCheckResult[];
+  initialConsecutiveFailedChecks?: number;
   loadedConfig: LoadedHarnessConfig;
   maxConsecutiveFailedChecks?: number;
   maxIterations?: number;
   modelClient?: EngineerTaskModelClient;
   now?: () => Date;
+  persistFinalArtifacts?: boolean;
   projectCommandRunner?: ProjectCommandRunnerLike;
   runId?: string;
   runProcess?: RunProcess;
@@ -67,8 +71,10 @@ export interface ExecuteEngineerTaskOptions {
 }
 
 export interface EngineerTaskExecution {
+  checks: RunCheckResult[];
   consecutiveFailedChecks: number;
   dossier: RunDossier;
+  failureNotes?: string | undefined;
   iterationCount: number;
   result: RunResult;
   stopReason: EngineerTaskStopReason;
@@ -91,12 +97,14 @@ export async function executeEngineerTask(
   options: ExecuteEngineerTaskOptions,
 ): Promise<EngineerTaskExecution> {
   const now = options.now ?? (() => new Date());
-  const dossier = await initializeRunDossier(options.loadedConfig, {
-    ...(options.createdAt === undefined
-      ? {}
-      : { createdAt: options.createdAt }),
-    ...(options.runId === undefined ? {} : { runId: options.runId }),
-  });
+  const dossier =
+    options.dossier ??
+    (await initializeRunDossier(options.loadedConfig, {
+      ...(options.createdAt === undefined
+        ? {}
+        : { createdAt: options.createdAt }),
+      ...(options.runId === undefined ? {} : { runId: options.runId }),
+    }));
   const taskBrief = renderEngineerTaskBrief({
     loadedConfig: options.loadedConfig,
     maxConsecutiveFailedChecks:
@@ -191,11 +199,15 @@ export async function executeEngineerTask(
         role: "user",
       },
     ];
-    const checks: RunCheckResult[] = [];
-    let consecutiveFailedChecks = 0;
+    const checks: RunCheckResult[] = [...(options.initialChecks ?? [])];
+    let consecutiveFailedChecks = options.initialConsecutiveFailedChecks ?? 0;
     let hasPassingCheck = !requirePassingChecks;
     let iterationCount = 0;
     let outcome: FinalizedOutcome | undefined;
+
+    if (requirePassingChecks) {
+      hasPassingCheck = checks.some((check) => check.status === "passed");
+    }
 
     while (iterationCount < maxIterations) {
       const iterationTimestamp = now().toISOString();
@@ -383,6 +395,7 @@ export async function executeEngineerTask(
       iterationCount,
       now,
       outcome,
+      persistFinalArtifacts: options.persistFinalArtifacts ?? true,
       requiredCheckCommand,
       requirePassingChecks,
       task: options.task,
@@ -400,6 +413,7 @@ async function finalizeEngineerRun(options: {
   iterationCount: number;
   now: () => Date;
   outcome: FinalizedOutcome;
+  persistFinalArtifacts: boolean;
   requiredCheckCommand: string;
   requirePassingChecks: boolean;
   task: string;
@@ -409,6 +423,7 @@ async function finalizeEngineerRun(options: {
   const workspaceArtifacts = await collectWorkspaceArtifacts(
     options.toolExecutor,
   );
+  let failureNotesMarkdown: string | undefined;
 
   if (workspaceArtifacts.diff !== undefined) {
     await writeDiff(
@@ -419,34 +434,37 @@ async function finalizeEngineerRun(options: {
   }
 
   if (options.outcome.status !== "success") {
+    failureNotesMarkdown = renderFailureNotes({
+      blockedNotes: options.outcome.blockedNotes,
+      checks: options.checks,
+      summary: options.outcome.summary,
+    });
     await writeFailureNotes(
       options.dossier.paths,
-      renderFailureNotes({
-        blockedNotes: options.outcome.blockedNotes,
-        checks: options.checks,
-        summary: options.outcome.summary,
-      }),
+      failureNotesMarkdown,
       finalizedAt,
     );
   }
 
-  const finalReport = renderFinalReport({
-    checks: options.checks,
-    diffPath: options.dossier.paths.files.diff.relativePath,
-    failureNotesPath:
-      options.outcome.status === "success"
-        ? undefined
-        : options.dossier.paths.files.failureNotes.relativePath,
-    gitStatus: workspaceArtifacts.status,
-    outcome: options.outcome,
-    requiredCheckCommand: options.requiredCheckCommand,
-    requirePassingChecks: options.requirePassingChecks,
-    runDir: options.dossier.paths.runDirRelativePath,
-    task: options.task,
-    workspaceNotes: workspaceArtifacts.notes,
-  });
+  if (options.persistFinalArtifacts) {
+    const finalReport = renderFinalReport({
+      checks: options.checks,
+      diffPath: options.dossier.paths.files.diff.relativePath,
+      failureNotesPath:
+        options.outcome.status === "success"
+          ? undefined
+          : options.dossier.paths.files.failureNotes.relativePath,
+      gitStatus: workspaceArtifacts.status,
+      outcome: options.outcome,
+      requiredCheckCommand: options.requiredCheckCommand,
+      requirePassingChecks: options.requirePassingChecks,
+      runDir: options.dossier.paths.runDirRelativePath,
+      task: options.task,
+      workspaceNotes: workspaceArtifacts.notes,
+    });
 
-  await writeFinalReport(options.dossier.paths, finalReport, finalizedAt);
+    await writeFinalReport(options.dossier.paths, finalReport, finalizedAt);
+  }
 
   if (workspaceArtifacts.notes.length > 0) {
     await appendRunEvent(options.dossier.paths, {
@@ -463,12 +481,15 @@ async function finalizeEngineerRun(options: {
     options.dossier.paths.files.engineerTask.relativePath,
     options.dossier.paths.files.checks.relativePath,
     options.dossier.paths.files.diff.relativePath,
-    options.dossier.paths.files.finalReport.relativePath,
-    options.dossier.paths.files.result.relativePath,
   ];
 
   if (options.outcome.status !== "success") {
     resultArtifacts.push(options.dossier.paths.files.failureNotes.relativePath);
+  }
+
+  if (options.persistFinalArtifacts) {
+    resultArtifacts.push(options.dossier.paths.files.finalReport.relativePath);
+    resultArtifacts.push(options.dossier.paths.files.result.relativePath);
   }
 
   const result: RunResult = {
@@ -484,11 +505,16 @@ async function finalizeEngineerRun(options: {
     timestamp: finalizedAt,
     type: "engineer-run-finished",
   });
-  await writeRunResult(options.dossier.paths, result, finalizedAt);
+
+  if (options.persistFinalArtifacts) {
+    await writeRunResult(options.dossier.paths, result, finalizedAt);
+  }
 
   return {
+    checks: [...options.checks],
     consecutiveFailedChecks: options.consecutiveFailedChecks,
     dossier: options.dossier,
+    failureNotes: failureNotesMarkdown,
     iterationCount: options.iterationCount,
     result,
     stopReason: options.outcome.stopReason,
@@ -778,7 +804,7 @@ function renderEngineerTaskBrief(options: {
     "",
     "## Stop Conditions",
     "",
-    `- Max iterations: ${options.maxIterations}`,
+    `- Max iterations: ${formatIterationLimit(options.maxIterations)}`,
     `- Timeout: ${options.timeoutMs}ms`,
     `- Consecutive failed required checks allowed: ${options.maxConsecutiveFailedChecks}`,
     `- Passing checks required: ${options.loadedConfig.config.stopConditions.requirePassingChecks ? "yes" : "no"}`,
@@ -803,10 +829,14 @@ function renderEngineerProtocol(options: {
     `- Use \`type: "tool"\` to request exactly one built-in tool.`,
     `- Use \`type: "final"\` only when the task is complete or blocked.`,
     `- Set \`stopWhenSuccessful: true\` only when running the required check \`${options.requiredCheckCommand}\` and the run should end immediately if it passes.`,
-    `- The harness stops after ${options.maxIterations} Engineer iterations, ${options.timeoutMs}ms, or ${options.maxConsecutiveFailedChecks} consecutive failed required checks.`,
+    `- The harness stops after ${formatIterationLimit(options.maxIterations)} Engineer iterations, ${options.timeoutMs}ms, or ${options.maxConsecutiveFailedChecks} consecutive failed required checks.`,
     `- Passing checks required: ${options.requirePassingChecks ? "yes" : "no"}.`,
     "- Keep tool use explicit and auditable.",
   ].join("\n");
+}
+
+function formatIterationLimit(maxIterations: number): string {
+  return Number.isFinite(maxIterations) ? `${maxIterations}` : "no fixed limit";
 }
 
 function renderBuiltInToolsMarkdown(): string {

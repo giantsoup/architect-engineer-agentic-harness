@@ -142,6 +142,7 @@ export {
   resolveModelConfigForRole,
 } from "./models/provider-factory.js";
 export { executeEngineerTask } from "./runtime/engineer-task.js";
+export { executeArchitectEngineerRun } from "./runtime/architect-engineer-run.js";
 export {
   ModelClientConfigError,
   ModelClientError,
@@ -153,6 +154,17 @@ export {
   OpenAiCompatibleChatClient,
   UnsupportedModelProviderError,
 } from "./models/openai-compatible-client.js";
+export type {
+  ArchitectEngineerFailureNote,
+  ArchitectEngineerFinalOutcome,
+  ArchitectEngineerRunMetadata,
+  ArchitectEngineerState,
+  ArchitectEngineerStopConditionState,
+  ArchitectEngineerStopReason,
+  ArchitectEngineerExecutionSnapshot,
+  ArchitectEngineerIterationState,
+  ArchitectEngineerNodeName,
+} from "./runtime/architect-engineer-state.js";
 export type {
   CommandLogRecord,
   DossierArtifactKind,
@@ -200,6 +212,12 @@ export type {
 } from "./models/types.js";
 export type {
   EngineerTaskExecution,
+  EngineerTaskStopReason,
   EngineerTaskModelClient,
   ExecuteEngineerTaskOptions,
 } from "./runtime/engineer-task.js";
+export type { ArchitectRunModelClient } from "./runtime/architect-engineer-nodes.js";
+export type {
+  ArchitectEngineerRunExecution,
+  ExecuteArchitectEngineerRunOptions,
+} from "./runtime/architect-engineer-run.js";
