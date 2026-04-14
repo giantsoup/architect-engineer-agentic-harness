@@ -8,7 +8,7 @@ Related decisions: [architect-engineer-harness-v1-decisions.md](/Users/Taylor/ar
 Turn the v1 decisions into a concrete, researchable, implementation-ready backlog for a CLI-first open-source coding harness with:
 
 - TypeScript / Node
-- LangGraph JS
+- explicit orchestration first, with optional LangGraph adoption later if justified
 - OpenAI-compatible model APIs only
 - Remote Architect by default
 - Local GGUF Engineer via `llama.cpp` by default
@@ -29,7 +29,7 @@ The safest order is:
 3. Create model client abstraction for OpenAI-compatible providers
 4. Create the project-container command runner
 5. Create the single Engineer tool loop
-6. Add the Architect orchestration loop in LangGraph
+6. Add the Architect orchestration loop explicitly in the runtime
 7. Add git branch and commit automation
 8. Add TypeScript and Laravel minimal adapters
 9. Add MCP allowlist integration
@@ -74,18 +74,11 @@ src/
       llamacpp.ts
     remote/
       generic-openai.ts
-  graph/
-    state.ts
-    nodes/
-      prepare-run.ts
-      architect-plan.ts
-      engineer-execute.ts
-      architect-review.ts
-      finalize-run.ts
-    guards/
-      stop-conditions.ts
-    graph.ts
   runtime/
+    architect-engineer-state.ts
+    architect-engineer-nodes.ts
+    architect-engineer-guards.ts
+    architect-engineer-run.ts
     run-context.ts
     run-store.ts
     dossier-writer.ts
@@ -362,9 +355,9 @@ Research focus:
 
 - How much autonomy the Engineer can handle before Architect review becomes necessary
 
-## Milestone 7: LangGraph Architect-Engineer Loop
+## Milestone 7: Architect-Engineer Orchestration Loop
 
-Objective: add the real multi-role orchestration layer.
+Objective: add the real multi-role orchestration layer with explicit runtime state, nodes, and guards.
 
 Backlog:
 
@@ -395,8 +388,9 @@ Acceptance criteria:
 
 Research focus:
 
-- Best LangGraph state shape for durable verbose runs
-- How to represent review feedback without letting the graph sprawl
+- Best explicit state shape for durable verbose runs
+- How to represent review feedback without letting the orchestration sprawl
+- When a later LangGraph wrapper would actually buy enough value to justify the dependency
 
 ## Milestone 8: Git Branch and Commit Automation
 
@@ -582,7 +576,7 @@ Definition of done:
 
 Ship:
 
-- LangGraph state machine
+- explicit orchestration state machine, with LangGraph remaining an optional later wrapper
 - Architect structured planning and review
 - Engineer task handoff
 - git branch/commit automation
@@ -604,7 +598,7 @@ Definition of done:
 
 ## Recommended Next Action
 
-Start with Milestone A only. Do not begin with LangGraph, MCP, or Laravel-specific behavior until the following are already real:
+Start with Milestone A only. Do not begin with LangGraph adoption, MCP, or Laravel-specific behavior until the following are already real:
 
 - npm CLI shell
 - `init` command

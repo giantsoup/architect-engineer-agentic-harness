@@ -3,7 +3,7 @@
 Early-stage CLI-first open-source Architect-Engineer coding harness for autonomous repo work with:
 
 - TypeScript / Node
-- LangGraph JS orchestration
+- Explicit TypeScript orchestration runtime
 - OpenAI-compatible model APIs
 - Remote Architect and local Engineer defaults
 - Docker-based execution against predefined project containers
@@ -51,7 +51,7 @@ This package is still pre-v1, but the local execution path is now real:
 - `init` updates `.gitignore` to ignore verbose run artifacts safely
 - `run --command ...` executes a single configured command and writes a dossier entry
 - built-in tools support file reads, file writes, file listing, command execution, `git status`, and `git diff`
-- `run --task ...` and `run --task-file ...` execute the single-Engineer loop with dossier artifacts, final reports, and stop-condition enforcement
+- `run --task ...` and `run --task-file ...` execute the Architect-Engineer loop with strict JSON control messages, dossier artifacts, final reports, and stop-condition enforcement
 
 `status` and `inspect` are still placeholders for later milestones.
 
@@ -77,7 +77,7 @@ Run a one-off configured command:
 npx architect-engineer-agentic-harness run --command "npm test"
 ```
 
-Run the single-Engineer execution slice with a markdown task brief:
+Run the Architect-Engineer execution loop with a markdown task brief:
 
 ```bash
 npx architect-engineer-agentic-harness run --task-file task.md
@@ -94,7 +94,7 @@ Initial project planning documents:
 
 ## Current Focus
 
-The current implementation covers Milestones 1-6:
+The current implementation covers Milestones 1-7:
 
 - repo-local `init` bootstrap flow
 - TOML config loading and validation
@@ -102,7 +102,11 @@ The current implementation covers Milestones 1-6:
 - safe `.gitignore` updates
 - command execution against the configured project target
 - built-in tool execution with role-aware write permissions
-- single-Engineer task execution with dossier logging and final reports
+- reusable explicit orchestration state, nodes, and guards for the Architect-Engineer loop
+- Architect planning and review with strict JSON validation against packaged schemas
+- engineer execution reuse with dossier logging, failure-note carry-forward, and final reports
+
+The orchestration layer is intentionally explicit-first today. LangGraph remains a possible future wrapper if the workflow grows more complex, but the current code keeps orchestration mechanics visible and easy to reason about.
 
 ## Notes
 

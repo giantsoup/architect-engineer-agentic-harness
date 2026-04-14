@@ -24,7 +24,8 @@ Build a CLI-first, open-source Architect-Engineer agent harness where:
 ## Core Stack
 
 - Harness language: TypeScript / Node
-- Orchestration framework: LangGraph JS
+- Orchestration approach for current implementation: explicit TypeScript runtime with reusable state, node, and guard modules
+- LangGraph status: deferred until orchestration complexity justifies a framework wrapper
 - Standard model API surface: OpenAI-compatible APIs only
 - Distribution target: npm package
 - Primary interface: CLI first
@@ -163,7 +164,8 @@ The completion artifacts should also make it easy to find:
 
 Research should proceed in this order so implementation decisions stay aligned:
 
-1. LangGraph JS state-machine design for a single Architect and single Engineer loop
+1. Explicit state-machine design for a single Architect and single Engineer loop
+   Current implementation note: prove the orchestration explicitly first, then evaluate whether LangGraph adds enough value for durability, branching, or parallelism.
 2. OpenAI-compatible client abstraction in TypeScript for remote and `llama.cpp` backends
 3. Docker execution model for predefined project containers
 4. TOML config schema and versioned prompt/schema file layout
@@ -176,4 +178,4 @@ Research should proceed in this order so implementation decisions stay aligned:
 
 ## Final v1 Summary
 
-v1 is a CLI-first, TypeScript/Node, LangGraph-based Architect-Engineer harness packaged as an npm tool. It uses strict JSON for orchestration, human-readable markdown run artifacts, a remote-by-default Architect, a local GGUF Engineer through `llama.cpp`, Docker-based execution inside a predefined project container, dedicated task branches with automatic local commits, repo-local verbose artifacts, TOML configuration, environment-variable-backed secrets, MCP integration through a project allowlist, and a completion gate that always requires passing tests.
+v1 is a CLI-first, TypeScript/Node Architect-Engineer harness packaged as an npm tool. The current implementation uses an explicit orchestration runtime with strict JSON control messages, human-readable markdown run artifacts, a remote-by-default Architect, a local GGUF Engineer through `llama.cpp`, Docker-based execution inside a predefined project container, repo-local verbose artifacts, TOML configuration, environment-variable-backed secrets, MCP integration through a project allowlist, and a completion gate that always requires passing tests. LangGraph remains a possible later wrapper if durable graph semantics become worth the added framework cost.

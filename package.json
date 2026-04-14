@@ -23,10 +23,10 @@
     "cli",
     "engineering",
     "harness",
-    "langgraph",
     "llm",
     "mcp",
-    "openai-compatible"
+    "openai-compatible",
+    "orchestration"
   ],
   "engines": {
     "node": ">=22.0.0",
