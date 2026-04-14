@@ -56,35 +56,9 @@ describe.sequential("packaged CLI smoke", () => {
       expect(initResult.status).toBe(0);
       expect(initResult.stdout).toContain("created agent-harness.toml");
 
-      const binDir = path.join(projectRoot, ".test-bin");
-      const dockerLogPath = path.join(projectRoot, "fake-docker-log.jsonl");
-      const fakeDockerPath = path.join(binDir, "docker");
-
-      mkdirSync(binDir, { recursive: true });
-      writeFileSync(
-        fakeDockerPath,
-        `#!/usr/bin/env node
-const fs = require("node:fs");
-
-const args = process.argv.slice(2);
-fs.appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify(args) + "\\n", "utf8");
-
-if (args[0] === "inspect") {
-  process.stdout.write(JSON.stringify([{ State: { Running: true }, Config: { WorkingDir: "/workspace" } }]));
-  process.exit(0);
-}
-
-if (args[0] === "exec") {
-  process.stdout.write("built smoke stdout\\n");
-  process.exit(0);
-}
-
-process.stderr.write("unexpected command\\n");
-process.exit(1);
-`,
-        "utf8",
-      );
-      chmodSync(fakeDockerPath, 0o755);
+      const { dockerLogPath, env } = installFakeDocker(projectRoot, {
+        stdout: "built smoke stdout\n",
+      });
 
       const runResult = runBuiltCli(
         [
@@ -99,11 +73,7 @@ process.exit(1);
           "APP_ENV=testing",
         ],
         projectRoot,
-        {
-          ...process.env,
-          FAKE_DOCKER_LOG: dockerLogPath,
-          PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-        },
+        env,
       );
 
       expect(runResult.status).toBe(0);
@@ -134,6 +104,121 @@ process.exit(1);
       rmSync(projectRoot, { force: true, recursive: true });
     }
   });
+
+  it("supports tarball install, npx execution, init, and run outside the repo", () => {
+    const packDirectory = createTempProject("aeah-pack-");
+    const installRoot = createTempProject("aeah-install-");
+    const projectRoot = path.join(installRoot, "project");
+
+    try {
+      mkdirSync(projectRoot, { recursive: true });
+
+      const packResult = spawnSync(
+        npmCommand,
+        ["pack", "--pack-destination", packDirectory],
+        {
+          cwd: repoRoot,
+          encoding: "utf8",
+        },
+      );
+
+      expect(packResult.status).toBe(0);
+
+      const tarballFileName = packResult.stdout
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .at(-1);
+
+      expect(tarballFileName).toBe(
+        "architect-engineer-agentic-harness-0.1.0.tgz",
+      );
+
+      const tarballPath = path.join(packDirectory, tarballFileName!);
+
+      const npmInitResult = spawnSync(npmCommand, ["init", "-y"], {
+        cwd: projectRoot,
+        encoding: "utf8",
+      });
+      expect(npmInitResult.status).toBe(0);
+
+      const installResult = spawnSync(
+        npmCommand,
+        ["install", "--silent", tarballPath],
+        {
+          cwd: projectRoot,
+          encoding: "utf8",
+        },
+      );
+      expect(installResult.status).toBe(0);
+
+      const { dockerLogPath, env } = installFakeDocker(projectRoot, {
+        stdout: "tarball smoke stdout\n",
+      });
+
+      const helpResult = spawnSync(
+        npxCommand(),
+        ["architect-engineer-agentic-harness", "--help"],
+        {
+          cwd: projectRoot,
+          encoding: "utf8",
+          env,
+        },
+      );
+      expect(helpResult.status).toBe(0);
+      expect(helpResult.stdout).toContain("Usage:");
+
+      const initResult = spawnSync(npxCommand(), ["blueprint", "init"], {
+        cwd: projectRoot,
+        encoding: "utf8",
+        env,
+      });
+      expect(initResult.status).toBe(0);
+      expect(initResult.stdout).toContain("created agent-harness.toml");
+
+      const runResult = spawnSync(
+        npxCommand(),
+        [
+          "blueprint",
+          "run",
+          "--role",
+          "engineer",
+          "--command",
+          "npm test",
+          "--cwd",
+          "/workspace/app",
+          "--env",
+          "APP_ENV=testing",
+        ],
+        {
+          cwd: projectRoot,
+          encoding: "utf8",
+          env,
+        },
+      );
+
+      expect(runResult.status).toBe(0);
+      expect(runResult.stdout).toContain("tarball smoke stdout");
+      expect(runResult.stderr).toContain("Command completed with exit code 0.");
+      expect(readJsonLines(dockerLogPath)).toEqual([
+        ["inspect", "app"],
+        [
+          "exec",
+          "--workdir",
+          "/workspace/app",
+          "--env",
+          "APP_ENV=testing",
+          "app",
+          "sh",
+          "-lc",
+          "npm test",
+        ],
+      ]);
+    } finally {
+      rmSync(packDirectory, { force: true, recursive: true });
+      rmSync(installRoot, { force: true, recursive: true });
+    }
+  }, 20_000);
 
   it("keeps the packed file list limited to runtime assets and examples", () => {
     const packResult = spawnSync(
@@ -177,6 +262,59 @@ function runBuiltCli(args: string[], cwd: string, env?: NodeJS.ProcessEnv) {
     encoding: "utf8",
     env,
   });
+}
+
+function installFakeDocker(
+  projectRoot: string,
+  options: {
+    stdout: string;
+  },
+): {
+  dockerLogPath: string;
+  env: NodeJS.ProcessEnv;
+} {
+  const binDir = path.join(projectRoot, ".test-bin");
+  const dockerLogPath = path.join(projectRoot, "fake-docker-log.jsonl");
+  const fakeDockerPath = path.join(binDir, "docker");
+
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(
+    fakeDockerPath,
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify(args) + "\\n", "utf8");
+
+if (args[0] === "inspect") {
+  process.stdout.write(JSON.stringify([{ State: { Running: true }, Config: { WorkingDir: "/workspace" } }]));
+  process.exit(0);
+}
+
+if (args[0] === "exec") {
+  process.stdout.write(${JSON.stringify(options.stdout)});
+  process.exit(0);
+}
+
+process.stderr.write("unexpected command\\n");
+process.exit(1);
+`,
+    "utf8",
+  );
+  chmodSync(fakeDockerPath, 0o755);
+
+  return {
+    dockerLogPath,
+    env: {
+      ...process.env,
+      FAKE_DOCKER_LOG: dockerLogPath,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+    },
+  };
+}
+
+function npxCommand(): string {
+  return process.platform === "win32" ? "npx.cmd" : "npx";
 }
 
 function readJsonLines(filePath: string): unknown[] {

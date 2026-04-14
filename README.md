@@ -34,6 +34,14 @@ npm install --save-dev architect-engineer-agentic-harness
 npm exec blueprint -- --help
 ```
 
+Local tarball install before publish:
+
+```bash
+npm pack
+npm install --save-dev ./architect-engineer-agentic-harness-0.1.0.tgz
+npx blueprint --help
+```
+
 Global install:
 
 ```bash
