@@ -40,6 +40,9 @@ import {
 } from "./run-dossier.js";
 
 const DEFAULT_RUN_TIMEOUT_MS = 60 * 60 * 1000;
+const MAX_MODEL_VISIBLE_FILE_READ_CHARS = 4000;
+const MAX_MODEL_VISIBLE_COMMAND_OUTPUT_CHARS = 3000;
+const MAX_CONSECUTIVE_EXPLORATION_STEPS = 12;
 
 export type EngineerTaskStopReason =
   | "blocked"
@@ -226,6 +229,7 @@ export async function executeEngineerTask(
     ];
     const checks: RunCheckResult[] = [...(options.initialChecks ?? [])];
     let consecutiveFailedChecks = options.initialConsecutiveFailedChecks ?? 0;
+    let consecutiveExplorationSteps = 0;
     let hasPassingCheck = !requirePassingChecks;
     let iterationCount = 0;
     let outcome: FinalizedOutcome | undefined;
@@ -363,10 +367,35 @@ export async function executeEngineerTask(
       });
 
       messages.push({
-        content: JSON.stringify(toolFeedback),
+        content: renderToolFeedbackForModel(toolFeedback),
         name: toolRequest.toolName,
         role: "tool",
       });
+
+      if (isExplorationToolRequest(toolRequest)) {
+        consecutiveExplorationSteps += 1;
+      } else {
+        consecutiveExplorationSteps = 0;
+      }
+
+      const guidance = createPostToolGuidance({
+        consecutiveExplorationSteps,
+        requiredCheckCommand,
+        toolFeedback,
+        toolRequest,
+      });
+
+      if (guidance !== undefined) {
+        messages.push({
+          content: guidance,
+          role: "user",
+        });
+        await appendStructuredMessage(dossier.paths, {
+          content: guidance,
+          role: "system",
+          timestamp: now().toISOString(),
+        });
+      }
 
       if (isRequiredCheckCommand(toolRequest, requiredCheckCommand)) {
         const recordedCheck = toCheckResult(toolFeedback, requiredCheckCommand);
@@ -765,6 +794,95 @@ function renderFailureNotes(options: {
   return lines.join("\n");
 }
 
+function renderToolFeedbackForModel(feedback: ToolFeedback): string {
+  if (feedback.ok === false) {
+    return JSON.stringify(feedback);
+  }
+
+  switch (feedback.result.toolName) {
+    case "file.read":
+      return JSON.stringify({
+        ok: true,
+        result: {
+          ...feedback.result,
+          content: truncateWithNotice(
+            feedback.result.content,
+            MAX_MODEL_VISIBLE_FILE_READ_CHARS,
+          ),
+        },
+        toolName: feedback.toolName,
+      });
+    case "command.execute":
+      return JSON.stringify({
+        ok: true,
+        result: {
+          ...feedback.result,
+          stderr: truncateWithNotice(
+            feedback.result.stderr,
+            MAX_MODEL_VISIBLE_COMMAND_OUTPUT_CHARS,
+          ),
+          stdout: truncateWithNotice(
+            feedback.result.stdout,
+            MAX_MODEL_VISIBLE_COMMAND_OUTPUT_CHARS,
+          ),
+        },
+        toolName: feedback.toolName,
+      });
+    default:
+      return JSON.stringify(feedback);
+  }
+}
+
+function truncateWithNotice(value: string, maxChars: number): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+
+  return [
+    value.slice(0, maxChars),
+    "",
+    `[truncated ${value.length - maxChars} additional characters]`,
+  ].join("\n");
+}
+
+function isExplorationToolRequest(request: ToolRequest): boolean {
+  return (
+    request.toolName === "file.list" ||
+    request.toolName === "file.read" ||
+    request.toolName === "git.diff" ||
+    request.toolName === "git.status"
+  );
+}
+
+function createPostToolGuidance(options: {
+  consecutiveExplorationSteps: number;
+  requiredCheckCommand: string;
+  toolFeedback: ToolFeedback;
+  toolRequest: ToolRequest;
+}): string | undefined {
+  if (
+    options.toolFeedback.ok === false &&
+    options.toolFeedback.error.code === "path-violation"
+  ) {
+    return [
+      `The previous ${options.toolRequest.toolName} request used an invalid path: ${options.toolFeedback.error.message}`,
+      "Do not retry the same missing path.",
+      "List a known existing parent directory or switch to another known path.",
+    ].join(" ");
+  }
+
+  if (options.consecutiveExplorationSteps >= MAX_CONSECUTIVE_EXPLORATION_STEPS) {
+    return [
+      `You have spent ${options.consecutiveExplorationSteps} consecutive steps exploring without editing files or running \`${options.requiredCheckCommand}\`.`,
+      "Stop broad exploration.",
+      "Choose one already-inspected file for the smallest reasonable change, or run the required check if the work is done.",
+      "Do not reread files or relist directories unless you need one specific missing detail.",
+    ].join(" ");
+  }
+
+  return undefined;
+}
+
 function renderFinalReport(options: {
   checks: RunCheckResult[];
   diffPath: string;
@@ -947,6 +1065,10 @@ function renderEngineerProtocol(options: {
     `- Passing checks required: ${options.requirePassingChecks ? "yes" : "no"}.`,
     "- Built-in tool names always route to built-in tools. MCP is only available through `mcp.call`.",
     "- Keep tool use explicit and auditable.",
+    "- Prefer converging quickly: after a few discovery steps, choose one concrete file and make the smallest reasonable change.",
+    "- Do not reread the same file or relist the same directory unless the state changed or you need one specific missing detail.",
+    "- If a path does not exist or a tool fails, adapt to that error instead of retrying the same invalid request.",
+    "- Once you have enough context, stop exploring and either edit a file, run the required check, or return `final` if complete or blocked.",
   ].join("\n");
 }
 

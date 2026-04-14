@@ -210,6 +210,45 @@ function createQueuedModelClient<TStructured>(
   };
 }
 
+function createCapturingModelClient<TStructured>(
+  outputs: readonly TStructured[],
+): {
+  client: {
+    chat<TRequestStructured>(
+      request: ModelChatRequest<TRequestStructured>,
+    ): Promise<ModelChatResponse<TRequestStructured>>;
+  };
+  requests: Array<ModelChatRequest<unknown>>;
+} {
+  const queue = [...outputs];
+  const requests: Array<ModelChatRequest<unknown>> = [];
+  let requestCount = 0;
+
+  return {
+    client: {
+      async chat<TRequestStructured>(
+        request: ModelChatRequest<TRequestStructured>,
+      ): Promise<ModelChatResponse<TRequestStructured>> {
+        requests.push(request as ModelChatRequest<unknown>);
+        const nextOutput = queue.shift();
+
+        if (nextOutput === undefined) {
+          throw new Error("Unexpected extra model request.");
+        }
+
+        requestCount += 1;
+        return {
+          id: `mock-${requestCount}`,
+          rawContent: JSON.stringify(nextOutput),
+          role: "assistant",
+          structuredOutput: nextOutput as TRequestStructured,
+        };
+      },
+    },
+    requests,
+  };
+}
+
 type ToolCallEventRecord = {
   error?: { code?: string };
   request?: { server?: string };
@@ -902,5 +941,95 @@ args = ["repo-mcp.js"]`,
     expect(finalReport).toContain("## MCP Diagnostics");
     expect(finalReport).toContain("spawn failed");
     expect(finalReport).toContain("MCP calls recorded: 0");
+  });
+
+  it("adds a convergence reminder after too many consecutive exploration steps", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: "http://127.0.0.1:65535/v1",
+      projectRoot,
+      stopConditions: {
+        maxIterations: 20,
+      },
+    });
+    const outputs = [
+      ...Array.from({ length: 12 }, (_, index) => ({
+        request: { path: ".", toolName: "file.list" as const },
+        summary: `Explore step ${index + 1}`,
+        type: "tool" as const,
+      })),
+      {
+        blockers: ["stop after reminder"],
+        outcome: "blocked" as const,
+        summary: "Blocked after reminder",
+        type: "final" as const,
+      },
+    ];
+    const { client, requests } = createCapturingModelClient(outputs);
+
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      modelClient: client,
+      persistFinalArtifacts: false,
+      task: "Find one tiny improvement.",
+    });
+
+    expect(execution.stopReason).toBe("blocked");
+    expect(requests).toHaveLength(13);
+    expect(
+      requests[12]?.messages.some(
+        (message) =>
+          message.role === "user" &&
+          message.content.includes("Stop broad exploration."),
+      ),
+    ).toBe(true);
+  });
+
+  it("truncates large file reads before feeding tool results back to the engineer model", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+    const largeReadmePath = path.join(projectRoot, "README.md");
+
+    writeFileSync(largeReadmePath, `${"A".repeat(6000)}\n`, "utf8");
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: "http://127.0.0.1:65535/v1",
+      projectRoot,
+    });
+    const outputs = [
+      {
+        request: { path: "README.md", toolName: "file.read" as const },
+        summary: "Read README",
+        type: "tool" as const,
+      },
+      {
+        blockers: ["stop after read"],
+        outcome: "blocked" as const,
+        summary: "Blocked after read",
+        type: "final" as const,
+      },
+    ];
+    const { client, requests } = createCapturingModelClient(outputs);
+
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      modelClient: client,
+      persistFinalArtifacts: false,
+      task: "Inspect README and stop.",
+    });
+
+    expect(execution.stopReason).toBe("blocked");
+    expect(requests).toHaveLength(2);
+
+    const toolMessage = requests[1]?.messages.find(
+      (message) => message.role === "tool" && message.name === "file.read",
+    );
+
+    expect(toolMessage?.content).toContain("[truncated ");
+    expect(toolMessage?.content.length).toBeLessThan(6000);
   });
 });
