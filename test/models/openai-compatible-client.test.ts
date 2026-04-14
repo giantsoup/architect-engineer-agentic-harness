@@ -329,6 +329,74 @@ describe("OpenAiCompatibleChatClient", () => {
     expect(engineerPayload.model).toBe("engineer-model");
   });
 
+  it("normalizes developer and tool messages for chat-completions-compatible providers", async () => {
+    const seenBodies: Array<Record<string, unknown>> = [];
+    const mockServer = await startMockServer((request, response) => {
+      seenBodies.push(JSON.parse(request.bodyText) as Record<string, unknown>);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: "acknowledged",
+                role: "assistant",
+              },
+            },
+          ],
+          id: "chatcmpl-role-normalization",
+        }),
+      );
+    });
+    servers.push(mockServer);
+
+    const { loadedConfig, projectRoot } = await createLoadedConfig(
+      renderConfig({
+        architectBaseUrl: `${mockServer.url}/remote/v1`,
+        engineerBaseUrl: `${mockServer.url}/local/v1`,
+      }),
+    );
+    projectRoots.push(projectRoot);
+
+    const client = createRoleModelClient({
+      loadedConfig,
+      role: "architect",
+    });
+
+    await client.chat({
+      messages: [
+        { content: "System prompt.", role: "system" },
+        { content: "Developer instruction.", role: "developer" },
+        {
+          content:
+            '{"type":"tool","request":{"toolName":"file.list","path":"."}}',
+          role: "assistant",
+        },
+        {
+          content: '{"ok":true,"result":{"entries":[]}}',
+          name: "file.list",
+          role: "tool",
+        },
+      ],
+    });
+
+    expect(seenBodies).toHaveLength(1);
+    expect(seenBodies[0]?.messages).toEqual([
+      { content: "System prompt.", role: "system" },
+      { content: "Developer instruction.", role: "system" },
+      {
+        content:
+          '{"type":"tool","request":{"toolName":"file.list","path":"."}}',
+        role: "assistant",
+      },
+      {
+        content:
+          'Tool result for file.list:\n{"ok":true,"result":{"entries":[]}}',
+        role: "user",
+      },
+    ]);
+  });
+
   it("fails clearly on timeout", async () => {
     const mockServer = await startMockServer(async (_request, response) => {
       await new Promise((resolve) => setTimeout(resolve, 100));

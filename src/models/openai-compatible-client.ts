@@ -524,20 +524,49 @@ export class OpenAiCompatibleChatClient {
 }
 
 function toOpenAiMessage(message: ModelChatMessage): Record<string, string> {
+  const normalizedRole = normalizeOpenAiMessageRole(message.role);
+  const normalizedContent =
+    message.role === "tool"
+      ? renderToolResultMessage(message)
+      : message.content;
   const openAiMessage: Record<string, string> = {
-    content: message.content,
-    role: message.role,
+    content: normalizedContent,
+    role: normalizedRole,
   };
 
-  if (message.name !== undefined) {
+  if (message.name !== undefined && normalizedRole !== "user") {
     openAiMessage.name = message.name;
   }
 
-  if (message.toolCallId !== undefined) {
+  if (message.toolCallId !== undefined && normalizedRole === "tool") {
     openAiMessage.tool_call_id = message.toolCallId;
   }
 
   return openAiMessage;
+}
+
+function normalizeOpenAiMessageRole(role: ModelChatMessage["role"]): string {
+  switch (role) {
+    case "assistant":
+      return "assistant";
+    case "developer":
+      return "system";
+    case "system":
+      return "system";
+    case "tool":
+      return "user";
+    case "user":
+      return "user";
+  }
+}
+
+function renderToolResultMessage(message: ModelChatMessage): string {
+  const toolLabel = message.name === undefined ? "tool" : message.name;
+
+  return [
+    `Tool result for ${toolLabel}:`,
+    message.content,
+  ].join("\n");
 }
 
 function extractAssistantContent(
