@@ -49,6 +49,9 @@ describe("CLI init", () => {
         readFileSync(path.join(projectRoot, "agent-harness.toml"), "utf8"),
       ).toContain("[models.architect]");
       expect(
+        readFileSync(path.join(projectRoot, "agent-harness.toml"), "utf8"),
+      ).toContain('executionTarget = "host"');
+      expect(
         readFileSync(path.join(projectRoot, ".gitignore"), "utf8"),
       ).toContain("/.agent-harness/");
       expect(
@@ -67,11 +70,15 @@ describe("CLI init", () => {
 
       const configPath = path.join(projectRoot, "agent-harness.toml");
       const customizedConfig = readFileSync(configPath, "utf8").replace(
-        'containerName = "app"',
-        'containerName = "web"',
+        'executionTarget = "host"',
+        'executionTarget = "docker"\ncontainerName = "web"',
+      );
+      const dockerConfig = customizedConfig.replace(
+        'mode = "workspace-write"',
+        'mode = "container"',
       );
 
-      writeFileSync(configPath, customizedConfig, "utf8");
+      writeFileSync(configPath, dockerConfig, "utf8");
 
       const secondRun = runCli(["init"], projectRoot);
       const gitignoreContents = readFileSync(
@@ -82,6 +89,9 @@ describe("CLI init", () => {
       expect(secondRun.status).toBe(0);
       expect(secondRun.stdout).toContain(
         "preserved existing agent-harness.toml",
+      );
+      expect(readFileSync(configPath, "utf8")).toContain(
+        'executionTarget = "docker"',
       );
       expect(readFileSync(configPath, "utf8")).toContain(
         'containerName = "web"',

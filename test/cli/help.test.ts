@@ -64,6 +64,15 @@ describe("CLI help", () => {
     });
   });
 
+  it("uses the invoked bin name in help output when available", async () => {
+    const { createProgram } = await import("../../src/cli/program.js");
+    const help = createProgram({
+      argv: ["node", "/tmp/node_modules/.bin/blueprint"],
+    }).helpInformation();
+
+    expect(help).toContain("Usage: blueprint");
+  });
+
   it("shows the run command help and validates the selected mode", () => {
     const helpResult = runCli(["run", "--help"]);
 

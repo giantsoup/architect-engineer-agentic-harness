@@ -220,6 +220,9 @@ function createLoadedConfigStub() {
         rootDir: ".agent-harness",
         runsDir: ".agent-harness/runs",
       },
+      project: {
+        executionTarget: "host",
+      },
     },
     projectRoot: "/tmp/project",
   } as never;

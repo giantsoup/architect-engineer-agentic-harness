@@ -82,6 +82,7 @@ export {
   ContainerSessionStateError,
   createDockerContainerSession,
 } from "./sandbox/container-session.js";
+export { createHostCommandSession } from "./sandbox/host-session.js";
 export {
   createBuiltInToolExecutor,
   BuiltInToolExecutor,
@@ -179,6 +180,7 @@ export type {
   ContainerSessionMetadata,
   CreateDockerContainerSessionOptions,
 } from "./sandbox/container-session.js";
+export type { CreateHostCommandSessionOptions } from "./sandbox/host-session.js";
 export {
   ArchitectControlOutputValidationError,
   createArchitectStructuredOutputFormat,

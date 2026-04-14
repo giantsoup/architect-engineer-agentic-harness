@@ -39,7 +39,72 @@ function createTempProject(): string {
 }
 
 describe("CLI run", () => {
-  it("executes a configured command through the container runner and writes a dossier entry", () => {
+  it("executes a configured command on the host and writes a dossier entry", () => {
+    const projectRoot = createTempProject();
+
+    try {
+      expect(runCli(["init"], projectRoot).status).toBe(0);
+      mkdirSync(path.join(projectRoot, "workspace", "app"), {
+        recursive: true,
+      });
+      writeFileSync(
+        path.join(projectRoot, "print-host-context.js"),
+        [
+          "process.stdout.write(`${process.cwd()}\\n`);",
+          'process.stdout.write(`${process.env.APP_ENV ?? ""}\\n`);',
+        ].join("\n"),
+        "utf8",
+      );
+
+      const result = runCli(
+        [
+          "run",
+          "--role",
+          "engineer",
+          "--command",
+          "node ../../print-host-context.js",
+          "--cwd",
+          "workspace/app",
+          "--env",
+          "APP_ENV=testing",
+        ],
+        projectRoot,
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("workspace/app");
+      expect(result.stdout).toContain("testing");
+      expect(result.stderr).toContain("Command completed with exit code 0.");
+      expect(result.stderr).toContain(".agent-harness/runs/");
+
+      const runsDirectory = path.join(projectRoot, ".agent-harness", "runs");
+      const runIds = readdirSync(runsDirectory);
+
+      expect(runIds).toHaveLength(1);
+
+      const commandLog = readJsonLines(
+        path.join(runsDirectory, runIds[0]!, "command-log.jsonl"),
+      );
+
+      expect(commandLog[0]).toMatchObject({
+        accessMode: "mutate",
+        command: "node ../../print-host-context.js",
+        environment: {
+          APP_ENV: "testing",
+        },
+        executionTarget: "host",
+        role: "engineer",
+        status: "completed",
+      });
+      expect(
+        (commandLog[0] as { workingDirectory: string }).workingDirectory,
+      ).toContain("workspace/app");
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("still executes through Docker when the config targets docker", () => {
     const projectRoot = createTempProject();
 
     try {
@@ -48,7 +113,17 @@ describe("CLI run", () => {
       const binDir = path.join(projectRoot, ".test-bin");
       const dockerLogPath = path.join(projectRoot, "fake-docker-log.jsonl");
       const fakeDockerPath = path.join(binDir, "docker");
+      const configPath = path.join(projectRoot, "agent-harness.toml");
+      const configContents = readFileSync(configPath, "utf8").replace(
+        'executionTarget = "host"',
+        'executionTarget = "docker"\ncontainerName = "app"',
+      );
+      const dockerConfig = configContents.replace(
+        'mode = "workspace-write"',
+        'mode = "container"',
+      );
 
+      writeFileSync(configPath, dockerConfig, "utf8");
       mkdirSync(binDir, { recursive: true });
       writeFileSync(
         fakeDockerPath,
@@ -100,12 +175,7 @@ process.exit(1);
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("cli stdout");
       expect(result.stderr).toContain("cli stderr");
-      expect(result.stderr).toContain("Command completed with exit code 0.");
-      expect(result.stderr).toContain(".agent-harness/runs/");
-
-      const dockerCalls = readJsonLines(dockerLogPath);
-
-      expect(dockerCalls).toEqual([
+      expect(readJsonLines(dockerLogPath)).toEqual([
         ["inspect", "app"],
         [
           "exec",
@@ -119,26 +189,6 @@ process.exit(1);
           "npm test",
         ],
       ]);
-
-      const runsDirectory = path.join(projectRoot, ".agent-harness", "runs");
-      const runIds = readdirSync(runsDirectory);
-
-      expect(runIds).toHaveLength(1);
-
-      const commandLog = readJsonLines(
-        path.join(runsDirectory, runIds[0]!, "command-log.jsonl"),
-      );
-
-      expect(commandLog[0]).toMatchObject({
-        accessMode: "mutate",
-        command: "npm test",
-        environment: {
-          APP_ENV: "testing",
-        },
-        role: "engineer",
-        status: "completed",
-        workingDirectory: "/workspace/app",
-      });
     } finally {
       rmSync(projectRoot, { recursive: true, force: true });
     }

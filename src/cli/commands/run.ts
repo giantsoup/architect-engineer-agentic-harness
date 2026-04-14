@@ -33,13 +33,10 @@ export function createRunCommand(): Command {
     .option("-c, --command <command>", "Shell command to execute")
     .option("--task <markdown>", "Engineer task brief markdown")
     .option("--task-file <path>", "Read the Engineer task brief from a file")
-    .option(
-      "--cwd <directory>",
-      "Working directory inside the project container",
-    )
+    .option("--cwd <directory>", "Working directory for command execution")
     .option(
       "--env <NAME=VALUE>",
-      "Inject an environment variable into the container process",
+      "Inject an environment variable into the executed command",
       collectRepeatedOption,
       [],
     )

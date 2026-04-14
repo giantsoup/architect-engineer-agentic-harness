@@ -20,8 +20,7 @@ export const DEFAULT_HARNESS_CONFIG: HarnessConfig = {
     },
   },
   project: {
-    executionTarget: "docker",
-    containerName: "app",
+    executionTarget: "host",
   },
   commands: {
     build: "npm run build",
@@ -39,7 +38,7 @@ export const DEFAULT_HARNESS_CONFIG: HarnessConfig = {
     mode: "inherit",
   },
   sandbox: {
-    mode: "container",
+    mode: "workspace-write",
   },
   artifacts: {
     rootDir: DEFAULT_ARTIFACTS_ROOT_DIR,

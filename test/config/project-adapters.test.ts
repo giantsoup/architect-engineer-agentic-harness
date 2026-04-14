@@ -109,6 +109,8 @@ describe("project adapter config integration", () => {
     expect(configContents).toContain(
       "Detected project adapter: Generic TypeScript",
     );
+    expect(configContents).toContain('executionTarget = "host"');
+    expect(configContents).toContain('mode = "workspace-write"');
     expect(configContents).toContain('install = "pnpm install"');
     expect(configContents).toContain('test = "pnpm run test"');
     expect(configContents).toContain('typecheck = "pnpm run typecheck"');
@@ -172,6 +174,8 @@ describe("project adapter config integration", () => {
     expect(configContents).toContain(
       "Detected project adapter: Generic Laravel",
     );
+    expect(configContents).toContain('executionTarget = "docker"');
+    expect(configContents).toContain('containerName = "app"');
     expect(configContents).toContain('test = "php artisan test"');
     expect(configContents).toContain("[mcp.servers.laravel-boost]");
     expect(configContents).toContain('preset = "laravel-boost"');

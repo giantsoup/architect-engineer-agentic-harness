@@ -40,6 +40,35 @@ async function createInitializedProject(): Promise<LoadedHarnessConfig> {
   return loadHarnessConfig({ projectRoot });
 }
 
+async function createLoadedConfigForExecutionTarget(
+  executionTarget: "docker" | "host",
+): Promise<LoadedHarnessConfig> {
+  const loadedConfig = await createInitializedProject();
+
+  if (executionTarget === loadedConfig.config.project.executionTarget) {
+    return loadedConfig;
+  }
+
+  return {
+    ...loadedConfig,
+    config: {
+      ...loadedConfig.config,
+      project:
+        executionTarget === "docker"
+          ? {
+              executionTarget,
+              containerName: "app",
+            }
+          : {
+              executionTarget,
+            },
+      sandbox: {
+        mode: executionTarget === "docker" ? "container" : "workspace-write",
+      },
+    },
+  };
+}
+
 function createQueuedRunProcess(
   outcomes: Array<ProcessCommandResult | Error>,
 ): {
@@ -300,7 +329,7 @@ describe("BuiltInToolExecutor", () => {
   });
 
   it("delegates command execution to the Milestone 4 project command runner and logs the tool call", async () => {
-    const loadedConfig = await createInitializedProject();
+    const loadedConfig = await createLoadedConfigForExecutionTarget("docker");
     createdPaths.push(loadedConfig.projectRoot);
     const dossier = await initializeRunDossier(loadedConfig, {
       createdAt: FIXED_NOW,
@@ -505,18 +534,10 @@ describe("BuiltInToolExecutor", () => {
   });
 
   it("surfaces invalid execution state cleanly for command execution", async () => {
-    const loadedConfig = await createInitializedProject();
+    const loadedConfig = await createLoadedConfigForExecutionTarget("host");
     createdPaths.push(loadedConfig.projectRoot);
     const executor = createBuiltInToolExecutor({
-      loadedConfig: {
-        ...loadedConfig,
-        config: {
-          ...loadedConfig.config,
-          project: {
-            executionTarget: "host",
-          },
-        },
-      },
+      loadedConfig,
     });
 
     try {
@@ -526,6 +547,7 @@ describe("BuiltInToolExecutor", () => {
           {
             command: "npm test",
             toolName: "command.execute",
+            workingDirectory: "/definitely/missing/aeah-working-directory",
           },
         ),
       ).rejects.toBeInstanceOf(BuiltInToolStateError);

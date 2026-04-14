@@ -294,6 +294,17 @@ function createInitialHarnessConfig(
     ...DEFAULT_HARNESS_CONFIG,
     commands,
     mcp,
+    ...(resolvedProject.adapter.id === "laravel-generic"
+      ? {
+          project: {
+            executionTarget: "docker" as const,
+            containerName: "app",
+          },
+          sandbox: {
+            mode: "container" as const,
+          },
+        }
+      : {}),
   };
 }
 

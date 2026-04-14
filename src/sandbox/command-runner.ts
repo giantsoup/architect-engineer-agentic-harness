@@ -2,13 +2,14 @@ import { appendCommandLog } from "../runtime/run-dossier.js";
 import type { LoadedHarnessConfig } from "../types/config.js";
 import type { CommandLogRecord } from "../types/run.js";
 import type { RunDossierPaths } from "../artifacts/paths.js";
+import type { RunProcess } from "./process-runner.js";
 import {
   createDockerContainerSession,
   type ContainerCommandEnvironment,
   type ContainerCommandResult,
   type ContainerSession,
-  type CreateDockerContainerSessionOptions,
 } from "./container-session.js";
+import { createHostCommandSession } from "./host-session.js";
 
 export interface CommandExecutionRequest {
   command: string;
@@ -22,12 +23,11 @@ export interface EngineerCommandExecutionRequest extends CommandExecutionRequest
   accessMode?: "inspect" | "mutate";
 }
 
-export interface CreateProjectCommandRunnerOptions extends Omit<
-  CreateDockerContainerSessionOptions,
-  "loadedConfig"
-> {
+export interface CreateProjectCommandRunnerOptions {
   dossierPaths?: RunDossierPaths;
   loadedConfig: LoadedHarnessConfig;
+  now?: () => Date;
+  runProcess?: RunProcess;
 }
 
 export interface ProjectCommandRunnerLike {
@@ -46,13 +46,22 @@ export class ProjectCommandRunner implements ProjectCommandRunnerLike {
 
   constructor(options: CreateProjectCommandRunnerOptions) {
     this.#dossierPaths = options.dossierPaths;
-    this.#session = createDockerContainerSession({
-      loadedConfig: options.loadedConfig,
-      ...(options.now === undefined ? {} : { now: options.now }),
-      ...(options.runProcess === undefined
-        ? {}
-        : { runProcess: options.runProcess }),
-    });
+    this.#session =
+      options.loadedConfig.config.project.executionTarget === "docker"
+        ? createDockerContainerSession({
+            loadedConfig: options.loadedConfig,
+            ...(options.now === undefined ? {} : { now: options.now }),
+            ...(options.runProcess === undefined
+              ? {}
+              : { runProcess: options.runProcess }),
+          })
+        : createHostCommandSession({
+            loadedConfig: options.loadedConfig,
+            ...(options.now === undefined ? {} : { now: options.now }),
+            ...(options.runProcess === undefined
+              ? {}
+              : { runProcess: options.runProcess }),
+          });
   }
 
   get closed(): boolean {
@@ -111,7 +120,9 @@ export class ProjectCommandRunner implements ProjectCommandRunnerLike {
       await this.#appendCommandLog({
         accessMode: result.accessMode,
         command: result.command,
-        containerName: result.containerName,
+        ...(result.containerName === undefined
+          ? {}
+          : { containerName: result.containerName }),
         durationMs: result.durationMs,
         environment: result.environment,
         executionTarget: result.executionTarget,

@@ -20,7 +20,7 @@ describe("shipped example configs", () => {
     });
 
     expect(loadedConfig.config.commands.test).toBe("npm run test");
-    expect(loadedConfig.config.project.executionTarget).toBe("docker");
+    expect(loadedConfig.config.project.executionTarget).toBe("host");
   });
 
   it("loads the Laravel example config", async () => {

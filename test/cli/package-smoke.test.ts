@@ -1,5 +1,4 @@
 import {
-  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -55,10 +54,20 @@ describe.sequential("packaged CLI smoke", () => {
 
       expect(initResult.status).toBe(0);
       expect(initResult.stdout).toContain("created agent-harness.toml");
-
-      const { dockerLogPath, env } = installFakeDocker(projectRoot, {
-        stdout: "built smoke stdout\n",
+      expect(
+        readFileSync(path.join(projectRoot, "agent-harness.toml"), "utf8"),
+      ).toContain('executionTarget = "host"');
+      mkdirSync(path.join(projectRoot, "workspace", "app"), {
+        recursive: true,
       });
+      writeFileSync(
+        path.join(projectRoot, "print-host-context.js"),
+        [
+          "process.stdout.write(`${process.cwd()}\\n`);",
+          'process.stdout.write(`${process.env.APP_ENV ?? ""}\\n`);',
+        ].join("\n"),
+        "utf8",
+      );
 
       const runResult = runBuiltCli(
         [
@@ -66,18 +75,18 @@ describe.sequential("packaged CLI smoke", () => {
           "--role",
           "engineer",
           "--command",
-          "npm test",
+          "node ../../print-host-context.js",
           "--cwd",
-          "/workspace/app",
+          "workspace/app",
           "--env",
           "APP_ENV=testing",
         ],
         projectRoot,
-        env,
       );
 
       expect(runResult.status).toBe(0);
-      expect(runResult.stdout).toContain("built smoke stdout");
+      expect(runResult.stdout).toContain("workspace/app");
+      expect(runResult.stdout).toContain("testing");
       expect(runResult.stderr).toContain("Command completed with exit code 0.");
       expect(runResult.stderr).toContain(".agent-harness/runs/");
 
@@ -86,20 +95,6 @@ describe.sequential("packaged CLI smoke", () => {
       );
 
       expect(runIds).toHaveLength(1);
-      expect(readJsonLines(dockerLogPath)).toEqual([
-        ["inspect", "app"],
-        [
-          "exec",
-          "--workdir",
-          "/workspace/app",
-          "--env",
-          "APP_ENV=testing",
-          "app",
-          "sh",
-          "-lc",
-          "npm test",
-        ],
-      ]);
     } finally {
       rmSync(projectRoot, { force: true, recursive: true });
     }
@@ -151,10 +146,18 @@ describe.sequential("packaged CLI smoke", () => {
         },
       );
       expect(installResult.status).toBe(0);
-
-      const { dockerLogPath, env } = installFakeDocker(projectRoot, {
-        stdout: "tarball smoke stdout\n",
+      mkdirSync(path.join(projectRoot, "workspace", "app"), {
+        recursive: true,
       });
+      writeFileSync(
+        path.join(projectRoot, "print-host-context.js"),
+        [
+          "process.stdout.write(`${process.cwd()}\\n`);",
+          'process.stdout.write(`${process.env.APP_ENV ?? ""}\\n`);',
+        ].join("\n"),
+        "utf8",
+      );
+      const env = { ...process.env };
 
       const helpResult = spawnSync(
         npxCommand(),
@@ -167,6 +170,17 @@ describe.sequential("packaged CLI smoke", () => {
       );
       expect(helpResult.status).toBe(0);
       expect(helpResult.stdout).toContain("Usage:");
+      expect(helpResult.stdout).toContain(
+        "Usage: architect-engineer-agentic-harness",
+      );
+
+      const aliasHelpResult = spawnSync(npxCommand(), ["blueprint", "--help"], {
+        cwd: projectRoot,
+        encoding: "utf8",
+        env,
+      });
+      expect(aliasHelpResult.status).toBe(0);
+      expect(aliasHelpResult.stdout).toContain("Usage: blueprint");
 
       const initResult = spawnSync(npxCommand(), ["blueprint", "init"], {
         cwd: projectRoot,
@@ -175,6 +189,9 @@ describe.sequential("packaged CLI smoke", () => {
       });
       expect(initResult.status).toBe(0);
       expect(initResult.stdout).toContain("created agent-harness.toml");
+      expect(
+        readFileSync(path.join(projectRoot, "agent-harness.toml"), "utf8"),
+      ).toContain('executionTarget = "host"');
 
       const runResult = spawnSync(
         npxCommand(),
@@ -184,9 +201,9 @@ describe.sequential("packaged CLI smoke", () => {
           "--role",
           "engineer",
           "--command",
-          "npm test",
+          "node ../../print-host-context.js",
           "--cwd",
-          "/workspace/app",
+          "workspace/app",
           "--env",
           "APP_ENV=testing",
         ],
@@ -198,22 +215,9 @@ describe.sequential("packaged CLI smoke", () => {
       );
 
       expect(runResult.status).toBe(0);
-      expect(runResult.stdout).toContain("tarball smoke stdout");
+      expect(runResult.stdout).toContain("workspace/app");
+      expect(runResult.stdout).toContain("testing");
       expect(runResult.stderr).toContain("Command completed with exit code 0.");
-      expect(readJsonLines(dockerLogPath)).toEqual([
-        ["inspect", "app"],
-        [
-          "exec",
-          "--workdir",
-          "/workspace/app",
-          "--env",
-          "APP_ENV=testing",
-          "app",
-          "sh",
-          "-lc",
-          "npm test",
-        ],
-      ]);
     } finally {
       rmSync(packDirectory, { force: true, recursive: true });
       rmSync(installRoot, { force: true, recursive: true });
@@ -264,64 +268,8 @@ function runBuiltCli(args: string[], cwd: string, env?: NodeJS.ProcessEnv) {
   });
 }
 
-function installFakeDocker(
-  projectRoot: string,
-  options: {
-    stdout: string;
-  },
-): {
-  dockerLogPath: string;
-  env: NodeJS.ProcessEnv;
-} {
-  const binDir = path.join(projectRoot, ".test-bin");
-  const dockerLogPath = path.join(projectRoot, "fake-docker-log.jsonl");
-  const fakeDockerPath = path.join(binDir, "docker");
-
-  mkdirSync(binDir, { recursive: true });
-  writeFileSync(
-    fakeDockerPath,
-    `#!/usr/bin/env node
-const fs = require("node:fs");
-
-const args = process.argv.slice(2);
-fs.appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify(args) + "\\n", "utf8");
-
-if (args[0] === "inspect") {
-  process.stdout.write(JSON.stringify([{ State: { Running: true }, Config: { WorkingDir: "/workspace" } }]));
-  process.exit(0);
-}
-
-if (args[0] === "exec") {
-  process.stdout.write(${JSON.stringify(options.stdout)});
-  process.exit(0);
-}
-
-process.stderr.write("unexpected command\\n");
-process.exit(1);
-`,
-    "utf8",
-  );
-  chmodSync(fakeDockerPath, 0o755);
-
-  return {
-    dockerLogPath,
-    env: {
-      ...process.env,
-      FAKE_DOCKER_LOG: dockerLogPath,
-      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-    },
-  };
-}
-
 function npxCommand(): string {
   return process.platform === "win32" ? "npx.cmd" : "npx";
-}
-
-function readJsonLines(filePath: string): unknown[] {
-  return readFileSync(filePath, "utf8")
-    .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line));
 }
 
 function normalizePackPath(packPath: string): string {

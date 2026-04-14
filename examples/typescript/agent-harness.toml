@@ -1,4 +1,4 @@
-# Example config for a generic TypeScript project running inside a predefined container.
+# Example config for a generic TypeScript project running directly on the host.
 # Copy this into your repo root as `agent-harness.toml` and replace the model values.
 
 version = 1
@@ -15,8 +15,7 @@ model = "replace-with-your-local-engineer-model"
 baseUrl = "http://127.0.0.1:8080/v1"
 
 [project]
-executionTarget = "docker"
-containerName = "app"
+executionTarget = "host"
 
 [commands]
 install = "npm install"
@@ -33,7 +32,7 @@ allowlist = []
 mode = "inherit"
 
 [sandbox]
-mode = "container"
+mode = "workspace-write"
 
 [artifacts]
 rootDir = ".agent-harness"

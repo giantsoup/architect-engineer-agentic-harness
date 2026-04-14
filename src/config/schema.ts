@@ -118,6 +118,30 @@ export const harnessConfigSchema: z.ZodType<HarnessConfig> = z
       });
     }
 
+    if (
+      config.project.executionTarget === "docker" &&
+      config.sandbox.mode !== "container"
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["sandbox", "mode"],
+        message:
+          'Must be "container" when project.executionTarget is "docker".',
+      });
+    }
+
+    if (
+      config.project.executionTarget === "host" &&
+      config.sandbox.mode !== "workspace-write"
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["sandbox", "mode"],
+        message:
+          'Must be "workspace-write" when project.executionTarget is "host".',
+      });
+    }
+
     if (!isNestedPath(config.artifacts.rootDir, config.artifacts.runsDir)) {
       context.addIssue({
         code: z.ZodIssueCode.custom,

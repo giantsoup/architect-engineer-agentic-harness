@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { Command } from "commander";
 
 import packageJson from "../../package.json" with { type: "json" };
@@ -11,10 +13,15 @@ const CLI_NAME = "architect-engineer-agentic-harness";
 const CLI_DESCRIPTION =
   "CLI-first Architect-Engineer harness for autonomous repo work.";
 
-export function createProgram(): Command {
-  const program = new Command();
+interface CreateProgramOptions {
+  argv?: readonly string[];
+}
 
-  program.name(CLI_NAME).description(CLI_DESCRIPTION);
+export function createProgram(options: CreateProgramOptions = {}): Command {
+  const program = new Command();
+  const programName = resolveProgramName(options.argv ?? process.argv);
+
+  program.name(programName).description(CLI_DESCRIPTION);
   program.version(packageJson.version);
   program.showHelpAfterError();
   program.showSuggestionAfterError();
@@ -25,4 +32,26 @@ export function createProgram(): Command {
   program.addCommand(createInspectCommand());
 
   return program;
+}
+
+function resolveProgramName(argv: readonly string[]): string {
+  const executablePath = argv[1];
+
+  if (
+    typeof executablePath !== "string" ||
+    executablePath.trim().length === 0
+  ) {
+    return CLI_NAME;
+  }
+
+  const executableName = path.basename(executablePath.trim());
+
+  if (
+    executableName.length === 0 ||
+    /\.(?:[cm]?[jt]s)$/u.test(executableName)
+  ) {
+    return CLI_NAME;
+  }
+
+  return executableName;
 }

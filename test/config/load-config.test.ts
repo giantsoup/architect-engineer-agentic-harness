@@ -198,6 +198,56 @@ requirePassingChecks = true
     );
   });
 
+  it("requires sandbox mode to match the selected execution target", async () => {
+    const projectRoot = createTempProject();
+    createdProjectRoots.push(projectRoot);
+
+    writeFileSync(
+      path.join(projectRoot, "agent-harness.toml"),
+      `version = 1
+
+[models.architect]
+provider = "openai-compatible"
+model = "architect"
+baseUrl = "https://api.example.com/v1"
+
+[models.engineer]
+provider = "llama.cpp"
+model = "engineer"
+baseUrl = "http://127.0.0.1:8080/v1"
+
+[project]
+executionTarget = "host"
+
+[commands]
+test = "npm run test"
+
+[mcp]
+allowlist = []
+
+[network]
+mode = "inherit"
+
+[sandbox]
+mode = "container"
+
+[artifacts]
+rootDir = ".agent-harness"
+runsDir = ".agent-harness/runs"
+
+[stopConditions]
+maxIterations = 12
+maxEngineerAttempts = 5
+requirePassingChecks = true
+`,
+      "utf8",
+    );
+
+    await expect(loadHarnessConfig({ projectRoot })).rejects.toThrowError(
+      /sandbox\.mode: Must be "workspace-write" when project\.executionTarget is "host"\./u,
+    );
+  });
+
   it("derives projectRoot from configPath when a custom config path is used", async () => {
     const projectRoot = createTempProject();
     createdProjectRoots.push(projectRoot);

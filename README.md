@@ -7,7 +7,7 @@ Current v1 shape:
 - explicit TypeScript runtime, not LangGraph
 - OpenAI-compatible model APIs
 - remote Architect plus local `llama.cpp` Engineer by default
-- Docker command execution against a predefined project container
+- host or Docker command execution
 - repo-local run dossiers under `.agent-harness/runs/<run-id>/`
 - built-in tools plus MCP stdio servers gated by a repo allowlist
 
@@ -19,6 +19,9 @@ Requirements:
 
 - Node.js 22 or newer
 - npm 11 or newer
+- Git available on `PATH` for full task runs
+- an OpenAI-compatible Architect endpoint
+- a reachable local or remote Engineer endpoint
 - Docker available if `project.executionTarget = "docker"`
 
 One-shot usage with `npx`:
@@ -27,11 +30,18 @@ One-shot usage with `npx`:
 npx architect-engineer-agentic-harness@latest --help
 ```
 
-Local project install:
+Project-local install:
 
 ```bash
 npm install --save-dev architect-engineer-agentic-harness
 npm exec blueprint -- --help
+```
+
+Global install:
+
+```bash
+npm install -g architect-engineer-agentic-harness
+blueprint --help
 ```
 
 Local tarball install before publish:
@@ -42,31 +52,136 @@ npm install --save-dev ./architect-engineer-agentic-harness-0.1.0.tgz
 npx blueprint --help
 ```
 
-Global install:
-
-```bash
-npm install -g architect-engineer-agentic-harness
-blueprint --help
-```
-
 `architect-engineer-agentic-harness` and `blueprint` both point to the same CLI binary. Use the package name with `npx`; use either binary name after local or global installation.
 
-## Quick Start
+## Before First Run
 
-Initialize a repo:
+Set up these items before you try a real task run:
+
+1. Choose an execution target.
+   Host: commands run directly in your local checkout.
+   Docker: commands run in an already-running project container.
+2. Configure the Architect model endpoint.
+   Example: OpenAI or another OpenAI-compatible API.
+3. Configure the Engineer model endpoint.
+   The default examples assume an OpenAI-compatible `llama.cpp` server.
+4. Confirm your repo commands work.
+   At minimum, make sure your configured `test` command succeeds when run manually.
+5. For full Architect-Engineer runs, start from a clean git worktree.
+   The harness records run branches and commits and will stop when the repo starts dirty.
+6. If you plan to use MCP servers, make sure any allowlisted stdio commands also work from the host machine where you start `blueprint`.
+
+## Setup
+
+### Host Path
+
+Host mode is the simplest default for local repos.
+
+1. Install the CLI.
 
 ```bash
-npx architect-engineer-agentic-harness@latest init
+npm install --save-dev architect-engineer-agentic-harness
 ```
 
-That creates:
+2. Initialize the repo.
 
-- `agent-harness.toml`
-- `.agent-harness/`
-- `.agent-harness/runs/`
-- a `.gitignore` entry for `/.agent-harness/`
+```bash
+npx blueprint init
+```
 
-Then update `agent-harness.toml` with your real model endpoints, API-key env vars, project container name, and repo commands.
+3. Start your Engineer endpoint.
+
+```bash
+llama-server --host 127.0.0.1 --port 8080 --model /absolute/path/to/engineer.gguf
+```
+
+4. Export your Architect API key.
+
+```bash
+export OPENAI_API_KEY=replace-me
+```
+
+5. Update `agent-harness.toml` for host execution.
+
+```toml
+[models.architect]
+provider = "openai-compatible"
+model = "replace-with-your-architect-model"
+baseUrl = "https://api.openai.com/v1"
+apiKey = "${OPENAI_API_KEY}"
+
+[models.engineer]
+provider = "llama.cpp"
+model = "replace-with-your-engineer-model"
+baseUrl = "http://127.0.0.1:8080/v1"
+
+[project]
+executionTarget = "host"
+
+[sandbox]
+mode = "workspace-write"
+```
+
+6. Verify the configured command path.
+
+```bash
+npx blueprint run --command "npm test"
+```
+
+### Docker Path
+
+Docker mode is useful when your app already runs inside a prepared project container.
+
+1. Install the CLI and initialize the repo.
+
+```bash
+npm install --save-dev architect-engineer-agentic-harness
+npx blueprint init
+```
+
+2. Start your Engineer endpoint on the host machine.
+
+```bash
+llama-server --host 127.0.0.1 --port 8080 --model /absolute/path/to/engineer.gguf
+```
+
+3. Export your Architect API key.
+
+```bash
+export OPENAI_API_KEY=replace-me
+```
+
+4. Make sure your project container is already running and can execute your repo commands.
+
+5. Update `agent-harness.toml` for Docker execution.
+
+```toml
+[models.architect]
+provider = "openai-compatible"
+model = "replace-with-your-architect-model"
+baseUrl = "https://api.openai.com/v1"
+apiKey = "${OPENAI_API_KEY}"
+
+[models.engineer]
+provider = "llama.cpp"
+model = "replace-with-your-engineer-model"
+baseUrl = "http://127.0.0.1:8080/v1"
+
+[project]
+executionTarget = "docker"
+containerName = "app"
+
+[sandbox]
+mode = "container"
+```
+
+6. Verify the configured command path.
+
+```bash
+npx blueprint run --command "npm test"
+```
+
+## First Commands
 
 Run a single command through the configured execution target:
 
@@ -102,6 +217,8 @@ blueprint inspect
 - preserves an existing config file
 - adds `/.agent-harness/` to `.gitignore` if needed
 - detects a generic TypeScript or Laravel repo and seeds matching command defaults
+- defaults generic local repos to `project.executionTarget = "host"`
+- keeps Laravel-oriented initialization on `project.executionTarget = "docker"`
 
 `run`
 
@@ -200,6 +317,29 @@ Notes:
 - the harness talks to the Engineer model from the host process, not from inside the Docker project container
 - keep the `baseUrl` reachable from the machine running `blueprint`
 - set `model` to whatever identifier your local server expects
+
+## Host Execution
+
+For many local repos, host execution is the simplest setup:
+
+```toml
+[project]
+executionTarget = "host"
+```
+
+Host mode behavior:
+
+- commands run directly from the local checkout on your machine
+- the default command working directory is the repo root
+- `--cwd` may point to a repo-relative or absolute host path
+- this is convenient, but it is not a security boundary
+
+Recommended host pairing:
+
+```toml
+[sandbox]
+mode = "workspace-write"
+```
 
 ## Predefined Project Container Requirements
 

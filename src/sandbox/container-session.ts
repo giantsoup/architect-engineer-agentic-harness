@@ -28,10 +28,10 @@ export interface ContainerCommandRequest {
 export interface ContainerCommandResult {
   accessMode: ContainerCommandAccessMode;
   command: string;
-  containerName: string;
+  containerName?: string;
   durationMs: number;
   environment: Record<string, string>;
-  executionTarget: "docker";
+  executionTarget: "docker" | "host";
   exitCode: number;
   role: ContainerCommandRole;
   stderr: string;
@@ -41,9 +41,9 @@ export interface ContainerCommandResult {
 }
 
 export interface ContainerSessionMetadata {
-  containerName: string;
+  containerName?: string;
   defaultWorkingDirectory: string;
-  executionTarget: "docker";
+  executionTarget: "docker" | "host";
 }
 
 export interface CreateDockerContainerSessionOptions {
@@ -263,8 +263,8 @@ class DockerContainerSession implements ContainerSession {
       command.workingDirectory?.trim() || metadata.defaultWorkingDirectory;
     const commandContext = {
       ...pendingCommandContext,
-      containerName: metadata.containerName,
-      executionTarget: metadata.executionTarget,
+      containerName: metadata.containerName ?? configuredContainerName,
+      executionTarget: "docker" as const,
       workingDirectory,
     } as const;
     const commandController = new AbortController();
@@ -280,7 +280,7 @@ class DockerContainerSession implements ContainerSession {
       const result = await this.#runProcess({
         args: buildDockerExecArgs({
           command: command.command,
-          containerName: metadata.containerName,
+          containerName: metadata.containerName ?? configuredContainerName,
           environment,
           workingDirectory,
         }),
@@ -293,7 +293,7 @@ class DockerContainerSession implements ContainerSession {
       });
 
       const runtimeError = createDockerExecFailure(
-        metadata.containerName,
+        commandContext.containerName,
         commandContext,
         result.exitCode,
         result.stderr,
@@ -524,7 +524,9 @@ function createCommandLogRecord(
   return {
     accessMode: context.accessMode,
     command: context.command,
-    containerName: context.containerName,
+    ...(context.containerName === undefined
+      ? {}
+      : { containerName: context.containerName }),
     durationMs: details.durationMs,
     environment: context.environment,
     executionTarget: context.executionTarget,

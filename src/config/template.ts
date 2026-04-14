@@ -60,10 +60,10 @@ baseUrl = ${quoteTomlString(config.models.engineer.baseUrl)}
 # x-provider-route = "engineer"
 
 [project]
-# The supported v1 execution path is "docker" against an existing project container.
-# Keep "host" reserved unless you are extending the runtime yourself.
+# Use "host" to run commands directly in the local repo checkout.
+# Use "docker" to run commands in an already-running project container.
 executionTarget = ${quoteTomlString(config.project.executionTarget)}
-containerName = ${quoteTomlString(config.project.containerName ?? "app")}
+${renderOptionalProjectContainerName(config.project.containerName)}
 
 [commands]
 # Override these commands to match the target repository. Omit keys to rely on fallback detection.
@@ -95,6 +95,8 @@ ${renderMcpServers(config)}
 mode = ${quoteTomlString(config.network.mode)}
 
 [sandbox]
+# "workspace-write" is the practical host-mode setting.
+# "container" is the Docker-oriented setting.
 mode = ${quoteTomlString(config.sandbox.mode)}
 
 [artifacts]
@@ -114,6 +116,12 @@ function renderOptionalTomlKey(key: string, value: string | undefined): string {
   return value === undefined
     ? `# ${key} = ${quoteTomlString(`replace-with-${key}-command`)}`
     : `${key} = ${quoteTomlString(value)}`;
+}
+
+function renderOptionalProjectContainerName(value: string | undefined): string {
+  return value === undefined
+    ? '# containerName = "app"'
+    : `containerName = ${quoteTomlString(value)}`;
 }
 
 function renderMcpServers(config: HarnessConfig): string {
