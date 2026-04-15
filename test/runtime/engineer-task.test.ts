@@ -1013,6 +1013,325 @@ describe("executeEngineerTask", () => {
     ).toContain("Required check failed 2 consecutive times.");
   });
 
+  it("blocks broad post-pass exploration and completes cleanly after a green required check", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: "http://127.0.0.1:65535/v1",
+      projectRoot,
+    });
+    const sourcePath = path.join(projectRoot, "src", "example.ts");
+    const { client, requests } = createCapturingModelClient([
+      {
+        request: {
+          content: "export const value = 2;\n",
+          path: "src/example.ts",
+          toolName: "file.write" as const,
+        },
+        summary: "Apply the requested change.",
+        type: "tool" as const,
+      },
+      {
+        request: {
+          accessMode: "mutate",
+          command: "npm run test",
+          toolName: "command.execute" as const,
+        },
+        summary: "Run the required check.",
+        type: "tool" as const,
+      },
+      {
+        request: {
+          toolName: "git.status" as const,
+        },
+        summary: "Inspect git status before deciding whether to stop.",
+        type: "tool" as const,
+      },
+      {
+        outcome: "complete" as const,
+        summary: "The task is complete after the passing required check.",
+        type: "final" as const,
+      },
+    ]);
+    let engineerCommandCalls = 0;
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        engineerCommandCalls += 1;
+
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 10,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: 0,
+          role: "engineer",
+          stderr: "",
+          stdout: "tests passed\n",
+          timestamp: "2026-04-15T12:00:00.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      modelClient: client,
+      projectCommandRunner: fakeCommandRunner,
+      task: "Update `src/example.ts` so the exported value becomes `2`.",
+    });
+
+    const finalUserPrompt = requests[3]?.messages
+      .filter((message) => message.role === "user")
+      .map((message) => String(message.content))
+      .join("\n");
+    const events = parseJsonLines(
+      execution.dossier.paths.files.events.absolutePath,
+    );
+
+    expect(execution.result.status).toBe("success");
+    expect(execution.stopReason).toBe("engineer-complete");
+    expect(engineerCommandCalls).toBe(1);
+    expect(readFileSync(sourcePath, "utf8")).toBe("export const value = 2;\n");
+    expect(finalUserPrompt).toContain(
+      "The latest required check already passed.",
+    );
+    expect(finalUserPrompt).toContain(
+      "Do not restart broad exploration or rerun the required check from this green state.",
+    );
+    expect(
+      events.some(
+        (event) =>
+          event.type === "engineer-convergence-guard-triggered" &&
+          event.reason === "post-pass-completion-gate",
+      ),
+    ).toBe(true);
+    expect(
+      events.filter(
+        (event) =>
+          event.type === "tool-call" && event.toolName === "git.status",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("blocks post-pass required-check reruns without recording a synthetic failed check", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: "http://127.0.0.1:65535/v1",
+      projectRoot,
+    });
+    const sourcePath = path.join(projectRoot, "src", "example.ts");
+    const { client, requests } = createCapturingModelClient([
+      {
+        request: {
+          content: "export const value = 2;\n",
+          path: "src/example.ts",
+          toolName: "file.write" as const,
+        },
+        summary: "Apply the requested change.",
+        type: "tool" as const,
+      },
+      {
+        request: {
+          accessMode: "mutate",
+          command: "npm run test",
+          toolName: "command.execute" as const,
+        },
+        summary: "Run the required check.",
+        type: "tool" as const,
+      },
+      {
+        request: {
+          accessMode: "mutate",
+          command: "npm run test",
+          toolName: "command.execute" as const,
+        },
+        summary: "Run the required check again even though it already passed.",
+        type: "tool" as const,
+      },
+      {
+        outcome: "complete" as const,
+        summary: "The task is complete after the passing required check.",
+        type: "final" as const,
+      },
+    ]);
+    let engineerCommandCalls = 0;
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        engineerCommandCalls += 1;
+
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 10,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: 0,
+          role: "engineer",
+          stderr: "",
+          stdout: "tests passed\n",
+          timestamp: "2026-04-15T12:02:00.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      modelClient: client,
+      projectCommandRunner: fakeCommandRunner,
+      task: "Update `src/example.ts` so the exported value becomes `2`.",
+    });
+
+    const finalUserPrompt = requests[3]?.messages
+      .filter((message) => message.role === "user")
+      .map((message) => String(message.content))
+      .join("\n");
+    const checks = JSON.parse(
+      readFileSync(execution.dossier.paths.files.checks.absolutePath, "utf8"),
+    ) as {
+      checks: Array<{ status: string; summary: string }>;
+    };
+
+    expect(execution.result.status).toBe("success");
+    expect(execution.stopReason).toBe("engineer-complete");
+    expect(engineerCommandCalls).toBe(1);
+    expect(readFileSync(sourcePath, "utf8")).toBe("export const value = 2;\n");
+    expect(finalUserPrompt).toContain(
+      "Do not restart broad exploration or rerun the required check from this green state.",
+    );
+    expect(checks.checks).toHaveLength(1);
+    expect(checks.checks[0]).toMatchObject({
+      status: "passed",
+      summary: "Required check passed.",
+    });
+  });
+
+  it("keeps going after a green required check when concrete follow-up work is still needed", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: "http://127.0.0.1:65535/v1",
+      projectRoot,
+    });
+    const sourcePath = path.join(projectRoot, "src", "example.ts");
+    const { client } = createCapturingModelClient([
+      {
+        request: {
+          content: "export const value = 2;\n",
+          path: "src/example.ts",
+          toolName: "file.write" as const,
+        },
+        summary: "Apply the main change.",
+        type: "tool" as const,
+      },
+      {
+        request: {
+          accessMode: "mutate",
+          command: "npm run test",
+          toolName: "command.execute" as const,
+        },
+        summary: "Run the required check once.",
+        type: "tool" as const,
+      },
+      {
+        request: {
+          content: "export const value = 2;\nexport const nextValue = 3;\n",
+          path: "src/example.ts",
+          toolName: "file.write" as const,
+        },
+        summary: "Apply the still-required follow-up change.",
+        type: "tool" as const,
+      },
+      {
+        request: {
+          accessMode: "mutate",
+          command: "npm run test",
+          toolName: "command.execute" as const,
+        },
+        stopWhenSuccessful: true,
+        summary: "Re-run the required check after the follow-up change.",
+        type: "tool" as const,
+      },
+    ]);
+    let engineerCommandCalls = 0;
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        engineerCommandCalls += 1;
+
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 10,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: 0,
+          role: "engineer",
+          stderr: "",
+          stdout: "tests passed\n",
+          timestamp: "2026-04-15T12:05:00.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      modelClient: client,
+      projectCommandRunner: fakeCommandRunner,
+      task: "Update `src/example.ts` and add the follow-up export.",
+    });
+
+    const events = parseJsonLines(
+      execution.dossier.paths.files.events.absolutePath,
+    );
+
+    expect(execution.result.status).toBe("success");
+    expect(execution.stopReason).toBe("passing-checks");
+    expect(engineerCommandCalls).toBe(2);
+    expect(readFileSync(sourcePath, "utf8")).toContain(
+      "export const nextValue = 3;",
+    );
+    expect(
+      events.some(
+        (event) =>
+          event.type === "engineer-convergence-guard-triggered" &&
+          event.reason === "post-pass-completion-gate",
+      ),
+    ).toBe(false);
+  });
+
   it("refuses to rerun a failed required check before any grounded progress", async () => {
     const projectRoot = createTempProject();
     projectRoots.push(projectRoot);
@@ -1099,6 +1418,16 @@ describe("executeEngineerTask", () => {
           ),
       ),
     ).toBe(true);
+    const checks = JSON.parse(
+      readFileSync(execution.dossier.paths.files.checks.absolutePath, "utf8"),
+    ) as {
+      checks: Array<{ status: string; summary: string }>;
+    };
+    expect(checks.checks).toHaveLength(1);
+    expect(checks.checks[0]).toMatchObject({
+      status: "failed",
+      summary: "Required check failed with exit code 1.",
+    });
   });
 
   it("invokes an allowlisted MCP server during a run and records MCP activity in the dossier", async () => {

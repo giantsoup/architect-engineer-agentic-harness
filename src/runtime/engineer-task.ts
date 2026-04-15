@@ -140,6 +140,15 @@ interface PostToolGuidance {
   usedRepoMemory: boolean;
 }
 
+interface PostPassCompletionGateState {
+  active: boolean;
+}
+
+type EngineerConvergenceGuardReason =
+  | "exploration-budget"
+  | "post-pass-completion-gate"
+  | "required-check-without-progress";
+
 export async function executeEngineerTask(
   options: ExecuteEngineerTaskOptions,
 ): Promise<EngineerTaskExecution> {
@@ -277,6 +286,9 @@ export async function executeEngineerTask(
     let editSinceLastFailedCheck = false;
     let groundingSinceLastFailedCheck = false;
     let outcome: FinalizedOutcome | undefined;
+    const postPassCompletionGate: PostPassCompletionGateState = {
+      active: requirePassingChecks && checks.at(-1)?.status === "passed",
+    };
 
     if (requirePassingChecks) {
       hasPassingCheck = checks.some((check) => check.status === "passed");
@@ -459,6 +471,7 @@ export async function executeEngineerTask(
       }
 
       let toolFeedback: ToolFeedback;
+      let convergenceGuardReason: EngineerConvergenceGuardReason | undefined;
 
       if (
         isRequiredCheckCommand(toolRequest, requiredCheckCommand) &&
@@ -466,6 +479,7 @@ export async function executeEngineerTask(
         !editSinceLastFailedCheck &&
         !groundingSinceLastFailedCheck
       ) {
+        convergenceGuardReason = "required-check-without-progress";
         toolFeedback = createRepeatedRequiredCheckFeedback({
           recentRepoFacts,
           requiredCheckCommand,
@@ -487,6 +501,7 @@ export async function executeEngineerTask(
         isExplorationToolRequest(toolRequest) &&
         consecutiveExplorationSteps >= EXPLORATION_BUDGET_STEPS
       ) {
+        convergenceGuardReason = "exploration-budget";
         explorationBudgetExhaustedAtStep ??= actionStepCount;
         toolFeedback = createExplorationBudgetFeedback({
           recentRepoFacts,
@@ -501,6 +516,21 @@ export async function executeEngineerTask(
           recentRepoFacts: recentRepoFacts
             .slice(-4)
             .map((fact) => fact.summary),
+          timestamp: now().toISOString(),
+          toolRequest: summarizeToolRequestForEvent(toolRequest),
+          type: "engineer-convergence-guard-triggered",
+        });
+      } else if (
+        shouldBlockAfterPassingCheck(toolRequest, requiredCheckCommand) &&
+        postPassCompletionGate.active
+      ) {
+        convergenceGuardReason = "post-pass-completion-gate";
+        toolFeedback = createPostPassCompletionGateFeedback({
+          toolName: toolRequest.toolName,
+        });
+        await appendRunEvent(dossier.paths, {
+          actionStep: actionStepCount,
+          reason: "post-pass-completion-gate",
           timestamp: now().toISOString(),
           toolRequest: summarizeToolRequestForEvent(toolRequest),
           type: "engineer-convergence-guard-triggered",
@@ -537,9 +567,17 @@ export async function executeEngineerTask(
         groundingSinceLastFailedCheck = true;
       }
 
+      if (
+        toolFeedback.ok &&
+        invalidatesPassingCheck(toolRequest, requiredCheckCommand)
+      ) {
+        postPassCompletionGate.active = false;
+      }
+
       const guidance = createPostToolGuidance({
         consecutiveExplorationSteps,
         explorationBudget: EXPLORATION_BUDGET_STEPS,
+        postPassCompletionGateActive: postPassCompletionGate.active,
         requiredCheckCommand,
         recentRepoFacts,
         toolFeedback,
@@ -561,7 +599,10 @@ export async function executeEngineerTask(
         });
       }
 
-      if (isRequiredCheckCommand(toolRequest, requiredCheckCommand)) {
+      if (
+        isRequiredCheckCommand(toolRequest, requiredCheckCommand) &&
+        !shouldSkipRequiredCheckRecording(convergenceGuardReason)
+      ) {
         const recordedCheck = toCheckResult(toolFeedback, requiredCheckCommand);
 
         checks.push(recordedCheck);
@@ -579,6 +620,7 @@ export async function executeEngineerTask(
           editSinceLastFailedCheck = false;
           groundingSinceLastFailedCheck = false;
           hasPassingCheck = true;
+          postPassCompletionGate.active = true;
 
           if (action.stopWhenSuccessful === true) {
             outcome = {
@@ -592,6 +634,7 @@ export async function executeEngineerTask(
           consecutiveFailedChecks += 1;
           editSinceLastFailedCheck = false;
           groundingSinceLastFailedCheck = false;
+          postPassCompletionGate.active = false;
 
           if (consecutiveFailedChecks >= maxConsecutiveFailedChecks) {
             outcome = {
@@ -1144,6 +1187,47 @@ function isGroundingToolRequest(request: ToolRequest): boolean {
   );
 }
 
+function shouldBlockAfterPassingCheck(
+  request: ToolRequest,
+  requiredCheckCommand: string,
+): boolean {
+  return (
+    request.toolName === "file.search" ||
+    request.toolName === "file.list" ||
+    request.toolName === "git.diff" ||
+    request.toolName === "git.status" ||
+    isRequiredCheckCommand(request, requiredCheckCommand)
+  );
+}
+
+function shouldSkipRequiredCheckRecording(
+  convergenceGuardReason: EngineerConvergenceGuardReason | undefined,
+): boolean {
+  return (
+    convergenceGuardReason === "post-pass-completion-gate" ||
+    convergenceGuardReason === "required-check-without-progress"
+  );
+}
+
+function invalidatesPassingCheck(
+  request: ToolRequest,
+  requiredCheckCommand: string,
+): boolean {
+  if (request.toolName === "file.write") {
+    return true;
+  }
+
+  if (isRequiredCheckCommand(request, requiredCheckCommand)) {
+    return false;
+  }
+
+  if (request.toolName === "command.execute") {
+    return request.accessMode !== "inspect";
+  }
+
+  return request.toolName === "mcp.call";
+}
+
 function isDuplicateExplorationRequest(request: ToolRequest): boolean {
   return (
     request.toolName === "file.read" ||
@@ -1155,6 +1239,7 @@ function isDuplicateExplorationRequest(request: ToolRequest): boolean {
 function createPostToolGuidance(options: {
   consecutiveExplorationSteps: number;
   explorationBudget: number;
+  postPassCompletionGateActive: boolean;
   requiredCheckCommand: string;
   recentRepoFacts: RepoFact[];
   toolFeedback: ToolFeedback;
@@ -1176,6 +1261,25 @@ function createPostToolGuidance(options: {
         "List a known existing parent directory or switch to another known path.",
       ].join(" "),
       usedRepoMemory: knownPathsHint !== undefined,
+    };
+  }
+
+  if (
+    options.toolFeedback.ok === false &&
+    options.toolFeedback.error.code === "invalid-state" &&
+    options.postPassCompletionGateActive &&
+    shouldBlockAfterPassingCheck(
+      options.toolRequest,
+      options.requiredCheckCommand,
+    )
+  ) {
+    return {
+      content: [
+        `The latest required check already passed.`,
+        "Do not restart broad exploration or rerun the required check from this green state.",
+        "Reply with `COMPLETE: <summary>` if the task is satisfied, or take one concrete follow-up step that is still required.",
+      ].join(" "),
+      usedRepoMemory: false,
     };
   }
 
@@ -1254,6 +1358,24 @@ function createExplorationBudgetFeedback(options: {
     },
     ok: false,
     toolName: options.request.toolName,
+  };
+}
+
+function createPostPassCompletionGateFeedback(options: {
+  toolName: ToolRequest["toolName"];
+}): ToolFeedback {
+  return {
+    error: {
+      code: "invalid-state",
+      message: [
+        `The latest required check already passed.`,
+        "Do not restart broad exploration or rerun the required check from this green state.",
+        "Reply with `COMPLETE: <summary>` if the task is already done, or take one concrete follow-up step that still needs verification.",
+      ].join(" "),
+      name: "BuiltInToolStateError",
+    },
+    ok: false,
+    toolName: options.toolName,
   };
 }
 
