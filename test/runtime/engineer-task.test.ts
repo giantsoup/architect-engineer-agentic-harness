@@ -1743,40 +1743,98 @@ args = ["repo-mcp.js"]`,
     ).toBe(true);
   });
 
-  it("adds non-thinking guidance for qwen engineer models", async () => {
+  it("smoke: completes a Qwen3-Coder tool-call loop through the shared runtime without runtime prompt branches", async () => {
     const projectRoot = createTempProject();
     projectRoots.push(projectRoot);
     initializeGitRepository(projectRoot);
 
-    const loadedConfig = await createLoadedConfig({
-      engineerBaseUrl: "http://127.0.0.1:65535/v1",
-      engineerModel: "qwen3-coder-next",
-      projectRoot,
-    });
-    const { client, requests } = createCapturingModelClient([
+    const modelServer = await startMockServerWithBodies([
       {
-        blockers: ["stop immediately"],
-        outcome: "blocked" as const,
-        summary: "Blocked immediately",
-        type: "final" as const,
+        content: [
+          "Apply the requested edit.",
+          "<tool_call>",
+          "<function=file.write>",
+          "<parameter=path>",
+          "src/example.ts",
+          "</parameter>",
+          "<parameter=content>",
+          "export const value = 5;\n",
+          "</parameter>",
+          "</function>",
+          "</tool_call>",
+        ].join("\n"),
+      },
+      {
+        content: [
+          "Run the required check.",
+          "STOP_ON_SUCCESS",
+          "<tool_call>",
+          "<function=command.execute>",
+          "<parameter=accessMode>",
+          "mutate",
+          "</parameter>",
+          "<parameter=command>",
+          "npm run test",
+          "</parameter>",
+          "</function>",
+          "</tool_call>",
+        ].join("\n"),
       },
     ]);
+    servers.push(modelServer);
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: `${modelServer.url}/v1`,
+      engineerModel: "Qwen/Qwen3-Coder-Next",
+      engineerProvider: "openai-compatible",
+      projectRoot,
+    });
+    const sourcePath = path.join(projectRoot, "src", "example.ts");
+
+    mkdirSync(path.dirname(sourcePath), { recursive: true });
+    writeFileSync(sourcePath, "export const value = 1;\n", "utf8");
+
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 8,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: 0,
+          role: "engineer",
+          stderr: "",
+          stdout: "tests passed\n",
+          timestamp: "2026-04-14T12:02:05.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
 
     const execution = await executeEngineerTask({
       loadedConfig,
-      modelClient: client,
-      persistFinalArtifacts: false,
-      task: "Stop immediately.",
+      projectCommandRunner: fakeCommandRunner,
+      runId: "20260414T120200.000Z-abcdac",
+      task: "Update `src/example.ts` so the exported value becomes `5`.",
     });
 
-    expect(execution.stopReason).toBe("blocked");
+    expect(execution.result.status).toBe("success");
+    expect(execution.stopReason).toBe("passing-checks");
+    expect(readFileSync(sourcePath, "utf8")).toBe("export const value = 5;\n");
+    expect(modelServer.requestBodies).toHaveLength(2);
+    expect(modelServer.requestBodies[0]?.tools).toBeDefined();
     expect(
-      requests[0]?.messages.some(
-        (message) =>
-          message.role === "developer" &&
-          message.content.includes("Stay in non-thinking mode."),
-      ),
-    ).toBe(true);
+      JSON.stringify(modelServer.requestBodies[0]?.messages ?? []),
+    ).not.toContain("Stay in non-thinking mode.");
   });
 
   it("continues after malformed Engineer output and accepts the next valid step", async () => {

@@ -247,9 +247,6 @@ export async function executeEngineerTask(
             explorationBudget: EXPLORATION_BUDGET_STEPS,
             maxConsecutiveFailedChecks,
             maxIterations,
-            preferNonThinkingMode: shouldPreferNonThinkingMode(
-              options.loadedConfig,
-            ),
             requiredCheckCommand,
             requirePassingChecks,
             timeoutMs,
@@ -1426,7 +1423,6 @@ function renderEngineerProtocol(options: {
   explorationBudget: number;
   maxConsecutiveFailedChecks: number;
   maxIterations: number;
-  preferNonThinkingMode: boolean;
   requiredCheckCommand: string;
   requirePassingChecks: boolean;
   timeoutMs: number;
@@ -1444,11 +1440,6 @@ function renderEngineerProtocol(options: {
     `- Passing checks required: ${options.requirePassingChecks ? "yes" : "no"}.`,
     "- Built-in tool names always route to built-in tools. MCP is only available through `mcp.call`.",
     "- Keep tool use explicit and auditable.",
-    ...(options.preferNonThinkingMode
-      ? [
-          "- Stay in non-thinking mode. Do not emit `<think>` blocks, hidden reasoning, or extra analysis outside the required step.",
-        ]
-      : []),
     "- Ignore `.agent-harness`, `.git`, `node_modules`, and other generated or vendor paths unless the task explicitly depends on them.",
     "- Explore search-first: prefer `file.search` to locate symbols, strings, and likely files before using `file.list`.",
     "- Once search yields a few candidates, prefer `file.read_many` for a small batch snapshot instead of repeated one-file reads.",
@@ -1516,12 +1507,6 @@ function stripToolName(request: ToolRequest): Record<string, unknown> {
 
 function formatIterationLimit(maxIterations: number): string {
   return Number.isFinite(maxIterations) ? `${maxIterations}` : "no fixed limit";
-}
-
-function shouldPreferNonThinkingMode(
-  loadedConfig: LoadedHarnessConfig,
-): boolean {
-  return /qwen/i.test(loadedConfig.config.models.engineer.model);
 }
 
 function renderBuiltInToolsMarkdown(): string {

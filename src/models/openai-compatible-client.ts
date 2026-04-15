@@ -1,15 +1,18 @@
 import type {
-  ModelChatMessage,
   ModelChatRequest,
   ModelChatResponse,
   ModelLogErrorEvent,
   ModelToolCall,
-  ModelToolDefinition,
   ModelRequestLogger,
   ModelStructuredOutputSpec,
   ResolvedModelConfig,
 } from "./types.js";
 import type { JsonValue } from "../types/run.js";
+import {
+  resolveModelFamilyAdapter,
+  type ModelFamilyAdapter,
+  type ModelToolCallMode,
+} from "./model-family-adapter.js";
 
 export type ModelClientErrorClassification =
   | "config"
@@ -191,12 +194,14 @@ export class OpenAiCompatibleChatClient {
   private readonly config: ResolvedModelConfig;
   private readonly fetchImpl: typeof fetch;
   private readonly logger?: ModelRequestLogger | undefined;
+  private readonly modelFamilyAdapter: ModelFamilyAdapter;
   private readonly retryDelayMs: number;
 
   constructor(options: OpenAiCompatibleChatClientOptions) {
     this.config = options.config;
     this.fetchImpl = options.fetch ?? globalThis.fetch;
     this.logger = options.logger;
+    this.modelFamilyAdapter = resolveModelFamilyAdapter(this.config);
     this.retryDelayMs = options.retryDelayMs ?? 100;
   }
 
@@ -212,7 +217,11 @@ export class OpenAiCompatibleChatClient {
     let usedNativeStructuredOutput = this.shouldUseNativeStructuredOutput(
       request.structuredOutput,
     );
-    let usedNativeToolCalls = (request.tools?.length ?? 0) > 0;
+    let toolCallMode: ModelToolCallMode =
+      (request.tools?.length ?? 0) > 0 ? "native" : "disabled";
+    let useReasoningControl =
+      this.config.role === "engineer" &&
+      this.modelFamilyAdapter.shouldDisableReasoningParameter();
     let attempt = 1;
     const maxAttempts = this.config.maxRetries + 1;
 
@@ -221,8 +230,9 @@ export class OpenAiCompatibleChatClient {
       const startedAt = Date.now();
       const payload = this.buildRequestPayload(
         request,
+        toolCallMode,
         usedNativeStructuredOutput,
-        usedNativeToolCalls,
+        useReasoningControl,
       );
 
       await this.logger?.onRequest?.({
@@ -273,7 +283,7 @@ export class OpenAiCompatibleChatClient {
           }
 
           if (
-            usedNativeToolCalls &&
+            toolCallMode === "native" &&
             isNativeToolCallingUnsupported(httpError)
           ) {
             await this.logger?.onRetry?.({
@@ -289,7 +299,28 @@ export class OpenAiCompatibleChatClient {
               timestamp: new Date().toISOString(),
               usedNativeStructuredOutput,
             });
-            usedNativeToolCalls = false;
+            toolCallMode = "fallback";
+            continue;
+          }
+
+          if (
+            useReasoningControl &&
+            isReasoningParameterUnsupported(httpError)
+          ) {
+            await this.logger?.onRetry?.({
+              attempt,
+              classification: "unsupported-provider",
+              message:
+                "Provider rejected the Qwen non-thinking request parameter. Retrying without it.",
+              nextAttempt: attempt,
+              provider: this.config.provider,
+              retryable: true,
+              role: this.config.role,
+              statusCode: response.status,
+              timestamp: new Date().toISOString(),
+              usedNativeStructuredOutput,
+            });
+            useReasoningControl = false;
             continue;
           }
 
@@ -309,8 +340,20 @@ export class OpenAiCompatibleChatClient {
           this.describeTarget(),
         );
         const choice = responseJson.choices?.[0];
-        const toolCalls = extractToolCalls(choice);
-        const assistantContent = extractAssistantContent(choice, toolCalls);
+        let assistantContent: string;
+        let toolCalls: readonly ModelToolCall[];
+
+        try {
+          const extractedResponse =
+            this.modelFamilyAdapter.extractToolCalls(choice);
+          assistantContent = extractedResponse.assistantContent;
+          toolCalls = extractedResponse.toolCalls;
+        } catch (error) {
+          throw new ModelResponseError(
+            `OpenAI-compatible response from ${this.describeTarget()} could not be parsed.`,
+            { cause: error },
+          );
+        }
         const structuredOutput = await this.resolveStructuredOutput(
           request.structuredOutput,
           assistantContent,
@@ -368,16 +411,16 @@ export class OpenAiCompatibleChatClient {
 
   private buildRequestPayload<TStructured>(
     request: ModelChatRequest<TStructured>,
+    toolCallMode: ModelToolCallMode,
     useNativeStructuredOutput: boolean,
-    useNativeToolCalls: boolean,
+    useReasoningControl: boolean,
   ): Record<string, unknown> {
     const payload: Record<string, unknown> = {
       max_tokens: request.maxOutputTokens,
-      messages: this.buildMessages(
-        request,
+      messages: this.modelFamilyAdapter.buildMessages(request, {
+        toolCallMode,
         useNativeStructuredOutput,
-        useNativeToolCalls,
-      ),
+      }),
       model: this.config.model,
       temperature: request.temperature,
       top_p: request.topP,
@@ -406,43 +449,24 @@ export class OpenAiCompatibleChatClient {
       };
     }
 
-    if (useNativeToolCalls && request.tools !== undefined) {
-      payload.tools = request.tools.map((tool) => toOpenAiTool(tool));
+    const toolPayload = this.modelFamilyAdapter.buildToolPayload(
+      request.tools,
+      toolCallMode,
+    );
+
+    if (toolPayload !== undefined) {
+      payload.tools = toolPayload;
+    }
+
+    if (useReasoningControl) {
+      payload.extra_body = {
+        chat_template_kwargs: {
+          enable_thinking: false,
+        },
+      };
     }
 
     return payload;
-  }
-
-  private buildMessages<TStructured>(
-    request: ModelChatRequest<TStructured>,
-    useNativeStructuredOutput: boolean,
-    useNativeToolCalls: boolean,
-  ): Array<Record<string, string>> {
-    const messages = request.messages.map((message) =>
-      toOpenAiMessage(message),
-    );
-
-    if (!useNativeStructuredOutput && request.structuredOutput !== undefined) {
-      messages.push({
-        content: renderStructuredOutputFallbackInstruction(
-          request.structuredOutput,
-        ),
-        role: "developer",
-      });
-    }
-
-    if (
-      !useNativeToolCalls &&
-      (request.tools?.length ?? 0) > 0 &&
-      request.toolFallbackInstruction !== undefined
-    ) {
-      messages.push({
-        content: request.toolFallbackInstruction,
-        role: "developer",
-      });
-    }
-
-    return messages;
   }
 
   private async executeRequest(
@@ -623,91 +647,6 @@ export class OpenAiCompatibleChatClient {
   }
 }
 
-function toOpenAiMessage(message: ModelChatMessage): Record<string, string> {
-  const normalizedRole = normalizeOpenAiMessageRole(message.role);
-  const normalizedContent =
-    message.role === "tool"
-      ? renderToolResultMessage(message)
-      : message.content;
-  const openAiMessage: Record<string, string> = {
-    content: normalizedContent,
-    role: normalizedRole,
-  };
-
-  if (message.name !== undefined && normalizedRole !== "user") {
-    openAiMessage.name = message.name;
-  }
-
-  if (message.toolCallId !== undefined && normalizedRole === "tool") {
-    openAiMessage.tool_call_id = message.toolCallId;
-  }
-
-  return openAiMessage;
-}
-
-function normalizeOpenAiMessageRole(role: ModelChatMessage["role"]): string {
-  switch (role) {
-    case "assistant":
-      return "assistant";
-    case "developer":
-      return "system";
-    case "system":
-      return "system";
-    case "tool":
-      return "user";
-    case "user":
-      return "user";
-  }
-}
-
-function renderToolResultMessage(message: ModelChatMessage): string {
-  const toolLabel = message.name === undefined ? "tool" : message.name;
-
-  return [`Tool result for ${toolLabel}:`, message.content].join("\n");
-}
-
-function extractAssistantContent(
-  choice: OpenAiChatCompletionChoice | undefined,
-  toolCalls: readonly ModelToolCall[],
-): string {
-  const content = choice?.message?.content;
-
-  if (typeof content === "string") {
-    return content;
-  }
-
-  if (Array.isArray(content)) {
-    const textContent = content
-      .filter((part) => part.type === "text" && typeof part.text === "string")
-      .map((part) => part.text ?? "")
-      .join("");
-
-    if (textContent.length > 0) {
-      return textContent;
-    }
-  }
-
-  if (toolCalls.length > 0) {
-    return "";
-  }
-
-  throw new ModelResponseError(
-    "OpenAI-compatible response did not include assistant text content in choices[0].message.content.",
-  );
-}
-
-function extractToolCalls(
-  choice: OpenAiChatCompletionChoice | undefined,
-): ModelToolCall[] {
-  const toolCalls = choice?.message?.tool_calls;
-
-  if (toolCalls === undefined || toolCalls === null) {
-    return [];
-  }
-
-  return toolCalls.map((toolCall, index) => normalizeToolCall(toolCall, index));
-}
-
 function createHttpError(
   config: ResolvedModelConfig,
   statusCode: number,
@@ -784,6 +723,26 @@ function isNativeToolCallingUnsupported(error: ModelClientError): boolean {
   );
 }
 
+function isReasoningParameterUnsupported(error: ModelClientError): boolean {
+  if (error.classification !== "http") {
+    return false;
+  }
+
+  if (![400, 404, 415, 422, 501].includes(error.statusCode ?? 0)) {
+    return false;
+  }
+
+  const normalizedMessage = error.message.toLowerCase();
+
+  return (
+    normalizedMessage.includes("enable_thinking") ||
+    normalizedMessage.includes("chat_template_kwargs") ||
+    normalizedMessage.includes("extra_body") ||
+    normalizedMessage.includes("thinking mode") ||
+    normalizedMessage.includes("enable thinking")
+  );
+}
+
 function isNativeStructuredOutputUnsupportedStatus(
   statusCode: number,
   message: string,
@@ -850,19 +809,6 @@ function toJsonValue(value: unknown): JsonValue | undefined {
   return JSON.parse(JSON.stringify(value)) as JsonValue;
 }
 
-function toOpenAiTool(tool: ModelToolDefinition): Record<string, unknown> {
-  return {
-    function: {
-      ...(tool.description === undefined
-        ? {}
-        : { description: tool.description }),
-      name: tool.name,
-      parameters: tool.inputSchema,
-    },
-    type: "function",
-  };
-}
-
 async function parseOpenAiChatCompletionResponse(
   response: Response,
   targetDescription: string,
@@ -883,59 +829,6 @@ function extractJsonCodeFence(rawContent: string): string | undefined {
     /```(?:json)?\s*([\s\S]*?)\s*```/iu.exec(rawContent);
 
   return fencedMatch?.[1];
-}
-
-function normalizeToolCall(
-  toolCall: OpenAiChatCompletionToolCall,
-  index: number,
-): ModelToolCall {
-  const name = toolCall.function?.name?.trim();
-
-  if (name === undefined || name.length === 0) {
-    throw new ModelResponseError(
-      `OpenAI-compatible response tool_calls[${index}] did not include a function name.`,
-    );
-  }
-
-  const id = toolCall.id?.trim();
-
-  if (id === undefined || id.length === 0) {
-    throw new ModelResponseError(
-      `OpenAI-compatible response tool_calls[${index}] did not include an id.`,
-    );
-  }
-
-  const rawArguments = toolCall.function?.arguments;
-  let parsedArguments: unknown;
-
-  if (typeof rawArguments === "string") {
-    try {
-      parsedArguments =
-        rawArguments.trim().length === 0 ? {} : JSON.parse(rawArguments);
-    } catch (error) {
-      throw new ModelResponseError(
-        `OpenAI-compatible response tool_calls[${index}] had invalid JSON arguments.`,
-        { cause: error },
-      );
-    }
-  } else {
-    parsedArguments = rawArguments ?? {};
-  }
-
-  if (!isPlainObject(parsedArguments)) {
-    throw new ModelResponseError(
-      `OpenAI-compatible response tool_calls[${index}] arguments must decode to an object.`,
-    );
-  }
-
-  return {
-    arguments: JSON.parse(JSON.stringify(parsedArguments)) as Record<
-      string,
-      JsonValue
-    >,
-    id,
-    name,
-  };
 }
 
 function collectStructuredOutputCandidates(rawContent: string): string[] {
@@ -1233,17 +1126,6 @@ function normalizeEngineerToolRequest(value: unknown): unknown {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function renderStructuredOutputFallbackInstruction<TStructured>(
-  structuredOutput: ModelStructuredOutputSpec<TStructured>,
-): string {
-  return [
-    `Structured output fallback mode for ${structuredOutput.formatName}.`,
-    "Return exactly one JSON object and nothing else.",
-    "Do not include markdown fences, comments, prose, or multiple JSON objects.",
-    `The JSON must match this schema exactly: ${JSON.stringify(structuredOutput.schema)}`,
-  ].join("\n");
 }
 
 async function delay(durationMs: number): Promise<void> {

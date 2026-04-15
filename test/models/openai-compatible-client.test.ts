@@ -93,11 +93,13 @@ function renderConfig(options: {
   architectBaseUrl: string;
   architectHeaders?: Record<string, string>;
   architectMaxRetries?: number;
+  architectModel?: string;
   architectProvider?: string;
   architectTimeoutMs?: number;
   engineerBaseUrl: string;
   engineerHeaders?: Record<string, string>;
   engineerMaxRetries?: number;
+  engineerModel?: string;
   engineerProvider?: string;
   engineerTimeoutMs?: number;
 }): string {
@@ -108,7 +110,7 @@ function renderConfig(options: {
 
 [models.architect]
 provider = ${JSON.stringify(architectProvider)}
-model = "architect-model"
+model = ${JSON.stringify(options.architectModel ?? "architect-model")}
 baseUrl = ${JSON.stringify(options.architectBaseUrl)}
 ${options.architectApiKey === undefined ? "" : `apiKey = ${JSON.stringify(options.architectApiKey)}`}
 ${options.architectTimeoutMs === undefined ? "" : `timeoutMs = ${options.architectTimeoutMs}`}
@@ -116,7 +118,7 @@ ${options.architectMaxRetries === undefined ? "" : `maxRetries = ${options.archi
 ${renderHeaderTable("models.architect.headers", options.architectHeaders)}
 [models.engineer]
 provider = ${JSON.stringify(engineerProvider)}
-model = "engineer-model"
+model = ${JSON.stringify(options.engineerModel ?? "engineer-model")}
 baseUrl = ${JSON.stringify(options.engineerBaseUrl)}
 ${options.engineerTimeoutMs === undefined ? "" : `timeoutMs = ${options.engineerTimeoutMs}`}
 ${options.engineerMaxRetries === undefined ? "" : `maxRetries = ${options.engineerMaxRetries}`}
@@ -191,6 +193,45 @@ async function readRequestBody(request: IncomingMessage): Promise<string> {
   }
 
   return Buffer.concat(chunks).toString("utf8");
+}
+
+function renderQwen3CoderToolCall(options: {
+  arguments: Record<string, unknown>;
+  name: string;
+  summary?: string;
+}): string {
+  const parameterLines = Object.entries(options.arguments).flatMap(
+    ([name, value]) => [
+      `<parameter=${name}>`,
+      typeof value === "string" ? value : JSON.stringify(value),
+      "</parameter>",
+    ],
+  );
+
+  return [
+    ...(options.summary === undefined ? [] : [options.summary]),
+    "<tool_call>",
+    `<function=${options.name}>`,
+    ...parameterLines,
+    "</function>",
+    "</tool_call>",
+  ].join("\n");
+}
+
+function renderQwenToolCall(options: {
+  arguments: Record<string, unknown>;
+  name: string;
+  summary?: string;
+}): string {
+  return [
+    ...(options.summary === undefined ? [] : [options.summary]),
+    "<tool_call>",
+    JSON.stringify({
+      arguments: options.arguments,
+      name: options.name,
+    }),
+    "</tool_call>",
+  ].join("\n");
 }
 
 function parseJsonLines(filePath: string): Record<string, unknown>[] {
@@ -1052,6 +1093,258 @@ describe("OpenAiCompatibleChatClient", () => {
     ]);
   });
 
+  it("uses Qwen-native tool message formatting for engineer requests", async () => {
+    const seenBodies: Array<Record<string, unknown>> = [];
+    const mockServer = await startMockServer((request, response) => {
+      seenBodies.push(JSON.parse(request.bodyText) as Record<string, unknown>);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: "acknowledged",
+                role: "assistant",
+              },
+            },
+          ],
+          id: "chatcmpl-qwen-message-format",
+        }),
+      );
+    });
+    servers.push(mockServer);
+
+    const { loadedConfig, projectRoot } = await createLoadedConfig(
+      renderConfig({
+        architectBaseUrl: `${mockServer.url}/remote/v1`,
+        engineerBaseUrl: `${mockServer.url}/local/v1`,
+        engineerModel: "Qwen/Qwen3-Coder-Next",
+        engineerProvider: "openai-compatible",
+      }),
+    );
+    projectRoots.push(projectRoot);
+
+    const client = new OpenAiCompatibleChatClient({
+      config: resolveModelConfigForRole(loadedConfig, "engineer"),
+      retryDelayMs: 0,
+    });
+
+    await client.chat({
+      messages: [
+        { content: "System prompt.", role: "system" },
+        { content: "Developer instruction.", role: "developer" },
+        { content: "Read the README.", role: "assistant" },
+        {
+          content: '{"ok":true,"result":{"path":"README.md"}}',
+          name: "file.read",
+          role: "tool",
+        },
+      ],
+      tools: createEngineerToolDefinitions(),
+    });
+
+    expect(seenBodies[0]?.messages).toEqual([
+      { content: "System prompt.", role: "system" },
+      { content: "Developer instruction.", role: "system" },
+      { content: "Read the README.", role: "assistant" },
+      {
+        content: '{"ok":true,"result":{"path":"README.md"}}',
+        name: "file.read",
+        role: "tool",
+      },
+    ]);
+    expect(seenBodies[0]?.tools).toBeDefined();
+    expect(seenBodies[0]?.extra_body).toBeUndefined();
+  });
+
+  it("parses Qwen3-Coder tool calls from assistant content when tool_calls are omitted", async () => {
+    const mockServer = await startMockServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                content: renderQwen3CoderToolCall({
+                  arguments: {
+                    accessMode: "mutate",
+                    command: "npm run test",
+                  },
+                  name: "command.execute",
+                  summary: "Run the required check.",
+                }),
+                role: "assistant",
+              },
+            },
+          ],
+          id: "chatcmpl-qwen3-coder-inline-tool-call",
+        }),
+      );
+    });
+    servers.push(mockServer);
+
+    const { loadedConfig, projectRoot } = await createLoadedConfig(
+      renderConfig({
+        architectBaseUrl: `${mockServer.url}/remote/v1`,
+        engineerBaseUrl: `${mockServer.url}/local/v1`,
+        engineerModel: "Qwen/Qwen3-Coder-Next",
+        engineerProvider: "openai-compatible",
+      }),
+    );
+    projectRoots.push(projectRoot);
+
+    const client = new OpenAiCompatibleChatClient({
+      config: resolveModelConfigForRole(loadedConfig, "engineer"),
+      retryDelayMs: 0,
+    });
+
+    const response = await client.chat({
+      messages: [{ content: "Return the next engineer step.", role: "user" }],
+      tools: createEngineerToolDefinitions(),
+    });
+
+    expect(response.rawContent).toBe("Run the required check.");
+    expect(response.toolCalls).toEqual([
+      {
+        arguments: {
+          accessMode: "mutate",
+          command: "npm run test",
+        },
+        id: "qwen-tool-call-1",
+        name: "command.execute",
+      },
+    ]);
+  });
+
+  it("trims scalar Qwen3-Coder parameter values while preserving multiline content", async () => {
+    const mockServer = await startMockServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                content: [
+                  "Apply the edit.",
+                  "<tool_call>",
+                  "<function=file.write>",
+                  "<parameter=path>",
+                  "  src/example.ts  ",
+                  "</parameter>",
+                  "<parameter=content>",
+                  "export const value = 6;\n",
+                  "</parameter>",
+                  "</function>",
+                  "</tool_call>",
+                ].join("\n"),
+                role: "assistant",
+              },
+            },
+          ],
+          id: "chatcmpl-qwen3-coder-trimmed-params",
+        }),
+      );
+    });
+    servers.push(mockServer);
+
+    const { loadedConfig, projectRoot } = await createLoadedConfig(
+      renderConfig({
+        architectBaseUrl: `${mockServer.url}/remote/v1`,
+        engineerBaseUrl: `${mockServer.url}/local/v1`,
+        engineerModel: "Qwen/Qwen3-Coder-Next",
+        engineerProvider: "openai-compatible",
+      }),
+    );
+    projectRoots.push(projectRoot);
+
+    const client = new OpenAiCompatibleChatClient({
+      config: resolveModelConfigForRole(loadedConfig, "engineer"),
+      retryDelayMs: 0,
+    });
+
+    const response = await client.chat({
+      messages: [{ content: "Return the next engineer step.", role: "user" }],
+      tools: createEngineerToolDefinitions(),
+    });
+
+    expect(response.toolCalls).toEqual([
+      {
+        arguments: {
+          content: "export const value = 6;\n",
+          path: "src/example.ts",
+        },
+        id: "qwen-tool-call-1",
+        name: "file.write",
+      },
+    ]);
+  });
+
+  it("defaults generic Qwen engineer requests to non-thinking mode and parses JSON tool-call blocks", async () => {
+    const seenBodies: Array<Record<string, unknown>> = [];
+    const mockServer = await startMockServer((request, response) => {
+      seenBodies.push(JSON.parse(request.bodyText) as Record<string, unknown>);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: renderQwenToolCall({
+                  arguments: {
+                    path: "README.md",
+                  },
+                  name: "file.read",
+                  summary: "Inspect the README.",
+                }),
+                role: "assistant",
+              },
+            },
+          ],
+          id: "chatcmpl-qwen-json-tool-call",
+        }),
+      );
+    });
+    servers.push(mockServer);
+
+    const { loadedConfig, projectRoot } = await createLoadedConfig(
+      renderConfig({
+        architectBaseUrl: `${mockServer.url}/remote/v1`,
+        engineerBaseUrl: `${mockServer.url}/local/v1`,
+        engineerModel: "Qwen/Qwen3-Next-80B-A3B-Instruct",
+        engineerProvider: "openai-compatible",
+      }),
+    );
+    projectRoots.push(projectRoot);
+
+    const client = new OpenAiCompatibleChatClient({
+      config: resolveModelConfigForRole(loadedConfig, "engineer"),
+      retryDelayMs: 0,
+    });
+
+    const response = await client.chat({
+      messages: [{ content: "Return the next engineer step.", role: "user" }],
+      tools: createEngineerToolDefinitions(),
+    });
+
+    expect(seenBodies[0]?.extra_body).toEqual({
+      chat_template_kwargs: {
+        enable_thinking: false,
+      },
+    });
+    expect(response.rawContent).toBe("Inspect the README.");
+    expect(response.toolCalls).toEqual([
+      {
+        arguments: {
+          path: "README.md",
+        },
+        id: "qwen-tool-call-1",
+        name: "file.read",
+      },
+    ]);
+  });
+
   it("falls back cleanly when a provider rejects native Engineer tool calling", async () => {
     let attempts = 0;
     const seenBodies: Array<Record<string, unknown>> = [];
@@ -1124,6 +1417,100 @@ describe("OpenAiCompatibleChatClient", () => {
     );
     expect(response.rawContent).toContain("Fallback tool step");
     expect(response.toolCalls).toBeUndefined();
+  });
+
+  it("falls back to Qwen-native tool formatting when a Qwen endpoint rejects native tools", async () => {
+    let attempts = 0;
+    const seenBodies: Array<Record<string, unknown>> = [];
+    const mockServer = await startMockServer((request, response) => {
+      attempts += 1;
+      seenBodies.push(JSON.parse(request.bodyText) as Record<string, unknown>);
+
+      if (attempts === 1) {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: {
+              message: "function calling unsupported on this endpoint",
+            },
+          }),
+        );
+        return;
+      }
+
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                content: renderQwen3CoderToolCall({
+                  arguments: {
+                    path: "README.md",
+                  },
+                  name: "file.read",
+                  summary: "Read the README before editing.",
+                }),
+                role: "assistant",
+              },
+            },
+          ],
+          id: "chatcmpl-qwen-tools-fallback",
+        }),
+      );
+    });
+    servers.push(mockServer);
+
+    const { loadedConfig, projectRoot } = await createLoadedConfig(
+      renderConfig({
+        architectBaseUrl: `${mockServer.url}/remote/v1`,
+        engineerBaseUrl: `${mockServer.url}/local/v1`,
+        engineerModel: "Qwen/Qwen3-Coder-Next",
+        engineerProvider: "openai-compatible",
+        engineerMaxRetries: 0,
+      }),
+    );
+    projectRoots.push(projectRoot);
+
+    const client = new OpenAiCompatibleChatClient({
+      config: resolveModelConfigForRole(loadedConfig, "engineer"),
+      retryDelayMs: 0,
+    });
+
+    const response = await client.chat({
+      messages: [{ content: "Return the next engineer step.", role: "user" }],
+      toolFallbackInstruction: "Fallback engineer tool protocol.",
+      tools: createEngineerToolDefinitions(),
+    });
+
+    expect(attempts).toBe(2);
+    expect(seenBodies[0]?.tools).toBeDefined();
+    expect(seenBodies[1]?.tools).toBeUndefined();
+    expect(seenBodies[1]?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: expect.stringContaining(
+            "Qwen3-Coder native tool fallback mode.",
+          ),
+          role: "system",
+        }),
+        expect.objectContaining({
+          content: expect.stringContaining("<function=file.read>"),
+          role: "system",
+        }),
+      ]),
+    );
+    expect(response.rawContent).toBe("Read the README before editing.");
+    expect(response.toolCalls).toEqual([
+      {
+        arguments: {
+          path: "README.md",
+        },
+        id: "qwen-tool-call-1",
+        name: "file.read",
+      },
+    ]);
   });
 
   it("accepts prose-wrapped Engineer JSON during local validation fallback", async () => {
