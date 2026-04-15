@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  BuiltInToolStateError,
   createToolRouter,
   loadHarnessConfig,
   McpServerUnavailableError,
@@ -313,6 +314,90 @@ args = ["repo-mcp.js"]`,
           },
         ),
       ).rejects.toBeInstanceOf(McpServerUnavailableError);
+    } finally {
+      await router.close();
+    }
+  });
+
+  it("suppresses repeated engineer rereads and relistings with cached repo facts", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    writeHarnessConfig(projectRoot, "allowlist = []");
+    writeFileSync(path.join(projectRoot, "README.md"), "# Repo\n", "utf8");
+
+    const loadedConfig = await loadConfig(projectRoot);
+    const router = createToolRouter({ loadedConfig });
+
+    try {
+      await router.prepare();
+
+      await expect(
+        router.execute(
+          { role: "engineer" },
+          {
+            path: "README.md",
+            toolName: "file.read",
+          },
+        ),
+      ).resolves.toMatchObject({
+        path: "README.md",
+        toolName: "file.read",
+      });
+      await expect(
+        router.execute(
+          { role: "engineer" },
+          {
+            path: ".",
+            toolName: "file.list",
+          },
+        ),
+      ).resolves.toMatchObject({
+        path: ".",
+        toolName: "file.list",
+      });
+
+      await expect(
+        router.execute(
+          { role: "engineer" },
+          {
+            path: "README.md",
+            toolName: "file.read",
+          },
+        ),
+      ).rejects.toSatisfy((error: unknown) => {
+        expect(error).toBeInstanceOf(BuiltInToolStateError);
+        expect((error as Error).message).toContain(
+          "Repeated read for `README.md` was suppressed.",
+        );
+        expect((error as Error).message).toContain("Stable repo fact");
+
+        return true;
+      });
+
+      await expect(
+        router.execute(
+          { role: "engineer" },
+          {
+            path: ".",
+            toolName: "file.list",
+          },
+        ),
+      ).rejects.toSatisfy((error: unknown) => {
+        expect(error).toBeInstanceOf(BuiltInToolStateError);
+        expect((error as Error).message).toContain(
+          "Repeated directory listing for `.` was suppressed.",
+        );
+
+        return true;
+      });
+
+      expect(router.getExecutionSummary()).toMatchObject({
+        builtInCallCount: 4,
+        duplicateExplorationSuppressions: 2,
+        repeatedListingCount: 1,
+        repeatedReadCount: 1,
+        repoMemoryHits: 2,
+      });
     } finally {
       await router.close();
     }

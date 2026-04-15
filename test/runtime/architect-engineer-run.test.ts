@@ -374,6 +374,10 @@ describe("executeArchitectEngineerRun", () => {
     const commitSubjects = readCommitSubjects(projectRoot);
 
     expect(execution.result.status).toBe("success");
+    expect(execution.result.convergence).toMatchObject({
+      stepsToFirstCheck: 2,
+      stepsToFirstEdit: 1,
+    });
     expect(execution.stopReason).toBe("architect-approved");
     expect(readFileSync(path.join(projectRoot, "src/example.ts"), "utf8")).toBe(
       "export const value = 2;\n",
@@ -410,6 +414,10 @@ describe("executeArchitectEngineerRun", () => {
       readFileSync(execution.dossier.paths.files.result.absolutePath, "utf8"),
     ) as {
       artifacts: string[];
+      convergence?: {
+        stepsToFirstCheck: number | null;
+        stepsToFirstEdit: number | null;
+      };
       git?: { finalCommit?: string };
       status: string;
     };
@@ -436,6 +444,10 @@ describe("executeArchitectEngineerRun", () => {
     expect(finalReport).toContain(headCommit);
     expect(finalReport).toContain("Stop reason: architect-approved");
     expect(result.status).toBe("success");
+    expect(result.convergence).toMatchObject({
+      stepsToFirstCheck: 2,
+      stepsToFirstEdit: 1,
+    });
     expect(result.git?.finalCommit).toBe(headCommit);
     expect(result.artifacts).toEqual(
       expect.arrayContaining([

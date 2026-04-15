@@ -47,7 +47,13 @@ export async function validateRunResult(
     ]);
   }
 
-  const allowedKeys = new Set(["artifacts", "git", "status", "summary"]);
+  const allowedKeys = new Set([
+    "artifacts",
+    "convergence",
+    "git",
+    "status",
+    "summary",
+  ]);
 
   for (const key of Object.keys(value)) {
     if (!allowedKeys.has(key)) {
@@ -95,9 +101,14 @@ export async function validateRunResult(
   }
 
   const git = value.git;
+  const convergence = value.convergence;
 
   if (git !== undefined) {
     validateGitMetadata(git, issues);
+  }
+
+  if (convergence !== undefined) {
+    validateConvergenceMetrics(convergence, issues);
   }
 
   if (issues.length > 0) {
@@ -107,11 +118,16 @@ export async function validateRunResult(
   const validatedArtifacts = Array.isArray(artifacts)
     ? ([...artifacts] as string[])
     : undefined;
+  const validatedConvergence =
+    convergence === undefined ? undefined : value.convergence;
   const validatedGit =
     git === undefined ? undefined : (git as RunResult["git"]);
 
   return {
     artifacts: validatedArtifacts,
+    ...(validatedConvergence === undefined
+      ? {}
+      : { convergence: validatedConvergence as RunResult["convergence"] }),
     ...(validatedGit === undefined ? {} : { git: validatedGit }),
     status: status as RunResult["status"],
     summary: summary as string,
@@ -251,6 +267,103 @@ function validateGitMetadata(value: unknown, issues: string[]): void {
       "result.git.initialWorkingTree",
       issues,
     );
+  }
+}
+
+function validateConvergenceMetrics(value: unknown, issues: string[]): void {
+  if (!isPlainObject(value)) {
+    issues.push("result.convergence: Expected an object.");
+    return;
+  }
+
+  const allowedKeys = new Set([
+    "duplicateExplorationSuppressions",
+    "explorationBudget",
+    "explorationBudgetExhaustedAtStep",
+    "repeatedListingCount",
+    "repeatedReadCount",
+    "repoMemoryHits",
+    "stepsToFirstCheck",
+    "stepsToFirstEdit",
+  ]);
+
+  for (const key of Object.keys(value)) {
+    if (!allowedKeys.has(key)) {
+      issues.push(`result.convergence.${key}: Unexpected property.`);
+    }
+  }
+
+  validateRequiredInteger(
+    value,
+    "duplicateExplorationSuppressions",
+    issues,
+    "result.convergence",
+  );
+  validateRequiredInteger(
+    value,
+    "explorationBudget",
+    issues,
+    "result.convergence",
+  );
+  validateOptionalIntegerOrNull(
+    value,
+    "explorationBudgetExhaustedAtStep",
+    issues,
+    "result.convergence",
+  );
+  validateRequiredInteger(
+    value,
+    "repeatedListingCount",
+    issues,
+    "result.convergence",
+  );
+  validateRequiredInteger(
+    value,
+    "repeatedReadCount",
+    issues,
+    "result.convergence",
+  );
+  validateRequiredInteger(
+    value,
+    "repoMemoryHits",
+    issues,
+    "result.convergence",
+  );
+  validateOptionalIntegerOrNull(
+    value,
+    "stepsToFirstCheck",
+    issues,
+    "result.convergence",
+  );
+  validateOptionalIntegerOrNull(
+    value,
+    "stepsToFirstEdit",
+    issues,
+    "result.convergence",
+  );
+}
+
+function validateRequiredInteger(
+  value: Record<string, unknown>,
+  key: string,
+  issues: string[],
+  prefix: string,
+): void {
+  if (!Number.isInteger(value[key])) {
+    issues.push(`${prefix}.${key}: Expected an integer.`);
+  }
+}
+
+function validateOptionalIntegerOrNull(
+  value: Record<string, unknown>,
+  key: string,
+  issues: string[],
+  prefix: string,
+): void {
+  const entry = value[key];
+
+  if (entry !== null && entry !== undefined && !Number.isInteger(entry)) {
+    issues.push(`${prefix}.${key}: Expected an integer or null.`);
   }
 }
 

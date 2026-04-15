@@ -464,6 +464,11 @@ describe("executeEngineerTask", () => {
       readFileSync(execution.dossier.paths.files.result.absolutePath, "utf8"),
     ) as {
       artifacts?: string[];
+      convergence?: {
+        explorationBudget: number;
+        stepsToFirstCheck: number | null;
+        stepsToFirstEdit: number | null;
+      };
       status: string;
       summary: string;
     };
@@ -493,6 +498,11 @@ describe("executeEngineerTask", () => {
       },
     ]);
     expect(result).toMatchObject({
+      convergence: {
+        explorationBudget: 12,
+        stepsToFirstCheck: 2,
+        stepsToFirstEdit: 1,
+      },
       status: "success",
       summary: "Verification passed after running the configured test command.",
     });
@@ -511,6 +521,9 @@ describe("executeEngineerTask", () => {
     expect(finalReport).toContain(
       "Verification passed after running the configured test command.",
     );
+    expect(finalReport).toContain("## Convergence");
+    expect(finalReport).toContain("- Steps to first edit: 1");
+    expect(finalReport).toContain("- Steps to first required check: 2");
     expect(finalReport).toContain("## Workspace");
     expect(diffPatch).toContain("-export const value = 1;");
     expect(diffPatch).toContain("+export const value = 2;");
@@ -949,7 +962,7 @@ args = ["repo-mcp.js"]`,
     expect(finalReport).toContain("MCP calls recorded: 0");
   });
 
-  it("adds a convergence reminder after too many consecutive exploration steps", async () => {
+  it("refuses further exploration after the budget is exhausted and emits convergence metrics", async () => {
     const projectRoot = createTempProject();
     projectRoots.push(projectRoot);
     initializeGitRepository(projectRoot);
@@ -976,9 +989,14 @@ args = ["repo-mcp.js"]`,
         type: "tool" as const,
       })),
       {
-        blockers: ["stop after reminder"],
+        request: { path: ".", toolName: "file.list" as const },
+        summary: "Try to keep exploring past the budget.",
+        type: "tool" as const,
+      },
+      {
+        blockers: ["stop after budget refusal"],
         outcome: "blocked" as const,
-        summary: "Blocked after reminder",
+        summary: "Blocked after budget refusal",
         type: "final" as const,
       },
     ];
@@ -992,20 +1010,37 @@ args = ["repo-mcp.js"]`,
     });
 
     expect(execution.stopReason).toBe("blocked");
-    expect(requests).toHaveLength(13);
+    expect(execution.result.convergence).toMatchObject({
+      explorationBudget: 12,
+      explorationBudgetExhaustedAtStep: 13,
+      stepsToFirstCheck: null,
+      stepsToFirstEdit: null,
+    });
+    expect(requests).toHaveLength(14);
     expect(
-      requests[12]?.messages.some(
+      requests[13]?.messages.some(
         (message) =>
-          message.role === "user" &&
-          message.content.includes("Stop broad exploration."),
+          message.role === "tool" &&
+          message.content.includes("Exploration budget exhausted."),
+      ),
+    ).toBe(true);
+
+    const events = parseJsonLines(
+      execution.dossier.paths.files.events.absolutePath,
+    );
+
+    expect(
+      events.some(
+        (event) => event.type === "engineer-convergence-guard-triggered",
       ),
     ).toBe(true);
   });
 
-  it("adds a duplicate-exploration reminder after repeated reads of the same target", async () => {
+  it("suppresses duplicate rereads and records duplicate-exploration counters", async () => {
     const projectRoot = createTempProject();
     projectRoots.push(projectRoot);
     initializeGitRepository(projectRoot);
+    writeFileSync(path.join(projectRoot, "README.md"), "# Repo\n", "utf8");
 
     const loadedConfig = await createLoadedConfig({
       engineerBaseUrl: "http://127.0.0.1:65535/v1",
@@ -1015,15 +1050,20 @@ args = ["repo-mcp.js"]`,
       },
     });
     const outputs = [
-      ...Array.from({ length: 3 }, () => ({
-        request: { path: ".", toolName: "file.list" as const },
-        summary: "Repeat root listing",
-        type: "tool" as const,
-      })),
       {
-        blockers: ["stop after duplicate reminder"],
+        request: { path: "README.md", toolName: "file.read" as const },
+        summary: "Read the README once.",
+        type: "tool" as const,
+      },
+      {
+        request: { path: "README.md", toolName: "file.read" as const },
+        summary: "Read the README again.",
+        type: "tool" as const,
+      },
+      {
+        blockers: ["stop after duplicate suppression"],
         outcome: "blocked" as const,
-        summary: "Blocked after duplicate reminder",
+        summary: "Blocked after duplicate suppression",
         type: "final" as const,
       },
     ];
@@ -1037,14 +1077,241 @@ args = ["repo-mcp.js"]`,
     });
 
     expect(execution.stopReason).toBe("blocked");
-    expect(requests).toHaveLength(4);
+    expect(execution.result.convergence).toMatchObject({
+      duplicateExplorationSuppressions: 1,
+      repeatedReadCount: 1,
+      repoMemoryHits: 1,
+    });
+    expect(requests).toHaveLength(3);
     expect(
-      requests[3]?.messages.some(
+      requests[2]?.messages.some(
         (message) =>
-          message.role === "user" &&
+          message.role === "tool" &&
           message.content.includes(
-            "You are repeating exploration on files or directories you already inspected",
+            "Repeated read for `README.md` was suppressed.",
           ),
+      ),
+    ).toBe(true);
+  });
+
+  it("emits null first-edit and first-check metrics for no-edit runs", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+    writeFileSync(path.join(projectRoot, "README.md"), "# Repo\n", "utf8");
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: "http://127.0.0.1:65535/v1",
+      projectRoot,
+    });
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      modelClient: createQueuedModelClient([
+        {
+          request: {
+            path: ".",
+            query: "README",
+            toolName: "file.search",
+          },
+          summary: "Search once before giving up.",
+          type: "tool",
+        },
+        {
+          blockers: ["no safe edit found"],
+          outcome: "blocked",
+          summary: "Blocked without editing.",
+          type: "final",
+        },
+      ]).client,
+      persistFinalArtifacts: false,
+      task: "Find one tiny improvement.",
+    });
+
+    expect(execution.result.convergence).toEqual({
+      duplicateExplorationSuppressions: 0,
+      explorationBudget: 12,
+      explorationBudgetExhaustedAtStep: null,
+      repeatedListingCount: 0,
+      repeatedReadCount: 0,
+      repoMemoryHits: 0,
+      stepsToFirstCheck: null,
+      stepsToFirstEdit: null,
+    });
+  });
+
+  it("records delayed-check metrics when verification happens after an edit and extra exploration", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+
+    const sourcePath = path.join(projectRoot, "src", "example.ts");
+    mkdirSync(path.dirname(sourcePath), { recursive: true });
+    writeFileSync(sourcePath, "export const value = 1;\n", "utf8");
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: "http://127.0.0.1:65535/v1",
+      projectRoot,
+    });
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 10,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: 0,
+          role: "engineer",
+          stderr: "",
+          stdout: "tests passed\n",
+          timestamp: "2026-04-13T12:35:00.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      modelClient: createQueuedModelClient([
+        {
+          request: {
+            content: "export const value = 2;\n",
+            path: "src/example.ts",
+            toolName: "file.write",
+          },
+          summary: "Edit the source file first.",
+          type: "tool",
+        },
+        {
+          request: { path: "src", toolName: "file.list" },
+          summary: "Wander once after the edit.",
+          type: "tool",
+        },
+        {
+          request: {
+            accessMode: "mutate",
+            command: "npm run test",
+            toolName: "command.execute",
+          },
+          stopWhenSuccessful: true,
+          summary: "Run the required check after the delay.",
+          type: "tool",
+        },
+      ]).client,
+      projectCommandRunner: fakeCommandRunner,
+      persistFinalArtifacts: false,
+      task: "Change the exported value to `2` and verify it.",
+    });
+
+    expect(execution.result.status).toBe("success");
+    expect(execution.result.convergence).toMatchObject({
+      explorationBudgetExhaustedAtStep: null,
+      stepsToFirstCheck: 3,
+      stepsToFirstEdit: 1,
+    });
+  });
+
+  it("smoke: suppresses wandering rereads before the run reaches first edit and check", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+    writeFileSync(path.join(projectRoot, "README.md"), "# Repo\n", "utf8");
+
+    const sourcePath = path.join(projectRoot, "src", "example.ts");
+    mkdirSync(path.dirname(sourcePath), { recursive: true });
+    writeFileSync(sourcePath, "export const value = 1;\n", "utf8");
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: "http://127.0.0.1:65535/v1",
+      projectRoot,
+    });
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 10,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: 0,
+          role: "engineer",
+          stderr: "",
+          stdout: "tests passed\n",
+          timestamp: "2026-04-13T12:40:00.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      modelClient: createQueuedModelClient([
+        {
+          request: { path: "README.md", toolName: "file.read" },
+          summary: "Read the README once.",
+          type: "tool",
+        },
+        {
+          request: { path: "README.md", toolName: "file.read" },
+          summary: "Wander by rereading the same file.",
+          type: "tool",
+        },
+        {
+          request: {
+            content: "export const value = 2;\n",
+            path: "src/example.ts",
+            toolName: "file.write",
+          },
+          summary: "Make the actual edit.",
+          type: "tool",
+        },
+        {
+          request: {
+            accessMode: "mutate",
+            command: "npm run test",
+            toolName: "command.execute",
+          },
+          stopWhenSuccessful: true,
+          summary: "Run the required check.",
+          type: "tool",
+        },
+      ]).client,
+      projectCommandRunner: fakeCommandRunner,
+      task: "Update `src/example.ts` and verify it.",
+    });
+    const events = parseJsonLines(
+      execution.dossier.paths.files.events.absolutePath,
+    );
+
+    expect(execution.result.status).toBe("success");
+    expect(execution.result.convergence).toMatchObject({
+      duplicateExplorationSuppressions: 1,
+      repeatedReadCount: 1,
+      stepsToFirstCheck: 4,
+      stepsToFirstEdit: 3,
+    });
+    expect(
+      events.some(
+        (event) =>
+          event.type === "tool-call" &&
+          event.status === "failed" &&
+          event.toolName === "file.read",
       ),
     ).toBe(true);
   });

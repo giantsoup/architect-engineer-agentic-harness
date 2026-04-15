@@ -162,8 +162,20 @@ export interface RunGitMetadata {
   warnings: string[];
 }
 
+export interface RunConvergenceMetrics {
+  duplicateExplorationSuppressions: number;
+  explorationBudget: number;
+  explorationBudgetExhaustedAtStep: number | null;
+  repeatedListingCount: number;
+  repeatedReadCount: number;
+  repoMemoryHits: number;
+  stepsToFirstCheck: number | null;
+  stepsToFirstEdit: number | null;
+}
+
 export interface RunResult {
   artifacts?: string[] | undefined;
+  convergence?: RunConvergenceMetrics | undefined;
   git?: RunGitMetadata | undefined;
   status: "failed" | "stopped" | "success";
   summary: string;

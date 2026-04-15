@@ -207,6 +207,16 @@ describe("run dossier", () => {
         dossier.paths,
         {
           artifacts: [dossier.paths.files.finalReport.relativePath],
+          convergence: {
+            duplicateExplorationSuppressions: 1,
+            explorationBudget: 12,
+            explorationBudgetExhaustedAtStep: null,
+            repeatedListingCount: 0,
+            repeatedReadCount: 1,
+            repoMemoryHits: 1,
+            stepsToFirstCheck: 4,
+            stepsToFirstEdit: 2,
+          },
           git: {
             createdCommits: [
               {
@@ -245,6 +255,16 @@ describe("run dossier", () => {
       expect(nextManifest.updatedAt).toBe("2026-04-13T12:00:05.000Z");
       expect(await validateRunResult(persistedResult)).toEqual({
         artifacts: [dossier.paths.files.finalReport.relativePath],
+        convergence: {
+          duplicateExplorationSuppressions: 1,
+          explorationBudget: 12,
+          explorationBudgetExhaustedAtStep: null,
+          repeatedListingCount: 0,
+          repeatedReadCount: 1,
+          repoMemoryHits: 1,
+          stepsToFirstCheck: 4,
+          stepsToFirstEdit: 2,
+        },
         git: {
           createdCommits: [
             {

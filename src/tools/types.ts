@@ -241,12 +241,16 @@ export interface ToolCatalog {
 
 export interface ToolExecutionSummary extends ToolCatalog {
   builtInCallCount: number;
+  duplicateExplorationSuppressions: number;
   mcpCallCount: number;
   mcpCalls: Array<{
     name: string;
     server: string;
     status: "completed" | "failed";
   }>;
+  repeatedListingCount: number;
+  repeatedReadCount: number;
+  repoMemoryHits: number;
 }
 
 export type ToolRequest = BuiltInToolRequest | McpToolCallRequest;

@@ -253,6 +253,7 @@ export type {
   RunArtifactFileReference,
   RunCheckResult,
   RunChecksSummary,
+  RunConvergenceMetrics,
   RunGitCommitSummary,
   RunGitMetadata,
   RunLifecycleStatus,

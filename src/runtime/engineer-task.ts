@@ -2,7 +2,11 @@ import { readFile } from "node:fs/promises";
 
 import { getResolvedProjectCommand } from "../adapters/detect-project.js";
 import type { LoadedHarnessConfig } from "../types/config.js";
-import type { RunCheckResult, RunResult } from "../types/run.js";
+import type {
+  RunCheckResult,
+  RunConvergenceMetrics,
+  RunResult,
+} from "../types/run.js";
 import type {
   ModelChatMessage,
   ModelChatRequest,
@@ -44,9 +48,8 @@ const DEFAULT_RUN_TIMEOUT_MS = 60 * 60 * 1000;
 const MAX_MODEL_VISIBLE_FILE_READ_CHARS = 4000;
 const MAX_MODEL_VISIBLE_COMMAND_OUTPUT_CHARS = 3000;
 const MAX_MODEL_VISIBLE_FILE_LIST_ENTRIES = 12;
-const MAX_CONSECUTIVE_EXPLORATION_STEPS = 12;
+const EXPLORATION_BUDGET_STEPS = 12;
 const MAX_CONSECUTIVE_RETRYABLE_MODEL_ERRORS = 3;
-const MAX_CONSECUTIVE_DUPLICATE_EXPLORATION_STEPS = 2;
 const LOW_VALUE_EXPLORATION_PATH_SEGMENTS = new Set([
   ".agent-harness",
   ".git",
@@ -112,6 +115,11 @@ interface WorkspaceArtifactCollection {
   status: Extract<ToolResult, { toolName: "git.status" }> | undefined;
 }
 
+interface RepoFact {
+  key: string;
+  summary: string;
+}
+
 type ToolFeedback =
   | {
       ok: false;
@@ -119,6 +127,11 @@ type ToolFeedback =
       error: { code: string; message: string; name: string };
     }
   | { ok: true; toolName: string; result: ToolResult };
+
+interface PostToolGuidance {
+  content: string;
+  usedRepoMemory: boolean;
+}
 
 export async function executeEngineerTask(
   options: ExecuteEngineerTaskOptions,
@@ -191,6 +204,7 @@ export async function executeEngineerTask(
       timestamp: initialTimestamp,
     });
     await appendRunEvent(dossier.paths, {
+      explorationBudget: EXPLORATION_BUDGET_STEPS,
       maxConsecutiveFailedChecks,
       maxIterations,
       projectAdapter: options.loadedConfig.resolvedProject.adapter,
@@ -222,7 +236,10 @@ export async function executeEngineerTask(
         content: [
           executePrompt.trim(),
           "",
+          `Exploration budget before you must edit, run \`${requiredCheckCommand}\`, or declare blocked: ${EXPLORATION_BUDGET_STEPS} consecutive exploration steps.`,
+          "",
           renderEngineerProtocol({
+            explorationBudget: EXPLORATION_BUDGET_STEPS,
             maxConsecutiveFailedChecks,
             maxIterations,
             preferNonThinkingMode: shouldPreferNonThinkingMode(
@@ -243,12 +260,15 @@ export async function executeEngineerTask(
     const checks: RunCheckResult[] = [...(options.initialChecks ?? [])];
     let consecutiveFailedChecks = options.initialConsecutiveFailedChecks ?? 0;
     let consecutiveExplorationSteps = 0;
-    let consecutiveDuplicateExplorationSteps = 0;
     let consecutiveRetryableModelErrors = 0;
-    const exploredTargets = new Set<string>();
-    const exploredTargetOrder: string[] = [];
+    let actionStepCount = 0;
+    let explorationBudgetExhaustedAtStep: number | null = null;
     let hasPassingCheck = !requirePassingChecks;
     let iterationCount = 0;
+    const recentRepoFacts: RepoFact[] = [];
+    let repoMemoryFeedbackCount = 0;
+    let stepsToFirstCheck: number | null = null;
+    let stepsToFirstEdit: number | null = null;
     let outcome: FinalizedOutcome | undefined;
 
     if (requirePassingChecks) {
@@ -353,8 +373,11 @@ export async function executeEngineerTask(
         break;
       }
 
+      actionStepCount += 1;
+
       await appendRunEvent(dossier.paths, {
         actionType: action.type,
+        actionStep: actionStepCount,
         iteration: iterationCount,
         ...(action.type === "tool"
           ? { toolRequest: summarizeToolRequestForEvent(action.request) }
@@ -405,10 +428,48 @@ export async function executeEngineerTask(
         action.request,
         remainingTimeMs,
       );
-      const toolFeedback = await executeEngineerTool({
-        executor: toolExecutor,
-        request: toolRequest,
-      });
+
+      if (stepsToFirstEdit === null && toolRequest.toolName === "file.write") {
+        stepsToFirstEdit = actionStepCount;
+      }
+
+      if (
+        stepsToFirstCheck === null &&
+        isRequiredCheckCommand(toolRequest, requiredCheckCommand)
+      ) {
+        stepsToFirstCheck = actionStepCount;
+      }
+
+      let toolFeedback: ToolFeedback;
+
+      if (
+        isExplorationToolRequest(toolRequest) &&
+        consecutiveExplorationSteps >= EXPLORATION_BUDGET_STEPS
+      ) {
+        explorationBudgetExhaustedAtStep ??= actionStepCount;
+        toolFeedback = createExplorationBudgetFeedback({
+          recentRepoFacts,
+          request: toolRequest,
+        });
+        if (recentRepoFacts.length > 0) {
+          repoMemoryFeedbackCount += 1;
+        }
+        await appendRunEvent(dossier.paths, {
+          actionStep: actionStepCount,
+          explorationBudget: EXPLORATION_BUDGET_STEPS,
+          recentRepoFacts: recentRepoFacts
+            .slice(-4)
+            .map((fact) => fact.summary),
+          timestamp: now().toISOString(),
+          toolRequest: summarizeToolRequestForEvent(toolRequest),
+          type: "engineer-convergence-guard-triggered",
+        });
+      } else {
+        toolFeedback = await executeEngineerTool({
+          executor: toolExecutor,
+          request: toolRequest,
+        });
+      }
 
       messages.push({
         content: renderToolFeedbackForModel(toolFeedback),
@@ -417,39 +478,35 @@ export async function executeEngineerTask(
       });
 
       if (isExplorationToolRequest(toolRequest)) {
-        consecutiveExplorationSteps += 1;
-        const explorationTarget = getExplorationTarget(toolRequest);
-
-        if (explorationTarget !== undefined) {
-          if (exploredTargets.has(explorationTarget)) {
-            consecutiveDuplicateExplorationSteps += 1;
-          } else {
-            consecutiveDuplicateExplorationSteps = 0;
-            exploredTargets.add(explorationTarget);
-            exploredTargetOrder.push(explorationTarget);
-          }
-        }
+        consecutiveExplorationSteps = Math.min(
+          EXPLORATION_BUDGET_STEPS,
+          consecutiveExplorationSteps + 1,
+        );
       } else {
         consecutiveExplorationSteps = 0;
-        consecutiveDuplicateExplorationSteps = 0;
       }
 
+      updateRecentRepoFacts(recentRepoFacts, toolFeedback);
+
       const guidance = createPostToolGuidance({
-        consecutiveDuplicateExplorationSteps,
         consecutiveExplorationSteps,
-        exploredTargetOrder,
+        explorationBudget: EXPLORATION_BUDGET_STEPS,
         requiredCheckCommand,
+        recentRepoFacts,
         toolFeedback,
         toolRequest,
       });
 
       if (guidance !== undefined) {
+        if (guidance.usedRepoMemory) {
+          repoMemoryFeedbackCount += 1;
+        }
         messages.push({
-          content: guidance,
+          content: guidance.content,
           role: "user",
         });
         await appendStructuredMessage(dossier.paths, {
-          content: guidance,
+          content: guidance.content,
           role: "system",
           timestamp: now().toISOString(),
         });
@@ -503,9 +560,19 @@ export async function executeEngineerTask(
       };
     }
 
+    const toolSummary = toolExecutor.getExecutionSummary();
+    const convergence = createRunConvergenceMetrics({
+      explorationBudgetExhaustedAtStep,
+      repoMemoryFeedbackCount,
+      stepsToFirstCheck,
+      stepsToFirstEdit,
+      toolSummary,
+    });
+
     return await finalizeEngineerRun({
       checks,
       consecutiveFailedChecks,
+      convergence,
       dossier,
       iterationCount,
       loadedConfig: options.loadedConfig,
@@ -525,6 +592,7 @@ export async function executeEngineerTask(
 async function finalizeEngineerRun(options: {
   checks: RunCheckResult[];
   consecutiveFailedChecks: number;
+  convergence: RunConvergenceMetrics;
   dossier: RunDossier;
   iterationCount: number;
   loadedConfig: LoadedHarnessConfig;
@@ -580,6 +648,7 @@ async function finalizeEngineerRun(options: {
       requirePassingChecks: options.requirePassingChecks,
       runDir: options.dossier.paths.runDirRelativePath,
       task: options.task,
+      convergence: options.convergence,
       toolSummary,
       workspaceNotes: workspaceArtifacts.notes,
     });
@@ -615,11 +684,13 @@ async function finalizeEngineerRun(options: {
 
   const result: RunResult = {
     artifacts: resultArtifacts,
+    convergence: options.convergence,
     status: options.outcome.status,
     summary: options.outcome.summary,
   };
 
   await appendRunEvent(options.dossier.paths, {
+    convergence: options.convergence,
     status: options.outcome.status,
     stopReason: options.outcome.stopReason,
     summary: options.outcome.summary,
@@ -936,57 +1007,203 @@ function isExplorationToolRequest(request: ToolRequest): boolean {
   );
 }
 
+function isDuplicateExplorationRequest(request: ToolRequest): boolean {
+  return (
+    request.toolName === "file.read" ||
+    request.toolName === "file.read_many" ||
+    request.toolName === "file.list"
+  );
+}
+
 function createPostToolGuidance(options: {
-  consecutiveDuplicateExplorationSteps: number;
   consecutiveExplorationSteps: number;
-  exploredTargetOrder: string[];
+  explorationBudget: number;
   requiredCheckCommand: string;
+  recentRepoFacts: RepoFact[];
   toolFeedback: ToolFeedback;
   toolRequest: ToolRequest;
-}): string | undefined {
+}): PostToolGuidance | undefined {
   if (
     options.toolFeedback.ok === false &&
     options.toolFeedback.error.code === "path-violation"
   ) {
-    return [
-      `The previous ${options.toolRequest.toolName} request used an invalid path: ${options.toolFeedback.error.message}`,
-      "Do not retry the same missing path.",
-      "List a known existing parent directory or switch to another known path.",
-    ].join(" ");
+    return {
+      content: [
+        `The previous ${options.toolRequest.toolName} request used an invalid path: ${options.toolFeedback.error.message}`,
+        "Do not retry the same missing path.",
+        "List a known existing parent directory or switch to another known path.",
+      ].join(" "),
+      usedRepoMemory: false,
+    };
   }
 
   if (
-    options.consecutiveDuplicateExplorationSteps >=
-    MAX_CONSECUTIVE_DUPLICATE_EXPLORATION_STEPS
+    options.toolFeedback.ok === false &&
+    options.toolFeedback.error.code === "invalid-state" &&
+    isDuplicateExplorationRequest(options.toolRequest)
   ) {
-    const exploredTargets =
-      options.exploredTargetOrder.length === 0
-        ? "the current workspace"
-        : formatList(
-            options.exploredTargetOrder
-              .slice(-6)
-              .map((target) => `\`${target}\``),
-          );
-
-    return [
-      `You are repeating exploration on files or directories you already inspected: ${exploredTargets}.`,
-      "Do not reread the same file or relist the same directory again right now.",
-      "Choose one inspected file for the smallest reasonable change, or run the required check if the work is already done.",
-    ].join(" ");
+    return {
+      content: [
+        options.toolFeedback.error.message,
+        "Choose one already-inspected file for the smallest reasonable change, or run the required check if the work is ready.",
+      ].join(" "),
+      usedRepoMemory: false,
+    };
   }
 
-  if (
-    options.consecutiveExplorationSteps >= MAX_CONSECUTIVE_EXPLORATION_STEPS
-  ) {
-    return [
-      `You have spent ${options.consecutiveExplorationSteps} consecutive steps exploring without editing files or running \`${options.requiredCheckCommand}\`.`,
-      "Stop broad exploration.",
-      "Choose one already-inspected file for the smallest reasonable change, or run the required check if the work is done.",
-      "Do not reread files or relist directories unless you need one specific missing detail.",
-    ].join(" ");
+  if (options.consecutiveExplorationSteps >= options.explorationBudget) {
+    return {
+      content: [
+        `You have spent ${options.consecutiveExplorationSteps} consecutive steps exploring without editing files or running \`${options.requiredCheckCommand}\`.`,
+        `The exploration budget is exhausted for this run segment (${options.explorationBudget} steps).`,
+        ...(options.recentRepoFacts.length === 0
+          ? []
+          : [
+              `Recent stable facts: ${options.recentRepoFacts
+                .slice(-4)
+                .map((fact) => fact.summary)
+                .join(" ")}`,
+            ]),
+        "Choose one already-inspected file for the smallest reasonable change, or run the required check if the work is done.",
+        'If neither is possible, return `final` with `outcome: "blocked"` and concrete blockers.',
+      ].join(" "),
+      usedRepoMemory: options.recentRepoFacts.length > 0,
+    };
   }
 
   return undefined;
+}
+
+function createExplorationBudgetFeedback(options: {
+  recentRepoFacts: RepoFact[];
+  request: ToolRequest;
+}): ToolFeedback {
+  const recentFacts =
+    options.recentRepoFacts.length === 0
+      ? "No additional stable repo facts are cached yet."
+      : `Recent stable facts: ${options.recentRepoFacts
+          .slice(-4)
+          .map((fact) => fact.summary)
+          .join(" ")}`;
+
+  return {
+    error: {
+      code: "invalid-state",
+      message: [
+        `Exploration budget exhausted. The harness refused ${options.request.toolName}.`,
+        recentFacts,
+        'Edit a file, run the required check, or return `final` with `outcome: "blocked"`.',
+      ].join(" "),
+      name: "BuiltInToolStateError",
+    },
+    ok: false,
+    toolName: options.request.toolName,
+  };
+}
+
+function updateRecentRepoFacts(
+  recentRepoFacts: RepoFact[],
+  toolFeedback: ToolFeedback,
+): void {
+  if (toolFeedback.ok === false) {
+    return;
+  }
+
+  for (const fact of createRepoFactsFromToolResult(toolFeedback.result)) {
+    const existingIndex = recentRepoFacts.findIndex(
+      (entry) => entry.key === fact.key,
+    );
+
+    if (existingIndex !== -1) {
+      recentRepoFacts.splice(existingIndex, 1);
+    }
+
+    recentRepoFacts.push(fact);
+
+    if (recentRepoFacts.length > 8) {
+      recentRepoFacts.shift();
+    }
+  }
+}
+
+function createRepoFactsFromToolResult(result: ToolResult): RepoFact[] {
+  switch (result.toolName) {
+    case "file.list":
+      return [
+        {
+          key: `file.list:${result.path}`,
+          summary: summarizeListRepoFact(result),
+        },
+      ];
+    case "file.read":
+      return [
+        {
+          key: `file.read:${result.path}`,
+          summary: `Read \`${result.path}\` (${result.byteLength} bytes).`,
+        },
+      ];
+    case "file.read_many":
+      return result.files.map((file) => ({
+        key: `file.read:${file.path}`,
+        summary: `Read \`${file.path}\` (${file.byteLength} bytes).`,
+      }));
+    case "file.search":
+      return [
+        {
+          key: `file.search:${result.path}:${result.query}`,
+          summary: summarizeSearchRepoFact(result),
+        },
+      ];
+    default:
+      return [];
+  }
+}
+
+function summarizeListRepoFact(
+  result: Extract<ToolResult, { toolName: "file.list" }>,
+): string {
+  const sample = result.entries
+    .slice(0, 4)
+    .map((entry) => `\`${entry.path}\``)
+    .join(", ");
+
+  return sample.length === 0
+    ? `Listed \`${result.path}\` (no entries).`
+    : `Listed \`${result.path}\`: ${sample}.`;
+}
+
+function summarizeSearchRepoFact(
+  result: Extract<ToolResult, { toolName: "file.search" }>,
+): string {
+  const sample = result.results
+    .slice(0, 4)
+    .map((entry) => `\`${entry.path}\``)
+    .join(", ");
+
+  return sample.length === 0
+    ? `Searched \`${result.path}\` for \`${result.query}\` with no matches.`
+    : `Searched \`${result.path}\` for \`${result.query}\`: ${sample}.`;
+}
+
+function createRunConvergenceMetrics(options: {
+  explorationBudgetExhaustedAtStep: number | null;
+  repoMemoryFeedbackCount: number;
+  stepsToFirstCheck: number | null;
+  stepsToFirstEdit: number | null;
+  toolSummary: ToolExecutionSummary;
+}): RunConvergenceMetrics {
+  return {
+    duplicateExplorationSuppressions:
+      options.toolSummary.duplicateExplorationSuppressions,
+    explorationBudget: EXPLORATION_BUDGET_STEPS,
+    explorationBudgetExhaustedAtStep: options.explorationBudgetExhaustedAtStep,
+    repeatedListingCount: options.toolSummary.repeatedListingCount,
+    repeatedReadCount: options.toolSummary.repeatedReadCount,
+    repoMemoryHits:
+      options.toolSummary.repoMemoryHits + options.repoMemoryFeedbackCount,
+    stepsToFirstCheck: options.stepsToFirstCheck,
+    stepsToFirstEdit: options.stepsToFirstEdit,
+  };
 }
 
 function createRetryableModelErrorGuidance(options: {
@@ -1010,6 +1227,7 @@ function createRetryableModelErrorGuidance(options: {
 
 function renderFinalReport(options: {
   checks: RunCheckResult[];
+  convergence: RunConvergenceMetrics;
   diffPath: string;
   failureNotesPath?: string | undefined;
   gitStatus: Extract<ToolResult, { toolName: "git.status" }> | undefined;
@@ -1089,6 +1307,20 @@ function renderFinalReport(options: {
     }`,
   );
 
+  lines.push(
+    "",
+    "## Convergence",
+    "",
+    `- Exploration budget: ${options.convergence.explorationBudget}`,
+    `- Exploration budget exhausted at step: ${options.convergence.explorationBudgetExhaustedAtStep ?? "not reached"}`,
+    `- Steps to first edit: ${options.convergence.stepsToFirstEdit ?? "not reached"}`,
+    `- Steps to first required check: ${options.convergence.stepsToFirstCheck ?? "not reached"}`,
+    `- Repeated reads suppressed: ${options.convergence.repeatedReadCount}`,
+    `- Repeated listings suppressed: ${options.convergence.repeatedListingCount}`,
+    `- Duplicate exploration suppressions: ${options.convergence.duplicateExplorationSuppressions}`,
+    `- Repo-memory feedback uses: ${options.convergence.repoMemoryHits}`,
+  );
+
   lines.push("", "## Workspace", "");
 
   if (options.gitStatus !== undefined) {
@@ -1160,6 +1392,7 @@ function renderEngineerTaskBrief(options: {
     `- Max iterations: ${formatIterationLimit(options.maxIterations)}`,
     `- Timeout: ${options.timeoutMs}ms`,
     `- Consecutive failed required checks allowed: ${options.maxConsecutiveFailedChecks}`,
+    `- Exploration budget before edit/check/blocker: ${EXPLORATION_BUDGET_STEPS}`,
     `- Passing checks required: ${options.loadedConfig.config.stopConditions.requirePassingChecks ? "yes" : "no"}`,
     "",
     "## Available Built-in Tools",
@@ -1173,6 +1406,7 @@ function renderEngineerTaskBrief(options: {
 }
 
 function renderEngineerProtocol(options: {
+  explorationBudget: number;
   maxConsecutiveFailedChecks: number;
   maxIterations: number;
   preferNonThinkingMode: boolean;
@@ -1188,6 +1422,7 @@ function renderEngineerProtocol(options: {
     `- Use \`type: "final"\` only when the task is complete or blocked.`,
     `- Set \`stopWhenSuccessful: true\` only when running the required check \`${options.requiredCheckCommand}\` and the run should end immediately if it passes.`,
     `- The harness stops after ${formatIterationLimit(options.maxIterations)} Engineer iterations, ${options.timeoutMs}ms, or ${options.maxConsecutiveFailedChecks} consecutive failed required checks.`,
+    `- After ${options.explorationBudget} consecutive exploration steps, you must either edit a file, run \`${options.requiredCheckCommand}\`, or return \`final\` with \`outcome: "blocked"\`. Additional exploration requests will be refused.`,
     `- Passing checks required: ${options.requirePassingChecks ? "yes" : "no"}.`,
     "- Built-in tool names always route to built-in tools. MCP is only available through `mcp.call`.",
     "- Keep tool use explicit and auditable.",
@@ -1201,7 +1436,7 @@ function renderEngineerProtocol(options: {
     "- Once search yields a few candidates, prefer `file.read_many` for a small batch snapshot instead of repeated one-file reads.",
     "- When you need initial context, prefer `README.md`, `package.json`, `docs/`, `src/`, and `test/` over broad root relisting.",
     "- Prefer converging quickly: after a few discovery steps, choose one concrete file and make the smallest reasonable change.",
-    "- Do not reread the same file or relist the same directory unless the state changed or you need one specific missing detail.",
+    "- Do not reread the same file or relist the same directory unless the workspace changed. The harness will reuse stable repo facts and refuse duplicate rereads/listings.",
     "- If a path does not exist or a tool fails, adapt to that error instead of retrying the same invalid request.",
     "- Once you have enough context, stop exploring and either edit a file, run the required check, or return `final` if complete or blocked.",
   ].join("\n");
@@ -1251,24 +1486,6 @@ function renderBuiltInToolsMarkdown(): string {
     "- Capture the current patch.",
     '- Request shape: `{ "toolName": "git.diff", "staged": false }`',
   ].join("\n");
-}
-
-function getExplorationTarget(request: ToolRequest): string | undefined {
-  switch (request.toolName) {
-    case "file.search":
-      return `${request.path ?? "."}:${request.query}`;
-    case "file.read_many":
-      return request.paths.join(",");
-    case "file.list":
-      return request.path ?? ".";
-    case "file.read":
-      return request.path;
-    case "git.diff":
-    case "git.status":
-      return request.toolName;
-    default:
-      return undefined;
-  }
 }
 
 function summarizeFileListForModel(

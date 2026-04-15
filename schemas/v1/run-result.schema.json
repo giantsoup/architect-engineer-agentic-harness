@@ -21,6 +21,46 @@
         "minLength": 1
       }
     },
+    "convergence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "duplicateExplorationSuppressions",
+        "explorationBudget",
+        "explorationBudgetExhaustedAtStep",
+        "repeatedListingCount",
+        "repeatedReadCount",
+        "repoMemoryHits",
+        "stepsToFirstCheck",
+        "stepsToFirstEdit"
+      ],
+      "properties": {
+        "duplicateExplorationSuppressions": {
+          "type": "integer"
+        },
+        "explorationBudget": {
+          "type": "integer"
+        },
+        "explorationBudgetExhaustedAtStep": {
+          "type": ["integer", "null"]
+        },
+        "repeatedListingCount": {
+          "type": "integer"
+        },
+        "repeatedReadCount": {
+          "type": "integer"
+        },
+        "repoMemoryHits": {
+          "type": "integer"
+        },
+        "stepsToFirstCheck": {
+          "type": ["integer", "null"]
+        },
+        "stepsToFirstEdit": {
+          "type": ["integer", "null"]
+        }
+      }
+    },
     "git": {
       "type": "object",
       "additionalProperties": false,

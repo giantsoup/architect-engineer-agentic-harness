@@ -155,6 +155,9 @@ export async function executeArchitectEngineerRun(
             ? []
             : [state.dossier!.paths.files.failureNotes.relativePath]),
         ],
+        ...(state.engineerExecution?.result.convergence === undefined
+          ? {}
+          : { convergence: state.engineerExecution.result.convergence }),
         git: state.git,
         status: state.finalOutcome?.status ?? "stopped",
         summary:

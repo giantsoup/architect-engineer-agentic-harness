@@ -495,6 +495,9 @@ export async function finalizeArchitectEngineerRunNode(
   }
 
   await appendRunEvent(dossier.paths, {
+    ...(finalizedState.engineerExecution?.result.convergence === undefined
+      ? {}
+      : { convergence: finalizedState.engineerExecution.result.convergence }),
     git: finalizedState.git,
     status: resolvedFinalOutcome.status,
     stopReason: resolvedFinalOutcome.stopReason,
@@ -506,6 +509,9 @@ export async function finalizeArchitectEngineerRunNode(
     dossier.paths,
     {
       artifacts: resultArtifacts,
+      ...(finalizedState.engineerExecution?.result.convergence === undefined
+        ? {}
+        : { convergence: finalizedState.engineerExecution.result.convergence }),
       git: finalizedState.git,
       status: resolvedFinalOutcome.status,
       summary: resolvedFinalOutcome.summary,

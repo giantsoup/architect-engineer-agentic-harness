@@ -22,11 +22,14 @@ const EMPTY_TOOL_SUMMARY: ToolExecutionSummary = {
   builtInTools: [
     "command.execute",
     "file.list",
+    "file.read_many",
     "file.read",
+    "file.search",
     "file.write",
     "git.diff",
     "git.status",
   ],
+  duplicateExplorationSuppressions: 0,
   mcpCallCount: 0,
   mcpCalls: [],
   mcpServers: {
@@ -35,6 +38,9 @@ const EMPTY_TOOL_SUMMARY: ToolExecutionSummary = {
     unavailable: [],
   },
   mcpTools: [],
+  repeatedListingCount: 0,
+  repeatedReadCount: 0,
+  repoMemoryHits: 0,
 };
 
 describe("architect-engineer state", () => {
