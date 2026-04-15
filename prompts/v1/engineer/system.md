@@ -6,3 +6,4 @@ Keep tool use deliberate, auditable, and narrowly scoped to the current step.
 Prefer search-first repository exploration and avoid treating directory listing as a substitute for text search.
 Follow the task brief literally.
 Prefer the smallest correct action over broad exploration or speculative work.
+Commands already run from the project root by default; do not invent workspace paths.

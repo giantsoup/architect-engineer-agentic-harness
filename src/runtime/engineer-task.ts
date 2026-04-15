@@ -123,6 +123,7 @@ interface WorkspaceArtifactCollection {
 
 interface RepoFact {
   key: string;
+  paths: string[];
   summary: string;
 }
 
@@ -273,6 +274,8 @@ export async function executeEngineerTask(
     let repoMemoryFeedbackCount = 0;
     let stepsToFirstCheck: number | null = null;
     let stepsToFirstEdit: number | null = null;
+    let editSinceLastFailedCheck = false;
+    let groundingSinceLastFailedCheck = false;
     let outcome: FinalizedOutcome | undefined;
 
     if (requirePassingChecks) {
@@ -354,6 +357,7 @@ export async function executeEngineerTask(
           consecutiveRetryableModelErrors += 1;
           const reminder = createRetryableModelErrorGuidance({
             error: modelError,
+            recentRepoFacts,
             requiredCheckCommand,
           });
 
@@ -457,6 +461,29 @@ export async function executeEngineerTask(
       let toolFeedback: ToolFeedback;
 
       if (
+        isRequiredCheckCommand(toolRequest, requiredCheckCommand) &&
+        consecutiveFailedChecks > 0 &&
+        !editSinceLastFailedCheck &&
+        !groundingSinceLastFailedCheck
+      ) {
+        toolFeedback = createRepeatedRequiredCheckFeedback({
+          recentRepoFacts,
+          requiredCheckCommand,
+        });
+        if (recentRepoFacts.length > 0) {
+          repoMemoryFeedbackCount += 1;
+        }
+        await appendRunEvent(dossier.paths, {
+          actionStep: actionStepCount,
+          reason: "required-check-without-progress",
+          recentRepoFacts: recentRepoFacts
+            .slice(-4)
+            .map((fact) => fact.summary),
+          timestamp: now().toISOString(),
+          toolRequest: summarizeToolRequestForEvent(toolRequest),
+          type: "engineer-convergence-guard-triggered",
+        });
+      } else if (
         isExplorationToolRequest(toolRequest) &&
         consecutiveExplorationSteps >= EXPLORATION_BUDGET_STEPS
       ) {
@@ -502,6 +529,14 @@ export async function executeEngineerTask(
 
       updateRecentRepoFacts(recentRepoFacts, toolFeedback);
 
+      if (toolFeedback.ok && toolRequest.toolName === "file.write") {
+        editSinceLastFailedCheck = true;
+      }
+
+      if (toolFeedback.ok && isGroundingToolRequest(toolRequest)) {
+        groundingSinceLastFailedCheck = true;
+      }
+
       const guidance = createPostToolGuidance({
         consecutiveExplorationSteps,
         explorationBudget: EXPLORATION_BUDGET_STEPS,
@@ -541,6 +576,8 @@ export async function executeEngineerTask(
 
         if (recordedCheck.status === "passed") {
           consecutiveFailedChecks = 0;
+          editSinceLastFailedCheck = false;
+          groundingSinceLastFailedCheck = false;
           hasPassingCheck = true;
 
           if (action.stopWhenSuccessful === true) {
@@ -553,6 +590,8 @@ export async function executeEngineerTask(
           }
         } else {
           consecutiveFailedChecks += 1;
+          editSinceLastFailedCheck = false;
+          groundingSinceLastFailedCheck = false;
 
           if (consecutiveFailedChecks >= maxConsecutiveFailedChecks) {
             outcome = {
@@ -1096,6 +1135,15 @@ function isExplorationToolRequest(request: ToolRequest): boolean {
   );
 }
 
+function isGroundingToolRequest(request: ToolRequest): boolean {
+  return (
+    request.toolName === "file.search" ||
+    request.toolName === "file.read_many" ||
+    request.toolName === "file.list" ||
+    request.toolName === "file.read"
+  );
+}
+
 function isDuplicateExplorationRequest(request: ToolRequest): boolean {
   return (
     request.toolName === "file.read" ||
@@ -1114,15 +1162,34 @@ function createPostToolGuidance(options: {
 }): PostToolGuidance | undefined {
   if (
     options.toolFeedback.ok === false &&
-    options.toolFeedback.error.code === "path-violation"
+    (options.toolFeedback.error.code === "path-violation" ||
+      options.toolFeedback.error.code === "invalid-input")
   ) {
+    const knownPathsHint = renderKnownPathsHint(options.recentRepoFacts);
+
     return {
       content: [
         `The previous ${options.toolRequest.toolName} request used an invalid path: ${options.toolFeedback.error.message}`,
         "Do not retry the same missing path.",
+        "Use a project-relative path that is already verified by the run context.",
+        ...(knownPathsHint === undefined ? [] : [knownPathsHint]),
         "List a known existing parent directory or switch to another known path.",
       ].join(" "),
-      usedRepoMemory: false,
+      usedRepoMemory: knownPathsHint !== undefined,
+    };
+  }
+
+  if (
+    options.toolFeedback.ok === false &&
+    options.toolFeedback.error.code === "invalid-state" &&
+    isRequiredCheckCommand(options.toolRequest, options.requiredCheckCommand)
+  ) {
+    return {
+      content: [
+        options.toolFeedback.error.message,
+        "Inspect one real file or edit one verified target before re-running the required check.",
+      ].join(" "),
+      usedRepoMemory: options.recentRepoFacts.length > 0,
     };
   }
 
@@ -1190,6 +1257,27 @@ function createExplorationBudgetFeedback(options: {
   };
 }
 
+function createRepeatedRequiredCheckFeedback(options: {
+  recentRepoFacts: RepoFact[];
+  requiredCheckCommand: string;
+}): ToolFeedback {
+  const knownPathsHint = renderKnownPathsHint(options.recentRepoFacts);
+
+  return {
+    error: {
+      code: "invalid-state",
+      message: [
+        `The previous required check already failed and no verified progress was made since then.`,
+        `Do not run \`${options.requiredCheckCommand}\` again until you either inspect a real repo path or edit a file.`,
+        ...(knownPathsHint === undefined ? [] : [knownPathsHint]),
+      ].join(" "),
+      name: "BuiltInToolStateError",
+    },
+    ok: false,
+    toolName: "command.execute",
+  };
+}
+
 function updateRecentRepoFacts(
   recentRepoFacts: RepoFact[],
   toolFeedback: ToolFeedback,
@@ -1221,6 +1309,7 @@ function createRepoFactsFromToolResult(result: ToolResult): RepoFact[] {
       return [
         {
           key: `file.list:${result.path}`,
+          paths: result.entries.map((entry) => entry.path),
           summary: summarizeListRepoFact(result),
         },
       ];
@@ -1228,18 +1317,21 @@ function createRepoFactsFromToolResult(result: ToolResult): RepoFact[] {
       return [
         {
           key: `file.read:${result.path}`,
+          paths: [result.path],
           summary: `Read \`${result.path}\` (${result.byteLength} bytes).`,
         },
       ];
     case "file.read_many":
       return result.files.map((file) => ({
         key: `file.read:${file.path}`,
+        paths: [file.path],
         summary: `Read \`${file.path}\` (${file.byteLength} bytes).`,
       }));
     case "file.search":
       return [
         {
           key: `file.search:${result.path}:${result.query}`,
+          paths: result.results.map((entry) => entry.path),
           summary: summarizeSearchRepoFact(result),
         },
       ];
@@ -1274,6 +1366,26 @@ function summarizeSearchRepoFact(
     : `Searched \`${result.path}\` for \`${result.query}\`: ${sample}.`;
 }
 
+function renderKnownPathsHint(
+  recentRepoFacts: readonly RepoFact[],
+): string | undefined {
+  const candidatePaths = Array.from(
+    new Set(
+      recentRepoFacts
+        .flatMap((fact) => fact.paths)
+        .filter((path) => path.length > 0),
+    ),
+  ).slice(0, 6);
+
+  if (candidatePaths.length === 0) {
+    return undefined;
+  }
+
+  return `Known verified paths: ${candidatePaths
+    .map((path) => `\`${path}\``)
+    .join(", ")}.`;
+}
+
 function createRunConvergenceMetrics(options: {
   explorationBudgetExhaustedAtStep: number | null;
   repoMemoryFeedbackCount: number;
@@ -1297,17 +1409,22 @@ function createRunConvergenceMetrics(options: {
 
 function createRetryableModelErrorGuidance(options: {
   error: ModelClientError;
+  recentRepoFacts: readonly RepoFact[];
   requiredCheckCommand: string;
 }): string {
   const issueDetails =
     options.error.issues === undefined || options.error.issues.length === 0
       ? "The previous response could not be applied as a single Engineer step."
       : `The previous response could not be applied as a single Engineer step: ${options.error.issues.join("; ")}`;
+  const knownPathsHint = renderKnownPathsHint(options.recentRepoFacts);
 
   return [
     issueDetails,
     "Return exactly one next step.",
     "If you need repository or workspace access, call exactly one native tool and do not wrap it in a JSON envelope.",
+    "Commands already run from the project root by default. Do not prepend `cd` or invent workspace paths.",
+    `For the required check, prefer \`command.execute\` with \`command: "${options.requiredCheckCommand}"\` and omit \`workingDirectory\` unless you verified a real relative subdirectory.`,
+    ...(knownPathsHint === undefined ? [] : [knownPathsHint]),
     "If you are done, put `COMPLETE:` on the first completion line with no prose before it.",
     "If you are blocked, put `BLOCKED:` on the first completion line with no prose before it.",
     "If you call a tool, keep any assistant text brief. Use `STOP_ON_SUCCESS` only when the tool call is the required check and the run should end immediately if it passes.",
@@ -1543,6 +1660,8 @@ function renderEngineerProtocol(options: {
     "- Keep tool use explicit and auditable.",
     "- Ignore `.agent-harness`, `.git`, `node_modules`, and other generated or vendor paths unless the task explicitly depends on them.",
     "- If the task already gives you an exact file path, exact content target, or exact command, prefer acting on that directly before exploring.",
+    "- `command.execute` already runs from the project root by default. Do not prepend `cd` unless you have verified a real relative subdirectory.",
+    "- If the brief includes verified workspace hints, prefer those real paths before guessing new ones.",
     "- Explore search-first: prefer `file.search` to locate symbols, strings, and likely files before using `file.list`.",
     "- Once search yields a few candidates, prefer `file.read_many` for a small batch snapshot instead of repeated one-file reads.",
     "- When you need initial context, prefer `README.md`, `package.json`, `docs/`, `src/`, and `test/` over broad root relisting.",

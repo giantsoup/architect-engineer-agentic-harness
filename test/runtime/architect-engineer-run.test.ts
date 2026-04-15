@@ -479,7 +479,8 @@ describe("executeArchitectEngineerRun", () => {
     expect(
       architectToolCalls.every(
         (event) =>
-          event.toolName === "git.status" || event.toolName === "file.read",
+          event.toolName !== "command.execute" &&
+          event.toolName !== "file.write",
       ),
     ).toBe(true);
   }, 10000);
@@ -1183,6 +1184,109 @@ args = ["repo-mcp.js"]`,
     expect(engineerRequests).toHaveLength(3);
   });
 
+  it("carries verified workspace hints from Architect inspection into planning and Engineer handoff", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+
+    mkdirSync(path.join(projectRoot, "src"), { recursive: true });
+    writeFileSync(
+      path.join(projectRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "verified-hints-repo",
+          scripts: {
+            test: "node check.js",
+          },
+        },
+        null,
+        2,
+      ) + "\n",
+      "utf8",
+    );
+    writeFileSync(
+      path.join(projectRoot, "check.js"),
+      "const { targetValue } = require('./src/target.js');\nconsole.log(targetValue);\n",
+      "utf8",
+    );
+    writeFileSync(
+      path.join(projectRoot, "src", "target.js"),
+      "const targetValue = 4;\nmodule.exports = { targetValue };\n",
+      "utf8",
+    );
+    writeFileSync(
+      path.join(projectRoot, "src", "notes.txt"),
+      "This file mentions targetValue in prose.\n",
+      "utf8",
+    );
+
+    const loadedConfig = await createLoadedConfig(projectRoot);
+    const architect = createQueuedModelClient([
+      {
+        steps: [
+          "Run the required check",
+          "Update the implementation",
+          "Run the required check again",
+        ],
+        summary: "Fix targetValue and verify it.",
+        type: "plan",
+      },
+    ]);
+    const engineerRequests: Array<ModelChatRequest<unknown>> = [];
+    const engineer = {
+      async chat<TRequestStructured>(
+        request: ModelChatRequest<TRequestStructured>,
+      ): Promise<ModelChatResponse<TRequestStructured>> {
+        engineerRequests.push(request as ModelChatRequest<unknown>);
+
+        return {
+          id: "engineer-blocked",
+          rawContent: JSON.stringify({
+            blockers: ["stop after inspecting the handoff"],
+            outcome: "blocked",
+            summary: "Blocked for inspection-only test",
+            type: "final",
+          }),
+          role: "assistant",
+          structuredOutput: {
+            blockers: ["stop after inspecting the handoff"],
+            outcome: "blocked",
+            summary: "Blocked for inspection-only test",
+            type: "final",
+          } as TRequestStructured,
+        };
+      },
+    };
+
+    const execution = await executeArchitectEngineerRun({
+      architectModelClient: architect.client,
+      createdAt: new Date("2026-04-14T12:10:00.000Z"),
+      engineerModelClient: engineer,
+      loadedConfig,
+      now: () => new Date("2026-04-14T12:10:30.000Z"),
+      runId: "20260414T121000.000Z-abc141",
+      task: "Update the implementation of targetValue so the required check passes, and keep changes minimal.",
+    });
+
+    expect(execution.result.status).toBe("failed");
+
+    const architectUserPrompt = architect.requests[0]?.messages
+      .filter((message) => message.role === "user")
+      .map((message) => String(message.content))
+      .join("\n");
+    const engineerUserPrompt = engineerRequests[0]?.messages
+      .filter((message) => message.role === "user")
+      .map((message) => String(message.content))
+      .join("\n");
+
+    expect(architectUserPrompt).toContain("## Verified Workspace Hints");
+    expect(architectUserPrompt).toContain("`check.js`");
+    expect(architectUserPrompt).toContain("`src/target.js`");
+    expect(engineerUserPrompt).toContain("## Verified Workspace Hints");
+    expect(engineerUserPrompt).toContain("`check.js`");
+    expect(engineerUserPrompt).toContain("`src/target.js`");
+  });
+
   it("stops safely before branching when the repository starts dirty", async () => {
     const projectRoot = createTempProject();
     projectRoots.push(projectRoot);
@@ -1593,6 +1697,7 @@ args = ["repo-mcp.js"]`,
     projectRoots.push(projectRoot);
     initializeGitRepository(projectRoot);
     commitFile(projectRoot, "src/example.ts", "export const value = 1;\n");
+    writeFileSync(path.join(projectRoot, "README.md"), "# Repo\n", "utf8");
 
     const loadedConfig = await createLoadedConfig(projectRoot);
     const architect = createQueuedModelClient([
@@ -1610,6 +1715,14 @@ args = ["repo-mcp.js"]`,
           toolName: "command.execute",
         },
         summary: "Run the first required check.",
+        type: "tool",
+      },
+      {
+        request: {
+          path: "README.md",
+          toolName: "file.read",
+        },
+        summary: "Ground on one verified file before retrying.",
         type: "tool",
       },
       {

@@ -23,6 +23,9 @@ import type { BuiltInToolExecutor } from "../tools/built-in-tools.js";
 import { createToolRouter, type ToolRouter } from "../tools/tool-router.js";
 import type { CreateMcpServerClient } from "../tools/mcp/client.js";
 import type {
+  FileListToolResult,
+  FileReadToolResult,
+  FileSearchToolResult,
   GitStatusToolResult,
   ToolCatalog,
   ToolExecutionSummary,
@@ -97,6 +100,10 @@ interface ArchitectWorkspaceSnapshot {
   gitStatus?: string | undefined;
   notes: string[];
 }
+
+const MAX_ARCHITECT_SNAPSHOT_ROOT_ENTRIES = 6;
+const MAX_ARCHITECT_SNAPSHOT_SEARCH_TERMS = 2;
+const MAX_ARCHITECT_SNAPSHOT_SEARCH_RESULTS = 4;
 
 const DEFAULT_ARCHITECT_SCHEMA_OPTIONS: ArchitectControlOutputOptions =
   Object.freeze({});
@@ -177,6 +184,7 @@ export async function architectPlanningNode(
   const workspaceSnapshot = await captureArchitectWorkspaceSnapshot(
     dossier,
     context,
+    state.metadata.task,
   );
   const [systemPrompt, planningPrompt] = await Promise.all([
     loadPromptAsset("prompts/v1/architect/system.md"),
@@ -235,6 +243,11 @@ export async function engineerExecutionNode(
 ): Promise<ArchitectEngineerState> {
   const dossier = assertDossier(state);
   const remainingTimeMs = getRemainingRunTimeMs(state, context.now());
+  const workspaceSnapshot = await captureArchitectWorkspaceSnapshot(
+    dossier,
+    context,
+    state.metadata.task,
+  );
   let execution: Awaited<ReturnType<typeof executeEngineerTask>>;
 
   try {
@@ -249,7 +262,11 @@ export async function engineerExecutionNode(
       maxIterations: Number.POSITIVE_INFINITY,
       now: context.now,
       persistFinalArtifacts: false,
-      task: renderEngineerExecutionTask(state, context.loadedConfig),
+      task: renderEngineerExecutionTask(
+        state,
+        context.loadedConfig,
+        workspaceSnapshot,
+      ),
       taskFormat: "brief",
       timeoutMs: Math.max(1, remainingTimeMs),
       ...(context.engineerModelClient === undefined
@@ -346,6 +363,7 @@ export async function architectReviewNode(
   const workspaceSnapshot = await captureArchitectWorkspaceSnapshot(
     dossier,
     context,
+    state.metadata.task,
   );
   const [systemPrompt, reviewPrompt] = await Promise.all([
     loadPromptAsset("prompts/v1/architect/system.md"),
@@ -463,6 +481,7 @@ export async function finalizeArchitectEngineerRunNode(
   const workspaceSnapshot = await captureArchitectWorkspaceSnapshot(
     dossier,
     context,
+    finalizedState.metadata.task,
   );
   const finalReport = renderFinalReport(
     finalizedState,
@@ -1025,6 +1044,11 @@ function renderPlanningRequest(
         `- ${commandName}: ${command === undefined ? "not resolved" : `\`${command}\``}`,
     ),
     "",
+    "## Planning Guardrails",
+    "",
+    "- Base concrete file paths, directory names, and commands only on verified workspace hints or tool outputs.",
+    "- If a file path is not verified, do not guess it as if it exists. Request one narrow inspection tool instead.",
+    "",
     "## Workspace Snapshot",
     "",
     workspaceSnapshot.gitStatus ?? "Git status unavailable.",
@@ -1032,7 +1056,7 @@ function renderPlanningRequest(
       ? []
       : [
           "",
-          "## Inspection Notes",
+          "## Verified Workspace Hints",
           "",
           ...workspaceSnapshot.notes.map((note) => `- ${note}`),
         ]),
@@ -1153,6 +1177,7 @@ function renderReviewRequest(
 function renderEngineerExecutionTask(
   state: ArchitectEngineerState,
   loadedConfig: LoadedHarnessConfig,
+  workspaceSnapshot: ArchitectWorkspaceSnapshot,
 ): string {
   const acceptanceCriteriaPolicy = resolveAcceptanceCriteriaPolicy({
     architectPlan: state.architectPlan,
@@ -1200,6 +1225,14 @@ function renderEngineerExecutionTask(
         `- ${commandName}: ${command === undefined ? "not resolved" : `\`${command}\``}`,
     ),
   );
+
+  if (workspaceSnapshot.notes.length > 0) {
+    lines.push("", "## Verified Workspace Hints", "");
+
+    for (const note of workspaceSnapshot.notes) {
+      lines.push(`- ${note}`);
+    }
+  }
 
   if (state.architectReview?.decision === "revise") {
     lines.push(
@@ -1430,6 +1463,7 @@ async function syncFailureNotesArtifact(
 async function captureArchitectWorkspaceSnapshot(
   dossier: RunDossier,
   context: ArchitectEngineerNodeContext,
+  task: string,
 ): Promise<ArchitectWorkspaceSnapshot> {
   const executor = createBuiltInToolExecutor({
     dossierPaths: dossier.paths,
@@ -1450,6 +1484,52 @@ async function captureArchitectWorkspaceSnapshot(
       { toolName: "git.status" },
       notes,
     );
+    const rootList = await safelyReadWithArchitect(
+      executor,
+      { path: ".", toolName: "file.list" },
+      notes,
+    );
+
+    if (rootList?.toolName === "file.list") {
+      notes.push(summarizeArchitectRootEntries(rootList));
+
+      const packageJsonEntry = rootList.entries.find(
+        (entry) => entry.kind === "file" && entry.path === "package.json",
+      );
+
+      if (packageJsonEntry !== undefined) {
+        const packageJson = await safelyReadWithArchitect(
+          executor,
+          { path: packageJsonEntry.path, toolName: "file.read" },
+          notes,
+        );
+
+        if (packageJson?.toolName === "file.read") {
+          notes.push(summarizeArchitectPackageJson(packageJson));
+        }
+      }
+    }
+
+    for (const searchTerm of extractArchitectSearchTerms(task)) {
+      const searchResult = await safelyReadWithArchitect(
+        executor,
+        {
+          limit: MAX_ARCHITECT_SNAPSHOT_SEARCH_RESULTS,
+          path: ".",
+          query: searchTerm,
+          toolName: "file.search",
+        },
+        notes,
+      );
+
+      if (searchResult?.toolName === "file.search") {
+        const summary = summarizeArchitectSearchResult(searchResult);
+
+        if (summary !== undefined) {
+          notes.push(summary);
+        }
+      }
+    }
 
     return {
       gitStatus:
@@ -1465,7 +1545,11 @@ async function captureArchitectWorkspaceSnapshot(
 
 async function safelyReadWithArchitect(
   executor: BuiltInToolExecutor,
-  request: { path: string; toolName: "file.read" } | { toolName: "git.status" },
+  request:
+    | { path: string; toolName: "file.read" }
+    | { path: string; toolName: "file.list" }
+    | { limit: number; path: string; query: string; toolName: "file.search" }
+    | { toolName: "git.status" },
   notes: string[],
 ) {
   try {
@@ -1486,6 +1570,96 @@ function renderGitStatusSummary(gitStatus: GitStatusToolResult): string {
     `- Clean working tree: ${gitStatus.isClean ? "yes" : "no"}`,
     `- Changed paths: ${changedPaths.length === 0 ? "none" : changedPaths.join(", ")}`,
   ].join("\n");
+}
+
+function summarizeArchitectRootEntries(result: FileListToolResult): string {
+  const visibleEntries = result.entries
+    .filter(
+      (entry) =>
+        !entry.path.startsWith(".agent-harness") &&
+        !entry.path.startsWith(".git"),
+    )
+    .slice(0, MAX_ARCHITECT_SNAPSHOT_ROOT_ENTRIES)
+    .map((entry) => `\`${entry.path}\``);
+
+  if (visibleEntries.length === 0) {
+    return "Verified repo root entries: none visible.";
+  }
+
+  return `Verified repo root entries: ${visibleEntries.join(", ")}.`;
+}
+
+function summarizeArchitectPackageJson(result: FileReadToolResult): string {
+  try {
+    const parsed = JSON.parse(result.content) as {
+      name?: string;
+      scripts?: Record<string, string>;
+    };
+    const notes: string[] = [];
+
+    if (typeof parsed.name === "string" && parsed.name.trim().length > 0) {
+      notes.push(`package name \`${parsed.name}\``);
+    }
+
+    const scriptNames = Object.keys(parsed.scripts ?? {}).slice(0, 6);
+
+    if (scriptNames.length > 0) {
+      notes.push(
+        `scripts ${scriptNames
+          .map((scriptName) => `\`${scriptName}\``)
+          .join(", ")}`,
+      );
+    }
+
+    if (notes.length > 0) {
+      return `Verified \`package.json\`: ${notes.join("; ")}.`;
+    }
+  } catch {
+    // Ignore parse failures and fall through to the generic note.
+  }
+
+  return "Verified `package.json` exists.";
+}
+
+function extractArchitectSearchTerms(task: string): string[] {
+  const terms: string[] = [];
+  const seen = new Set<string>();
+  const push = (value: string) => {
+    const normalized = value.trim();
+
+    if (normalized.length < 3 || seen.has(normalized)) {
+      return;
+    }
+
+    seen.add(normalized);
+    terms.push(normalized);
+  };
+
+  for (const match of task.matchAll(/`([^`\n]{3,})`/gu)) {
+    push(match[1] ?? "");
+  }
+
+  for (const match of task.matchAll(
+    /\b[A-Za-z][A-Za-z0-9_]*[A-Z][A-Za-z0-9_]*\b/gu,
+  )) {
+    push(match[0] ?? "");
+  }
+
+  return terms.slice(0, MAX_ARCHITECT_SNAPSHOT_SEARCH_TERMS);
+}
+
+function summarizeArchitectSearchResult(
+  result: FileSearchToolResult,
+): string | undefined {
+  if (result.results.length === 0) {
+    return undefined;
+  }
+
+  const paths = result.results
+    .slice(0, MAX_ARCHITECT_SNAPSHOT_SEARCH_RESULTS)
+    .map((entry) => `\`${entry.path}\``);
+
+  return `Verified search hits for \`${result.query}\`: ${paths.join(", ")}.`;
 }
 
 function renderArchitectAssistantMessage(action: ArchitectToolAction): string {

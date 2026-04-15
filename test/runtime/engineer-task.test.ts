@@ -911,6 +911,7 @@ describe("executeEngineerTask", () => {
     const projectRoot = createTempProject();
     projectRoots.push(projectRoot);
     initializeGitRepository(projectRoot);
+    writeFileSync(path.join(projectRoot, "README.md"), "# Repo\n", "utf8");
 
     const modelServer = await startMockServer([
       {
@@ -920,6 +921,14 @@ describe("executeEngineerTask", () => {
           toolName: "command.execute",
         },
         summary: "Run the required check once.",
+        type: "tool",
+      },
+      {
+        request: {
+          path: "README.md",
+          toolName: "file.read",
+        },
+        summary: "Ground on one verified file before retrying.",
         type: "tool",
       },
       {
@@ -1002,6 +1011,94 @@ describe("executeEngineerTask", () => {
         "utf8",
       ),
     ).toContain("Required check failed 2 consecutive times.");
+  });
+
+  it("refuses to rerun a failed required check before any grounded progress", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: "http://127.0.0.1:65535/v1",
+      projectRoot,
+      stopConditions: {
+        maxEngineerAttempts: 3,
+      },
+    });
+    const { client, requests } = createCapturingModelClient([
+      {
+        request: {
+          accessMode: "mutate",
+          command: "npm run test",
+          toolName: "command.execute",
+        },
+        summary: "Run the required check once.",
+        type: "tool" as const,
+      },
+      {
+        request: {
+          accessMode: "mutate",
+          command: "npm run test",
+          toolName: "command.execute",
+        },
+        summary: "Try the required check again without making progress.",
+        type: "tool" as const,
+      },
+      {
+        blockers: ["stop after the repeated-check refusal"],
+        outcome: "blocked" as const,
+        summary: "Blocked after repeated-check refusal",
+        type: "final" as const,
+      },
+    ]);
+    let callCount = 0;
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        callCount += 1;
+
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 10,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: 1,
+          role: "engineer",
+          stderr: "tests failed\n",
+          stdout: "",
+          timestamp: "2026-04-13T12:12:00.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      modelClient: client,
+      persistFinalArtifacts: false,
+      projectCommandRunner: fakeCommandRunner,
+      task: "Keep trying the same failing required check.",
+    });
+
+    expect(execution.stopReason).toBe("blocked");
+    expect(callCount).toBe(1);
+    expect(
+      requests[2]?.messages.some(
+        (message) =>
+          message.role === "tool" &&
+          message.content.includes(
+            "The previous required check already failed and no verified progress was made since then.",
+          ),
+      ),
+    ).toBe(true);
   });
 
   it("invokes an allowlisted MCP server during a run and records MCP activity in the dossier", async () => {
@@ -1407,6 +1504,64 @@ args = ["repo-mcp.js"]`,
           message.content.includes(
             "Repeated read for `README.md` was suppressed.",
           ),
+      ),
+    ).toBe(true);
+  });
+
+  it("feeds known verified paths back after an invalid file path request", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+    mkdirSync(path.join(projectRoot, "src"), { recursive: true });
+    writeFileSync(
+      path.join(projectRoot, "package.json"),
+      '{"name":"test-repo"}\n',
+      "utf8",
+    );
+    writeFileSync(
+      path.join(projectRoot, "src", "example.ts"),
+      "export const value = 1;\n",
+      "utf8",
+    );
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: "http://127.0.0.1:65535/v1",
+      projectRoot,
+    });
+    const { client, requests } = createCapturingModelClient([
+      {
+        request: { path: ".", toolName: "file.list" as const },
+        summary: "List the repo root first.",
+        type: "tool" as const,
+      },
+      {
+        request: { path: "src/missing.ts", toolName: "file.read" as const },
+        summary: "Try to read a missing file.",
+        type: "tool" as const,
+      },
+      {
+        blockers: ["stop after invalid-path guidance"],
+        outcome: "blocked" as const,
+        summary: "Blocked after invalid-path guidance",
+        type: "final" as const,
+      },
+    ]);
+
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      modelClient: client,
+      persistFinalArtifacts: false,
+      task: "Inspect one source file and stop.",
+    });
+
+    expect(execution.stopReason).toBe("blocked");
+    expect(
+      requests[2]?.messages.some(
+        (message) =>
+          message.role === "user" &&
+          message.content.includes("Known verified paths:") &&
+          message.content.includes("`package.json`") &&
+          message.content.includes("`src`"),
       ),
     ).toBe(true);
   });
@@ -1839,6 +1994,9 @@ args = ["repo-mcp.js"]`,
           message.role === "developer" &&
           message.content.includes(
             "Explore search-first: prefer `file.search`",
+          ) &&
+          message.content.includes(
+            "`command.execute` already runs from the project root by default.",
           ),
       ),
     ).toBe(true);

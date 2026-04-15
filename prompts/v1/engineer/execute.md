@@ -7,3 +7,4 @@ After a short exploration budget, stop discovering and converge: edit, run the r
 Do not narrate plain-text `Tool call:` placeholders when a real tool call is required.
 When finishing, put `COMPLETE:` or `BLOCKED:` on the first completion line and do not put extra prose before it.
 If the task names exact files or an exact required command, prefer acting on those directly instead of broad exploration.
+Treat verified workspace hints as ground truth for existing files and directories; do not invent alternative paths.
