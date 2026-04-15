@@ -875,6 +875,72 @@ describe("OpenAiCompatibleChatClient", () => {
     });
   });
 
+  it("normalizes near-valid Architect review JSON during local validation fallback", async () => {
+    let attempts = 0;
+    const mockServer = await startMockServer((_request, response) => {
+      attempts += 1;
+
+      if (attempts === 1) {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: {
+              message: "response_format is unsupported here",
+            },
+          }),
+        );
+        return;
+      }
+
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  decision: "Approve",
+                  nextActions: "Ship it",
+                  summary: "Looks good",
+                  type: "review",
+                }),
+                role: "assistant",
+              },
+            },
+          ],
+          id: "chatcmpl-normalized-architect-review",
+        }),
+      );
+    });
+    servers.push(mockServer);
+
+    const { loadedConfig, projectRoot } = await createLoadedConfig(
+      renderConfig({
+        architectBaseUrl: `${mockServer.url}/remote/v1`,
+        architectMaxRetries: 0,
+        engineerBaseUrl: `${mockServer.url}/local/v1`,
+      }),
+    );
+    projectRoots.push(projectRoot);
+
+    const client = new OpenAiCompatibleChatClient({
+      config: resolveModelConfigForRole(loadedConfig, "architect"),
+      retryDelayMs: 0,
+    });
+
+    const response = await client.chat({
+      messages: [{ content: "Return a review.", role: "user" }],
+      structuredOutput: await createArchitectStructuredOutputFormat("review"),
+    });
+
+    expect(response.structuredOutput).toEqual({
+      decision: "approve",
+      nextActions: ["Ship it"],
+      summary: "Looks good",
+      type: "review",
+    });
+  });
+
   it("accepts the first valid structured JSON object when the response contains multiple JSON objects", async () => {
     let attempts = 0;
     const mockServer = await startMockServer((_request, response) => {

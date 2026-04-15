@@ -992,7 +992,11 @@ function isRetryableStructuredOutputFailure(options: {
   issues?: readonly string[] | undefined;
   rawContent: string;
 }): boolean {
-  if (options.formatName !== "engineer_action") {
+  if (
+    options.formatName !== "engineer_action" &&
+    options.formatName !== "architect_plan" &&
+    options.formatName !== "architect_review"
+  ) {
     return false;
   }
 
@@ -1015,33 +1019,54 @@ function normalizeStructuredOutputCandidate(
   formatName: string,
   value: unknown,
 ): unknown {
-  if (formatName !== "engineer_action" || !isPlainObject(value)) {
+  if (!isPlainObject(value)) {
     return value;
   }
 
-  if (value.type === "tool") {
-    const normalized: Record<string, unknown> = {
-      request: normalizeEngineerToolRequest(value.request),
-      summary: value.summary,
-      type: value.type,
-    };
+  switch (formatName) {
+    case "engineer_action":
+      return normalizeEngineerActionCandidate(value);
+    case "architect_plan":
+      return normalizeArchitectPlanCandidate(value);
+    case "architect_review":
+      return normalizeArchitectReviewCandidate(value);
+    default:
+      return value;
+  }
+}
 
-    if (value.stopWhenSuccessful !== undefined) {
-      normalized.stopWhenSuccessful = value.stopWhenSuccessful;
+function normalizeEngineerActionCandidate(
+  value: Record<string, unknown>,
+): unknown {
+  const normalizedType = normalizeLowercaseString(value.type);
+
+  if (normalizedType === "tool") {
+    const normalized: Record<string, unknown> = {
+      request: normalizeToolRequestCandidate(value.request),
+      summary: normalizeTrimmedString(value.summary),
+      type: normalizedType,
+    };
+    const normalizedStopWhenSuccessful = normalizeBooleanLike(
+      value.stopWhenSuccessful,
+    );
+
+    if (normalizedStopWhenSuccessful !== undefined) {
+      normalized.stopWhenSuccessful = normalizedStopWhenSuccessful;
     }
 
     return normalized;
   }
 
-  if (value.type === "final") {
+  if (normalizedType === "final") {
     const normalized: Record<string, unknown> = {
-      outcome: value.outcome,
-      summary: value.summary,
-      type: value.type,
+      outcome: normalizeLowercaseString(value.outcome),
+      summary: normalizeTrimmedString(value.summary),
+      type: normalizedType,
     };
+    const normalizedBlockers = normalizeStringList(value.blockers);
 
-    if (value.blockers !== undefined) {
-      normalized.blockers = value.blockers;
+    if (normalizedBlockers !== undefined) {
+      normalized.blockers = normalizedBlockers;
     }
 
     return normalized;
@@ -1050,78 +1075,239 @@ function normalizeStructuredOutputCandidate(
   return value;
 }
 
-function normalizeEngineerToolRequest(value: unknown): unknown {
-  if (!isPlainObject(value) || typeof value.toolName !== "string") {
+function normalizeArchitectPlanCandidate(
+  value: Record<string, unknown>,
+): unknown {
+  if (normalizeLowercaseString(value.type) === "tool") {
+    return {
+      request: normalizeToolRequestCandidate(value.request),
+      summary: normalizeTrimmedString(value.summary),
+      type: "tool",
+    };
+  }
+
+  const normalized: Record<string, unknown> = {
+    steps: normalizeStringList(value.steps),
+    summary: normalizeTrimmedString(value.summary),
+  };
+  const normalizedAcceptanceCriteria = normalizeStringList(
+    value.acceptanceCriteria,
+  );
+  const normalizedType = normalizeLowercaseString(value.type);
+
+  if (normalizedAcceptanceCriteria !== undefined) {
+    normalized.acceptanceCriteria = normalizedAcceptanceCriteria;
+  }
+
+  if (normalizedType !== undefined) {
+    normalized.type = normalizedType;
+  }
+
+  return normalized;
+}
+
+function normalizeArchitectReviewCandidate(
+  value: Record<string, unknown>,
+): unknown {
+  if (normalizeLowercaseString(value.type) === "tool") {
+    return {
+      request: normalizeToolRequestCandidate(value.request),
+      summary: normalizeTrimmedString(value.summary),
+      type: "tool",
+    };
+  }
+
+  const normalized: Record<string, unknown> = {
+    decision: normalizeKeywordLiteral(value.decision),
+    summary: normalizeTrimmedString(value.summary),
+  };
+  const normalizedNextActions = normalizeStringList(value.nextActions);
+  const normalizedType = normalizeLowercaseString(value.type);
+
+  if (normalizedNextActions !== undefined) {
+    normalized.nextActions = normalizedNextActions;
+  }
+
+  if (normalizedType !== undefined) {
+    normalized.type = normalizedType;
+  }
+
+  return normalized;
+}
+
+function normalizeToolRequestCandidate(value: unknown): unknown {
+  if (!isPlainObject(value)) {
     return value;
   }
 
-  switch (value.toolName) {
+  const toolName = normalizeTrimmedString(value.toolName);
+
+  if (toolName === undefined) {
+    return value;
+  }
+
+  switch (toolName) {
     case "file.search":
       return {
-        ...(value.limit === undefined ? {} : { limit: value.limit }),
-        ...(value.path === undefined ? {} : { path: value.path }),
-        query: value.query,
-        toolName: value.toolName,
+        ...(normalizeIntegerLike(value.limit) === undefined
+          ? {}
+          : { limit: normalizeIntegerLike(value.limit) }),
+        ...(normalizeTrimmedString(value.path) === undefined
+          ? {}
+          : { path: normalizeTrimmedString(value.path) }),
+        query: normalizeTrimmedString(value.query),
+        toolName,
       };
     case "file.read_many":
       return {
-        paths: value.paths,
-        toolName: value.toolName,
+        paths: normalizeStringList(value.paths),
+        toolName,
       };
     case "file.read":
       return {
-        path: value.path,
-        toolName: value.toolName,
+        path: normalizeTrimmedString(value.path),
+        toolName,
       };
     case "file.write":
       return {
         content: value.content,
-        path: value.path,
-        toolName: value.toolName,
+        path: normalizeTrimmedString(value.path),
+        toolName,
       };
     case "file.list":
       return {
-        ...(value.path === undefined ? {} : { path: value.path }),
-        toolName: value.toolName,
+        ...(normalizeTrimmedString(value.path) === undefined
+          ? {}
+          : { path: normalizeTrimmedString(value.path) }),
+        toolName,
       };
     case "command.execute":
       return {
-        ...(value.accessMode === undefined
+        ...(normalizeCommandAccessMode(value.accessMode) === undefined
           ? {}
-          : { accessMode: value.accessMode }),
-        command: value.command,
+          : { accessMode: normalizeCommandAccessMode(value.accessMode) }),
+        command: normalizeTrimmedString(value.command),
         ...(value.environment === undefined
           ? {}
           : { environment: value.environment }),
-        ...(value.timeoutMs === undefined
+        ...(normalizeIntegerLike(value.timeoutMs) === undefined
           ? {}
-          : { timeoutMs: value.timeoutMs }),
-        toolName: value.toolName,
-        ...(value.workingDirectory === undefined
+          : { timeoutMs: normalizeIntegerLike(value.timeoutMs) }),
+        toolName,
+        ...(normalizeTrimmedString(value.workingDirectory) === undefined
           ? {}
-          : { workingDirectory: value.workingDirectory }),
+          : {
+              workingDirectory: normalizeTrimmedString(value.workingDirectory),
+            }),
       };
     case "git.status":
       return {
-        toolName: value.toolName,
+        toolName,
       };
     case "git.diff":
       return {
-        ...(value.staged === undefined ? {} : { staged: value.staged }),
-        toolName: value.toolName,
+        ...(normalizeBooleanLike(value.staged) === undefined
+          ? {}
+          : { staged: normalizeBooleanLike(value.staged) }),
+        toolName,
       };
     case "mcp.call":
       return {
         ...(value.arguments === undefined
           ? {}
           : { arguments: value.arguments }),
-        name: value.name,
-        server: value.server,
-        toolName: value.toolName,
+        name: normalizeTrimmedString(value.name),
+        server: normalizeTrimmedString(value.server),
+        toolName,
       };
     default:
       return value;
   }
+}
+
+function normalizeTrimmedString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmedValue = value.trim();
+
+  return trimmedValue.length === 0 ? "" : trimmedValue;
+}
+
+function normalizeLowercaseString(value: unknown): string | undefined {
+  const normalized = normalizeTrimmedString(value);
+
+  return normalized === undefined ? undefined : normalized.toLowerCase();
+}
+
+function normalizeKeywordLiteral(value: unknown): string | undefined {
+  const normalized = normalizeLowercaseString(value);
+
+  if (normalized === undefined) {
+    return undefined;
+  }
+
+  return normalized.replace(/^[`"'“”‘’\s]+|[`"'“”‘’\s.,;:!?]+$/gu, "");
+}
+
+function normalizeStringList(value: unknown): string[] | undefined {
+  if (typeof value === "string") {
+    const normalized = normalizeTrimmedString(value);
+
+    return normalized === undefined ? undefined : [normalized];
+  }
+
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value.map((entry) =>
+    typeof entry === "string" ? entry.trim() : entry,
+  ) as string[];
+}
+
+function normalizeIntegerLike(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isInteger(value)) {
+    return value;
+  }
+
+  if (typeof value !== "string" || !/^-?\d+$/u.test(value.trim())) {
+    return undefined;
+  }
+
+  return Number.parseInt(value.trim(), 10);
+}
+
+function normalizeBooleanLike(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  switch (value.trim().toLowerCase()) {
+    case "true":
+      return true;
+    case "false":
+      return false;
+    default:
+      return undefined;
+  }
+}
+
+function normalizeCommandAccessMode(
+  value: unknown,
+): "inspect" | "mutate" | undefined {
+  const normalized = normalizeKeywordLiteral(value);
+
+  if (normalized === "inspect" || normalized === "mutate") {
+    return normalized;
+  }
+
+  return undefined;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

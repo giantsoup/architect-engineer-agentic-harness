@@ -16,6 +16,7 @@ import {
   createArchitectStructuredOutputFormat,
   type ArchitectControlOutputOptions,
 } from "../models/architect-output.js";
+import { ModelClientError } from "../models/openai-compatible-client.js";
 import { createRoleModelClient } from "../models/provider-factory.js";
 import { createBuiltInToolExecutor } from "../tools/built-in-tools.js";
 import type { BuiltInToolExecutor } from "../tools/built-in-tools.js";
@@ -93,16 +94,18 @@ export interface ArchitectEngineerNodeContext {
 }
 
 interface ArchitectWorkspaceSnapshot {
-  checksJson?: string | undefined;
-  diff?: string | undefined;
-  failureNotes?: string | undefined;
   gitStatus?: string | undefined;
   notes: string[];
 }
 
 const DEFAULT_ARCHITECT_SCHEMA_OPTIONS: ArchitectControlOutputOptions =
   Object.freeze({});
+const MAX_ARCHITECT_VISIBLE_COMMAND_OUTPUT_CHARS = 2000;
+const MAX_ARCHITECT_VISIBLE_DIFF_CHARS = 3000;
+const MAX_ARCHITECT_VISIBLE_FILE_READ_CHARS = 2500;
+const MAX_ARCHITECT_VISIBLE_MCP_TEXT_CHARS = 2000;
 const MAX_ARCHITECT_TOOL_STEPS = 8;
+const MAX_ARCHITECT_OUTPUT_REPAIRS = 2;
 
 export async function prepareArchitectEngineerRunNode(
   state: ArchitectEngineerState,
@@ -247,6 +250,7 @@ export async function engineerExecutionNode(
       now: context.now,
       persistFinalArtifacts: false,
       task: renderEngineerExecutionTask(state, context.loadedConfig),
+      taskFormat: "brief",
       timeoutMs: Math.max(1, remainingTimeMs),
       ...(context.engineerModelClient === undefined
         ? {}
@@ -589,6 +593,7 @@ async function runArchitectLoop<TKind extends "plan" | "review">(options: {
       },
       { content: options.userPrompt, role: "user" as const },
     ];
+    let repairAttempts = 0;
 
     for (
       let iteration = 1;
@@ -614,16 +619,35 @@ async function runArchitectLoop<TKind extends "plan" | "review">(options: {
           structuredOutput,
         });
       } catch (error) {
+        const repairGuidance = createArchitectRepairGuidance(
+          options.kind,
+          error,
+        );
+
+        if (
+          repairGuidance !== undefined &&
+          repairAttempts < MAX_ARCHITECT_OUTPUT_REPAIRS
+        ) {
+          repairAttempts += 1;
+          messages.push({
+            content: repairGuidance,
+            role: "developer",
+          });
+          await appendStructuredMessage(options.dossier.paths, {
+            content: repairGuidance,
+            role: "system",
+            timestamp: options.context.now().toISOString(),
+          });
+          continue;
+        }
+
         return {
           message: `Architect ${options.kind} failed: ${describeError(error)}`,
           ok: false,
         };
       }
 
-      messages.push({
-        content: modelResponse.rawContent,
-        role: "assistant",
-      });
+      repairAttempts = 0;
 
       const action = modelResponse.structuredOutput;
 
@@ -659,13 +683,18 @@ async function runArchitectLoop<TKind extends "plan" | "review">(options: {
         };
       }
 
+      messages.push({
+        content: renderArchitectAssistantMessage(action),
+        role: "assistant",
+      });
+
       const toolFeedback = await executeArchitectTool(
         toolRouter,
         action.request,
       );
 
       messages.push({
-        content: JSON.stringify(toolFeedback),
+        content: renderArchitectToolFeedbackForModel(toolFeedback),
         name: action.request.toolName,
         role: "tool",
       });
@@ -714,6 +743,38 @@ async function executeArchitectTool(
 
     throw error;
   }
+}
+
+function createArchitectRepairGuidance(
+  kind: "plan" | "review",
+  error: unknown,
+): string | undefined {
+  if (!(error instanceof ModelClientError)) {
+    return undefined;
+  }
+
+  if (error.classification !== "invalid-structured-output") {
+    return undefined;
+  }
+
+  const issueDetails =
+    error.issues === undefined || error.issues.length === 0
+      ? `The previous Architect ${kind} response did not match the required JSON output.`
+      : `The previous Architect ${kind} response did not match the required JSON output: ${error.issues.join("; ")}`;
+  const finalExample =
+    kind === "plan"
+      ? '{"type":"plan","summary":"...","steps":["..."],"acceptanceCriteria":["..."]}'
+      : '{"type":"review","decision":"approve|revise|fail","summary":"...","nextActions":["..."]}';
+
+  return [
+    issueDetails,
+    "Return exactly one JSON object and nothing else.",
+    "Do not include markdown fences, prose, or multiple JSON objects.",
+    "Do not combine a tool action and a final decision in the same response.",
+    'If you need one more tool, return `{"type":"tool","summary":"...","request":{...}}`.',
+    `If you are ready to finish, return \`${finalExample}\`.`,
+    'For `command.execute`, `accessMode` must be exactly `"inspect"` or `"mutate"`.',
+  ].join(" ");
 }
 
 function summarizeToolRequestForEvent(
@@ -868,6 +929,9 @@ function renderArchitectToolProtocol(
     "Rules:",
     `- Use \`type: "tool"\` to request exactly one built-in tool or \`mcp.call\`.`,
     `- Use \`type: "${finalType}"\` only when you are ready to deliver the final ${kind}.`,
+    "- Do not combine a tool action and a final decision in the same response.",
+    "- Prefer finishing without tools when the current evidence already proves the outcome.",
+    "- If you need inspection, request one narrow tool instead of broad exploration.",
     "- Built-in tool restrictions still apply to the Architect role.",
     "- MCP servers are additive and controlled by the project allowlist.",
     "",
@@ -886,32 +950,25 @@ function renderArchitectToolProtocol(
 function renderArchitectBuiltInToolsMarkdown(): string {
   return [
     "### `file.search`",
-    "- Search file contents within a file or directory tree using a literal query.",
-    '- Request shape: `{ "toolName": "file.search", "query": "createToolRouter", "path": "src", "limit": 8 }`',
+    "- Search text. Required: `query`. Optional: `path`, `limit`.",
     "",
     "### `file.read_many`",
-    "- Read a few likely-relevant small files in one step.",
-    '- Request shape: `{ "toolName": "file.read_many", "paths": ["src/example.ts", "test/example.test.ts"] }`',
+    "- Read a small batch. Required: `paths`.",
     "",
     "### `file.list`",
-    "- List directory entries.",
-    '- Request shape: `{ "toolName": "file.list", "path": "." }`',
+    "- List directory entries. Optional: `path`.",
     "",
     "### `file.read`",
-    "- Read a file from the workspace or artifacts.",
-    '- Request shape: `{ "toolName": "file.read", "path": "src/example.ts" }`',
+    "- Read one file. Required: `path`.",
     "",
     "### `command.execute`",
-    "- Run one shell command through the configured execution target.",
-    '- Request shape: `{ "toolName": "command.execute", "command": "npm test", "accessMode": "inspect" }`',
+    "- Run one command. Required: `command`. Optional: `accessMode`, `workingDirectory`, `timeoutMs`, `environment`.",
     "",
     "### `git.status`",
-    "- Inspect working tree state.",
-    '- Request shape: `{ "toolName": "git.status" }`',
+    "- Inspect working tree state. No arguments.",
     "",
     "### `git.diff`",
-    "- Capture the current patch.",
-    '- Request shape: `{ "toolName": "git.diff", "staged": false }`',
+    "- Read the current patch. Optional: `staged`.",
   ].join("\n");
 }
 
@@ -925,15 +982,8 @@ function renderArchitectMcpToolsMarkdown(toolCatalog: ToolCatalog): string {
     lines.push("- Allowlisted MCP tools available now: none");
   } else {
     for (const tool of toolCatalog.mcpTools) {
-      lines.push("", `### \`${tool.server}.${tool.name}\``);
-      lines.push(`- Server: \`${tool.server}\``);
-
-      if (tool.description !== undefined) {
-        lines.push(`- Description: ${tool.description}`);
-      }
-
       lines.push(
-        `- Request shape: \`{ "toolName": "mcp.call", "server": "${tool.server}", "name": "${tool.name}", "arguments": {} }\``,
+        `- \`${tool.server}.${tool.name}\`${tool.description === undefined ? "" : `: ${tool.description}`}. Use \`mcp.call\` with \`server\`, \`name\`, and optional \`arguments\`.`,
       );
     }
   }
@@ -1022,7 +1072,7 @@ function renderReviewRequest(
     "",
     `- Status: ${execution.result.status}`,
     `- Stop reason: ${execution.stopReason}`,
-    `- Summary: ${execution.result.summary}`,
+    `- Summary: ${toSingleLineSummary(execution.result.summary)}`,
     `- Engineer attempts so far: ${state.iterations.engineerAttempts}`,
     `- Review cycles so far: ${state.iterations.reviewCycles}`,
     `- Consecutive failed required checks: ${execution.consecutiveFailedChecks}`,
@@ -1037,52 +1087,55 @@ function renderReviewRequest(
     );
   }
 
+  const passingCheckCount = execution.checks.filter(
+    (check) => check.status === "passed",
+  ).length;
+  const failedCheckCount = execution.checks.filter(
+    (check) => check.status === "failed",
+  ).length;
+
+  lines.push(
+    `- Required check history: ${passingCheckCount} passed, ${failedCheckCount} failed`,
+  );
+  lines.push(
+    "- Historical failed checks earlier in the run do not by themselves block approval if the latest required check passes and the current workspace satisfies the acceptance criteria.",
+  );
+
+  if (execution.checks.length > 0) {
+    lines.push("", "## Recent Required Checks", "");
+
+    for (const check of execution.checks.slice(-3)) {
+      lines.push(
+        `- ${check.status}${check.exitCode === undefined ? "" : ` (exit ${check.exitCode})`}: ${check.command}`,
+      );
+    }
+  }
+
   if (workspaceSnapshot.gitStatus !== undefined) {
     lines.push("", "## Workspace Snapshot", "", workspaceSnapshot.gitStatus);
   }
 
-  lines.push("", "## Resolved Commands", "");
   lines.push(
-    ...Object.entries(toResolvedCommandRecord(loadedConfig)).map(
-      ([commandName, command]) =>
-        `- ${commandName}: ${command === undefined ? "not resolved" : `\`${command}\``}`,
-    ),
+    "",
+    "## Command Context",
+    "",
+    `- Required check command: \`${getRequiredCheckCommand(loadedConfig)}\``,
   );
 
-  if (workspaceSnapshot.checksJson !== undefined) {
-    lines.push(
-      "",
-      "## Checks Artifact",
-      "",
-      "```json",
-      workspaceSnapshot.checksJson.trim(),
-      "```",
-    );
+  const resolvedCommands = Object.entries(toResolvedCommandRecord(loadedConfig))
+    .filter(([, command]) => command !== undefined)
+    .slice(0, 4);
+
+  for (const [commandName, command] of resolvedCommands) {
+    lines.push(`- ${commandName}: \`${command}\``);
   }
 
-  if (
-    workspaceSnapshot.diff !== undefined &&
-    workspaceSnapshot.diff.trim().length > 0
-  ) {
+  if (state.failureNotes.length > 0) {
     lines.push(
       "",
-      "## Diff",
+      "## Carry-Forward Failure Notes",
       "",
-      "```diff",
-      workspaceSnapshot.diff.trim(),
-      "```",
-    );
-  }
-
-  if (
-    workspaceSnapshot.failureNotes !== undefined &&
-    workspaceSnapshot.failureNotes.trim().length > 0
-  ) {
-    lines.push(
-      "",
-      "## Failure Notes Carry Forward",
-      "",
-      workspaceSnapshot.failureNotes.trim(),
+      ...renderArchitectFailureNoteSummary(state.failureNotes),
     );
   }
 
@@ -1108,9 +1161,17 @@ function renderEngineerExecutionTask(
       loadedConfig.config.stopConditions.requirePassingChecks,
   });
   const lines = [
-    "# Objective",
+    "## Objective",
     "",
     state.metadata.task.trim(),
+    "",
+    "## Architect Execution Order",
+    "",
+    "1. Follow the Architect plan literally.",
+    "2. If a latest Architect review exists, treat its next actions as the highest priority.",
+    "3. Prefer the smallest confirming step that can satisfy the current review.",
+    "4. Avoid restarting broad exploration unless the current review explicitly requires it.",
+    "5. Return `COMPLETE:` as soon as the acceptance criteria and required check are satisfied.",
     "",
     "## Architect Plan",
     "",
@@ -1153,16 +1214,73 @@ function renderEngineerExecutionTask(
     }
   }
 
+  if (state.engineerExecution !== undefined) {
+    const lastCheck = state.engineerExecution.checks.at(-1);
+    const passingCheckCount = state.engineerExecution.checks.filter(
+      (check) => check.status === "passed",
+    ).length;
+    const failedCheckCount = state.engineerExecution.checks.filter(
+      (check) => check.status === "failed",
+    ).length;
+
+    lines.push(
+      "",
+      "## Current Run State",
+      "",
+      `- Previous Engineer status: ${state.engineerExecution.result.status}`,
+      `- Previous Engineer summary: ${toSingleLineSummary(state.engineerExecution.result.summary)}`,
+      `- Recorded required checks: ${state.engineerExecution.checks.length}`,
+      `- Required check history: ${passingCheckCount} passed, ${failedCheckCount} failed`,
+      `- Latest required check: ${lastCheck === undefined ? "none recorded" : (lastCheck.summary ?? lastCheck.status)}`,
+    );
+
+    if (
+      state.architectReview?.decision === "revise" &&
+      lastCheck?.status === "passed"
+    ) {
+      lines.push(
+        "- The latest required check already passed.",
+        "- If the task is already satisfied, avoid broad re-exploration. Prefer the smallest confirming step requested by the Architect, or reply `COMPLETE:` if no further work is needed.",
+      );
+    }
+  }
+
   if (state.failureNotes.length > 0) {
     lines.push(
       "",
-      "## Carry-Forward Failure Notes",
+      "## Relevant Carry-Forward Notes",
       "",
-      renderFailureNotesMarkdown(state.failureNotes),
+      ...renderEngineerCarryForwardNotes(state.failureNotes),
     );
   }
 
   return lines.join("\n");
+}
+
+function renderEngineerCarryForwardNotes(
+  failureNotes: readonly ArchitectEngineerFailureNote[],
+): string[] {
+  const relevantNotes = failureNotes.slice(-2);
+  const lines: string[] = [];
+
+  for (const failureNote of relevantNotes) {
+    lines.push(
+      `- ${capitalize(failureNote.author)}: ${failureNote.summary}`,
+      ...failureNote.details
+        .slice(0, 2)
+        .map(
+          (detail) => `- ${capitalize(failureNote.author)} detail: ${detail}`,
+        ),
+    );
+  }
+
+  if (failureNotes.length > relevantNotes.length) {
+    lines.push(
+      `- Older carry-forward notes omitted: ${failureNotes.length - relevantNotes.length}`,
+    );
+  }
+
+  return lines;
 }
 
 function renderFinalReport(
@@ -1327,42 +1445,13 @@ async function captureArchitectWorkspaceSnapshot(
   const notes: string[] = [];
 
   try {
-    const [gitStatus, checksJson, diff, failureNotes] = await Promise.all([
-      safelyReadWithArchitect(executor, { toolName: "git.status" }, notes),
-      safelyReadWithArchitect(
-        executor,
-        {
-          path: dossier.paths.files.checks.relativePath,
-          toolName: "file.read",
-        },
-        notes,
-      ),
-      safelyReadWithArchitect(
-        executor,
-        {
-          path: dossier.paths.files.diff.relativePath,
-          toolName: "file.read",
-        },
-        notes,
-      ),
-      safelyReadWithArchitect(
-        executor,
-        {
-          path: dossier.paths.files.failureNotes.relativePath,
-          toolName: "file.read",
-        },
-        notes,
-      ),
-    ]);
+    const gitStatus = await safelyReadWithArchitect(
+      executor,
+      { toolName: "git.status" },
+      notes,
+    );
 
     return {
-      checksJson:
-        checksJson?.toolName === "file.read" ? checksJson.content : undefined,
-      diff: diff?.toolName === "file.read" ? diff.content : undefined,
-      failureNotes:
-        failureNotes?.toolName === "file.read"
-          ? failureNotes.content
-          : undefined,
       gitStatus:
         gitStatus?.toolName === "git.status"
           ? renderGitStatusSummary(gitStatus)
@@ -1397,6 +1486,226 @@ function renderGitStatusSummary(gitStatus: GitStatusToolResult): string {
     `- Clean working tree: ${gitStatus.isClean ? "yes" : "no"}`,
     `- Changed paths: ${changedPaths.length === 0 ? "none" : changedPaths.join(", ")}`,
   ].join("\n");
+}
+
+function renderArchitectAssistantMessage(action: ArchitectToolAction): string {
+  return renderArchitectToolHistoryLine(action.request);
+}
+
+function renderArchitectToolHistoryLine(request: ToolRequest): string {
+  switch (request.toolName) {
+    case "command.execute":
+      return `Requested \`command.execute\` with \`${request.command}\`.`;
+    case "file.list":
+      return `Requested \`file.list\` on \`${request.path ?? "."}\`.`;
+    case "file.read":
+      return `Requested \`file.read\` on \`${request.path}\`.`;
+    case "file.read_many":
+      return `Requested \`file.read_many\` on ${request.paths.length} file${
+        request.paths.length === 1 ? "" : "s"
+      }.`;
+    case "file.search":
+      return `Requested \`file.search\` for \`${request.query}\` in \`${request.path ?? "."}\`.`;
+    case "file.write":
+      return `Requested \`file.write\` on \`${request.path}\`.`;
+    case "git.diff":
+      return `Requested \`git.diff\`${request.staged === true ? " (staged)" : ""}.`;
+    case "git.status":
+      return "Requested `git.status`.";
+    case "mcp.call":
+      return `Requested \`mcp.call\` for \`${request.server}.${request.name}\`.`;
+    default:
+      return "Requested one tool step.";
+  }
+}
+
+function renderArchitectToolFeedbackForModel(
+  feedback:
+    | {
+        ok: false;
+        toolName: string;
+        error: { code: string; message: string; name: string };
+      }
+    | { ok: true; toolName: string; result: ToolResult },
+): string {
+  if (feedback.ok === false) {
+    return JSON.stringify({
+      error: feedback.error,
+      ok: false,
+      toolName: feedback.toolName,
+    });
+  }
+
+  switch (feedback.result.toolName) {
+    case "command.execute":
+      return JSON.stringify({
+        ok: true,
+        result: {
+          command: feedback.result.command,
+          durationMs: feedback.result.durationMs,
+          exitCode: feedback.result.exitCode,
+          stderr: truncateArchitectText(
+            feedback.result.stderr,
+            MAX_ARCHITECT_VISIBLE_COMMAND_OUTPUT_CHARS,
+          ),
+          stdout: truncateArchitectText(
+            feedback.result.stdout,
+            MAX_ARCHITECT_VISIBLE_COMMAND_OUTPUT_CHARS,
+          ),
+          summary:
+            feedback.result.exitCode === 0
+              ? "Command completed successfully."
+              : `Command failed with exit code ${feedback.result.exitCode}.`,
+          toolName: feedback.result.toolName,
+        },
+        toolName: feedback.toolName,
+      });
+    case "file.read":
+      return JSON.stringify({
+        ok: true,
+        result: {
+          byteLength: feedback.result.byteLength,
+          content: truncateArchitectText(
+            feedback.result.content,
+            MAX_ARCHITECT_VISIBLE_FILE_READ_CHARS,
+          ),
+          path: feedback.result.path,
+          toolName: feedback.result.toolName,
+        },
+        toolName: feedback.toolName,
+      });
+    case "file.read_many":
+      return JSON.stringify({
+        ok: true,
+        result: {
+          files: feedback.result.files.map((file) => ({
+            byteLength: file.byteLength,
+            content: truncateArchitectText(
+              file.content,
+              MAX_ARCHITECT_VISIBLE_FILE_READ_CHARS,
+            ),
+            path: file.path,
+            truncatedCharCount: file.truncatedCharCount,
+          })),
+          hiddenPathCount: feedback.result.hiddenPathCount,
+          requestedPathCount: feedback.result.requestedPathCount,
+          toolName: feedback.result.toolName,
+        },
+        toolName: feedback.toolName,
+      });
+    case "file.list":
+      return JSON.stringify({
+        ok: true,
+        result: {
+          entries: feedback.result.entries.slice(0, 16),
+          path: feedback.result.path,
+          toolName: feedback.result.toolName,
+        },
+        toolName: feedback.toolName,
+      });
+    case "file.search":
+      return JSON.stringify({
+        ok: true,
+        result: {
+          path: feedback.result.path,
+          query: feedback.result.query,
+          results: feedback.result.results.slice(0, 8),
+          searchedFileCount: feedback.result.searchedFileCount,
+          skippedFileCount: feedback.result.skippedFileCount,
+          toolName: feedback.result.toolName,
+        },
+        toolName: feedback.toolName,
+      });
+    case "git.status":
+      return JSON.stringify({
+        ok: true,
+        result: {
+          branch: feedback.result.branch,
+          entries: feedback.result.entries.slice(0, 16),
+          isClean: feedback.result.isClean,
+          toolName: feedback.result.toolName,
+        },
+        toolName: feedback.toolName,
+      });
+    case "git.diff":
+      return JSON.stringify({
+        ok: true,
+        result: {
+          byteLength: feedback.result.byteLength,
+          diff: truncateArchitectText(
+            feedback.result.diff,
+            MAX_ARCHITECT_VISIBLE_DIFF_CHARS,
+          ),
+          isEmpty: feedback.result.isEmpty,
+          staged: feedback.result.staged,
+          toolName: feedback.result.toolName,
+        },
+        toolName: feedback.toolName,
+      });
+    case "mcp.call":
+      return JSON.stringify({
+        ok: true,
+        result: {
+          content: feedback.result.content.map((entry) =>
+            entry.type === "text"
+              ? {
+                  text: truncateArchitectText(
+                    entry.text,
+                    MAX_ARCHITECT_VISIBLE_MCP_TEXT_CHARS,
+                  ),
+                  type: entry.type,
+                }
+              : entry,
+          ),
+          isError: feedback.result.isError,
+          name: feedback.result.name,
+          server: feedback.result.server,
+          structuredContent: feedback.result.structuredContent,
+          toolName: feedback.result.toolName,
+        },
+        toolName: feedback.toolName,
+      });
+    default:
+      return JSON.stringify(feedback);
+  }
+}
+
+function truncateArchitectText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+
+  return [
+    value.slice(0, maxChars),
+    "",
+    `[truncated ${value.length - maxChars} additional characters]`,
+  ].join("\n");
+}
+
+function renderArchitectFailureNoteSummary(
+  failureNotes: readonly ArchitectEngineerFailureNote[],
+): string[] {
+  const lines: string[] = [];
+
+  for (const failureNote of failureNotes.slice(-2)) {
+    lines.push(`- ${capitalize(failureNote.author)}: ${failureNote.summary}`);
+  }
+
+  if (failureNotes.length > 2) {
+    lines.push(`- Older failure notes omitted: ${failureNotes.length - 2}`);
+  }
+
+  return lines;
+}
+
+function toSingleLineSummary(value: string, maxChars = 280): string {
+  const normalized = value.replace(/\s+/gu, " ").trim();
+
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, maxChars - 1)}...`;
 }
 
 function assertDossier(state: ArchitectEngineerState): RunDossier {

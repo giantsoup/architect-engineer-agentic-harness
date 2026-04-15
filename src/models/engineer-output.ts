@@ -350,6 +350,14 @@ export async function resolveEngineerTurn(options: {
     return legacyAction;
   }
 
+  const textualToolTurn = await parseTextualEngineerToolTurn(
+    options.rawContent,
+  );
+
+  if (textualToolTurn !== undefined) {
+    return textualToolTurn;
+  }
+
   throw new EngineerTurnValidationError([
     "Call exactly one tool through the native tool interface, or return `COMPLETE:` / `BLOCKED:` as plain text.",
   ]);
@@ -727,13 +735,17 @@ function parseEngineerFinalResponse(
     .split(/\r?\n/u)
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
-  const firstLine = lines[0];
+  const matchedLineIndex = lines.findIndex((line) =>
+    /^(COMPLETE|BLOCKED)\s*:?\s*(.*)$/iu.test(line),
+  );
 
-  if (firstLine === undefined) {
+  if (matchedLineIndex === -1) {
     return undefined;
   }
 
-  const matchedPrefix = /^(COMPLETE|BLOCKED)\s*:?\s*(.*)$/iu.exec(firstLine);
+  const matchedPrefix = /^(COMPLETE|BLOCKED)\s*:?\s*(.*)$/iu.exec(
+    lines[matchedLineIndex]!,
+  );
 
   if (matchedPrefix === null) {
     return undefined;
@@ -743,7 +755,9 @@ function parseEngineerFinalResponse(
     matchedPrefix[1]!.toLowerCase() === "blocked" ? "blocked" : "complete";
   const summaryParts = [
     matchedPrefix[2]!,
-    ...lines.slice(1).filter((line) => !line.startsWith("- ")),
+    ...lines
+      .slice(matchedLineIndex + 1)
+      .filter((line) => !line.startsWith("- ")),
   ];
   const summary = summaryParts.join(" ").trim();
 
@@ -756,7 +770,7 @@ function parseEngineerFinalResponse(
   const blockers =
     outcome === "blocked"
       ? lines
-          .slice(1)
+          .slice(matchedLineIndex + 1)
           .filter((line) => line.startsWith("- "))
           .map((line) => line.slice(2).trim())
           .filter((line) => line.length > 0)
@@ -791,6 +805,35 @@ async function parseLegacyEngineerAction(
   }
 
   return undefined;
+}
+
+async function parseTextualEngineerToolTurn(
+  rawContent: string,
+): Promise<EngineerToolCallAction | undefined> {
+  const textualToolCall = extractTextualToolCall(rawContent);
+
+  if (textualToolCall === undefined) {
+    return undefined;
+  }
+
+  const request = await validateEngineerToolRequest(
+    {
+      ...textualToolCall.arguments,
+      toolName: textualToolCall.toolName,
+    },
+    `text_tool_call.${textualToolCall.toolName}`,
+  );
+  const summary = summarizeTextualEngineerToolCall(rawContent, textualToolCall);
+
+  return {
+    request,
+    ...(summary.stopWhenSuccessful === true
+      ? { stopWhenSuccessful: true }
+      : {}),
+    summary: summary.summary,
+    toolCallId: "textual-engineer-tool-call",
+    type: "tool",
+  };
 }
 
 function collectJsonObjectCandidates(rawContent: string): string[] {
@@ -1005,4 +1048,80 @@ function pushUnexpectedProperties(
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function extractTextualToolCall(rawContent: string):
+  | {
+      arguments: Record<string, unknown>;
+      markerIndex: number;
+      toolName: string;
+    }
+  | undefined {
+  const markerMatch = /tool\s+call\s*:\s*([a-z0-9_.-]+)/iu.exec(rawContent);
+
+  if (markerMatch === null) {
+    return undefined;
+  }
+
+  const toolName = markerMatch[1]!;
+  const markerIndex = markerMatch.index;
+  const trailingContent = rawContent.slice(
+    markerMatch.index + markerMatch[0].length,
+  );
+  const objectStartOffset = trailingContent.indexOf("{");
+
+  if (objectStartOffset === -1) {
+    return {
+      arguments: {},
+      markerIndex,
+      toolName,
+    };
+  }
+
+  const objectStartIndex =
+    markerMatch.index + markerMatch[0].length + objectStartOffset;
+  const objectEndIndex = findBalancedJsonEnd(rawContent, objectStartIndex);
+
+  if (objectEndIndex === undefined) {
+    return undefined;
+  }
+
+  try {
+    const parsedArguments = JSON.parse(
+      rawContent.slice(objectStartIndex, objectEndIndex + 1),
+    );
+
+    if (!isPlainObject(parsedArguments)) {
+      return undefined;
+    }
+
+    return {
+      arguments: parsedArguments,
+      markerIndex,
+      toolName,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function summarizeTextualEngineerToolCall(
+  rawContent: string,
+  options: { markerIndex: number; toolName: string },
+): { stopWhenSuccessful?: boolean | undefined; summary: string } {
+  const prefix = rawContent.slice(0, options.markerIndex).trim();
+  const normalizedLines = prefix
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const stopWhenSuccessful = normalizedLines.some(
+    (line) => line.toUpperCase() === "STOP_ON_SUCCESS",
+  );
+  const summary =
+    normalizedLines
+      .filter((line) => line.toUpperCase() !== "STOP_ON_SUCCESS")
+      .join(" ")
+      .trim() || `Call \`${options.toolName}\`.`;
+
+  return stopWhenSuccessful ? { stopWhenSuccessful, summary } : { summary };
 }

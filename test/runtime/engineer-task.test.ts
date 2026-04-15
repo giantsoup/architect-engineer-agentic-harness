@@ -573,6 +573,10 @@ describe("executeEngineerTask", () => {
     );
 
     expect(engineerTask).toContain("# Engineer Task Brief");
+    expect(engineerTask).toContain("## Execution Order");
+    expect(engineerTask).toContain(
+      "Follow the objective literally and prefer the smallest correct action.",
+    );
     expect(engineerTask).toContain("## Available Built-in Tools");
     expect(engineerTask).toContain("### `file.write`");
     expect(checks.checks).toEqual([
@@ -739,6 +743,18 @@ describe("executeEngineerTask", () => {
         }),
       ]),
     );
+    const assistantMessages = (
+      (modelServer.requestBodies[1]?.messages as Array<{
+        content?: string;
+        role?: string;
+      }>) ?? []
+    ).filter((message) => message.role === "assistant");
+
+    expect(
+      assistantMessages.some((message) =>
+        String(message.content ?? "").includes("Tool call:"),
+      ),
+    ).toBe(false);
   });
 
   it("smoke: completes a local llama.cpp-style native tool-call loop through the same runtime", async () => {
@@ -823,6 +839,25 @@ describe("executeEngineerTask", () => {
         }),
       ]),
     );
+    const assistantMessages = (
+      (modelServer.requestBodies[1]?.messages as Array<{
+        content?: string;
+        role?: string;
+      }>) ?? []
+    ).filter((message) => message.role === "assistant");
+
+    expect(assistantMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: "Used `file.write` on `src/example.ts`.",
+        }),
+      ]),
+    );
+    expect(
+      assistantMessages.some((message) =>
+        String(message.content ?? "").includes("Apply the requested edit."),
+      ),
+    ).toBe(false);
   });
 
   it("stops cleanly on timeout before requesting another model step", async () => {
@@ -1643,6 +1678,83 @@ args = ["repo-mcp.js"]`,
     expect(toolMessage?.content.length).toBeLessThan(6000);
   });
 
+  it("feeds compact command results back to the engineer model", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: "http://127.0.0.1:65535/v1",
+      projectRoot,
+    });
+    const { client, requests } = createCapturingModelClient([
+      {
+        request: {
+          accessMode: "mutate" as const,
+          command: "npm run test",
+          toolName: "command.execute" as const,
+        },
+        summary: "Run the required check",
+        type: "tool" as const,
+      },
+      {
+        blockers: ["stop after command"],
+        outcome: "blocked" as const,
+        summary: "Blocked after command",
+        type: "final" as const,
+      },
+    ]);
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 12,
+          environment: { CI: "1" },
+          executionTarget: "docker",
+          exitCode: 1,
+          role: "engineer",
+          stderr: "failing stderr\n",
+          stdout: "failing stdout\n",
+          timestamp: "2026-04-14T12:01:05.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      modelClient: client,
+      persistFinalArtifacts: false,
+      projectCommandRunner: fakeCommandRunner,
+      task: "Run the required check and stop.",
+    });
+
+    expect(execution.stopReason).toBe("blocked");
+
+    const toolMessage = requests[1]?.messages.find(
+      (message) =>
+        message.role === "tool" && message.name === "command.execute",
+    );
+
+    expect(toolMessage?.content).toContain('"command":"npm run test"');
+    expect(toolMessage?.content).toContain('"exitCode":1');
+    expect(toolMessage?.content).toContain(
+      '"summary":"Command failed with exit code 1."',
+    );
+    expect(toolMessage?.content).not.toContain("workingDirectory");
+    expect(toolMessage?.content).not.toContain("executionTarget");
+    expect(toolMessage?.content).not.toContain('"environment"');
+  });
+
   it("filters noisy root directory entries before feeding file lists back to the engineer model", async () => {
     const projectRoot = createTempProject();
     projectRoots.push(projectRoot);
@@ -1736,9 +1848,7 @@ args = ["repo-mcp.js"]`,
           message.role === "user" &&
           message.content.includes("### `file.search`") &&
           message.content.includes("### `file.read_many`") &&
-          message.content.includes(
-            "Do not use directory listing as a stand-in for text search.",
-          ),
+          message.content.includes("Not a text-search substitute."),
       ),
     ).toBe(true);
   });

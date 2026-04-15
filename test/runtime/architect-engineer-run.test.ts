@@ -23,6 +23,7 @@ import {
   type McpToolCallResult,
   type ModelChatRequest,
   type ModelChatResponse,
+  ModelStructuredOutputError,
 } from "../../src/index.js";
 
 function createTempProject(): string {
@@ -340,7 +341,10 @@ describe("executeArchitectEngineerRun", () => {
         accessMode?: "inspect" | "mutate";
         command: string;
       }): Promise<ContainerCommandResult> {
-        commandRunnerCalls.push({ command: request.command, role: "engineer" });
+        commandRunnerCalls.push({
+          command: request.command,
+          role: "engineer",
+        });
 
         return {
           accessMode: request.accessMode ?? "mutate",
@@ -427,6 +431,12 @@ describe("executeArchitectEngineerRun", () => {
     const architectToolCalls = events.filter(
       (event) => event.type === "tool-call" && event.role === "architect",
     );
+    const reviewRequest = architect.requests.find(
+      (request) => request.metadata?.phase === "architect-review",
+    );
+    const reviewUserMessage = reviewRequest?.messages.find(
+      (message) => message.role === "user",
+    );
 
     expect(
       readFileSync(path.join(runDir, "architect-plan.md"), "utf8"),
@@ -437,6 +447,9 @@ describe("executeArchitectEngineerRun", () => {
     expect(
       readFileSync(path.join(runDir, "engineer-task.md"), "utf8"),
     ).toContain("## Architect Plan");
+    expect(
+      readFileSync(path.join(runDir, "engineer-task.md"), "utf8"),
+    ).not.toContain("\n# Objective\n");
     expect(finalReport).toContain("## Final Architect Review");
     expect(finalReport).toContain("## Git");
     expect(finalReport).toContain("Starting branch: main");
@@ -460,13 +473,16 @@ describe("executeArchitectEngineerRun", () => {
     expect(
       readFileSync(execution.dossier.paths.files.diff.absolutePath, "utf8"),
     ).toContain("+export const value = 2;");
+    expect(reviewUserMessage?.content).toContain("## Recent Required Checks");
+    expect(reviewUserMessage?.content).not.toContain("## Checks Artifact");
+    expect(reviewUserMessage?.content).not.toContain("## Diff");
     expect(
       architectToolCalls.every(
         (event) =>
           event.toolName === "git.status" || event.toolName === "file.read",
       ),
     ).toBe(true);
-  });
+  }, 10000);
 
   it("lets the Architect use allowlisted MCP tools during planning and review", async () => {
     const projectRoot = createTempProject();
@@ -703,6 +719,468 @@ args = ["repo-mcp.js"]`,
         }),
       ]),
     );
+  }, 10000);
+
+  it("repairs an invalid Architect review response and continues with the corrected review", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+    commitFile(projectRoot, "src/example.ts", "export const value = 1;\n");
+
+    const loadedConfig = await createLoadedConfig(projectRoot);
+    const architectRequests: Array<ModelChatRequest<unknown>> = [];
+    let architectAttempt = 0;
+    const architect = {
+      async chat<TRequestStructured>(
+        request: ModelChatRequest<TRequestStructured>,
+      ): Promise<ModelChatResponse<TRequestStructured>> {
+        architectRequests.push(request as ModelChatRequest<unknown>);
+        architectAttempt += 1;
+
+        if (architectAttempt === 1) {
+          return {
+            id: "mock-plan",
+            rawContent: JSON.stringify({
+              summary: "Change the export and verify it.",
+              steps: [
+                "Update the source file",
+                "Run the required test command",
+              ],
+              type: "plan",
+            }),
+            role: "assistant",
+            structuredOutput: {
+              summary: "Change the export and verify it.",
+              steps: [
+                "Update the source file",
+                "Run the required test command",
+              ],
+              type: "plan",
+            } as TRequestStructured,
+          };
+        }
+
+        if (architectAttempt === 2) {
+          throw new ModelStructuredOutputError(
+            "Structured output did not match architect_review.",
+            {
+              issues: [
+                'review.decision: Expected one of "approve", "revise", or "fail".',
+              ],
+              schemaName: "architect_review",
+            },
+          );
+        }
+
+        return {
+          id: "mock-review",
+          rawContent: JSON.stringify({
+            decision: "approve",
+            summary: "The change is complete and verified.",
+            type: "review",
+          }),
+          role: "assistant",
+          structuredOutput: {
+            decision: "approve",
+            summary: "The change is complete and verified.",
+            type: "review",
+          } as TRequestStructured,
+        };
+      },
+    };
+    const engineer = createQueuedModelClient([
+      {
+        request: {
+          content: "export const value = 2;\n",
+          path: "src/example.ts",
+          toolName: "file.write",
+        },
+        summary: "Update the source file.",
+        type: "tool",
+      },
+      {
+        request: {
+          accessMode: "mutate",
+          command: "npm run test",
+          toolName: "command.execute",
+        },
+        stopWhenSuccessful: true,
+        summary: "Verification passed after running the required test command.",
+        type: "tool",
+      },
+    ]);
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 20,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: 0,
+          role: "engineer",
+          stderr: "",
+          stdout: "tests passed\n",
+          timestamp: "2026-04-14T12:00:30.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeArchitectEngineerRun({
+      architectModelClient: architect,
+      createdAt: new Date("2026-04-14T12:00:00.000Z"),
+      engineerModelClient: engineer.client,
+      loadedConfig,
+      now: () => new Date("2026-04-14T12:00:30.000Z"),
+      projectCommandRunner: fakeCommandRunner,
+      runId: "20260414T120000.000Z-abc138",
+      task: "Update `src/example.ts` so it exports `2` instead of `1`.",
+    });
+
+    expect(execution.result.status).toBe("success");
+    expect(architectRequests).toHaveLength(3);
+    expect(
+      architectRequests[2]?.messages.some(
+        (message) =>
+          message.role === "developer" &&
+          typeof message.content === "string" &&
+          message.content.includes("did not match the required JSON output"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps Architect tool-loop history canonical after a mixed raw tool response", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+    commitFile(projectRoot, "src/example.ts", "export const value = 1;\n");
+
+    const loadedConfig = await createLoadedConfig(projectRoot);
+    const architectRequests: Array<ModelChatRequest<unknown>> = [];
+    let architectAttempt = 0;
+    const architect = {
+      async chat<TRequestStructured>(
+        request: ModelChatRequest<TRequestStructured>,
+      ): Promise<ModelChatResponse<TRequestStructured>> {
+        architectRequests.push(request as ModelChatRequest<unknown>);
+        architectAttempt += 1;
+
+        if (architectAttempt === 1) {
+          return {
+            id: "mock-plan",
+            rawContent: JSON.stringify({
+              steps: [
+                "Update the source file",
+                "Run the required test command",
+              ],
+              summary: "Change the export and verify it.",
+              type: "plan",
+            }),
+            role: "assistant",
+            structuredOutput: {
+              steps: [
+                "Update the source file",
+                "Run the required test command",
+              ],
+              summary: "Change the export and verify it.",
+              type: "plan",
+            } as TRequestStructured,
+          };
+        }
+
+        if (architectAttempt === 2) {
+          return {
+            id: "mock-review-tool",
+            rawContent: [
+              JSON.stringify({
+                request: {
+                  paths: ["src/example.ts"],
+                  toolName: "file.read_many",
+                },
+                summary: "Inspect the changed file before deciding.",
+                type: "tool",
+              }),
+              JSON.stringify({
+                decision: "approve",
+                summary: "This extra decision text should not be replayed.",
+                type: "review",
+              }),
+            ].join("\n"),
+            role: "assistant",
+            structuredOutput: {
+              request: {
+                paths: ["src/example.ts"],
+                toolName: "file.read_many",
+              },
+              summary: "Inspect the changed file before deciding.",
+              type: "tool",
+            } as TRequestStructured,
+          };
+        }
+
+        return {
+          id: "mock-review-final",
+          rawContent: JSON.stringify({
+            decision: "approve",
+            summary: "The change is complete and verified.",
+            type: "review",
+          }),
+          role: "assistant",
+          structuredOutput: {
+            decision: "approve",
+            summary: "The change is complete and verified.",
+            type: "review",
+          } as TRequestStructured,
+        };
+      },
+    };
+    const engineer = createQueuedModelClient([
+      {
+        request: {
+          content: "export const value = 2;\n",
+          path: "src/example.ts",
+          toolName: "file.write",
+        },
+        summary: "Update the source file.",
+        type: "tool",
+      },
+      {
+        request: {
+          accessMode: "mutate",
+          command: "npm run test",
+          toolName: "command.execute",
+        },
+        stopWhenSuccessful: true,
+        summary: "Verification passed after running the required test command.",
+        type: "tool",
+      },
+    ]);
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 20,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: 0,
+          role: "engineer",
+          stderr: "",
+          stdout: "tests passed\n",
+          timestamp: "2026-04-14T12:00:30.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeArchitectEngineerRun({
+      architectModelClient: architect,
+      createdAt: new Date("2026-04-14T12:00:00.000Z"),
+      engineerModelClient: engineer.client,
+      loadedConfig,
+      now: () => new Date("2026-04-14T12:00:30.000Z"),
+      projectCommandRunner: fakeCommandRunner,
+      runId: "20260414T120000.000Z-abc140",
+      task: "Update `src/example.ts` so it exports `2` instead of `1`.",
+    });
+
+    expect(execution.result.status).toBe("success");
+    expect(architectRequests).toHaveLength(3);
+
+    const followupReviewRequest = architectRequests[2];
+    const assistantMessages = followupReviewRequest?.messages.filter(
+      (message) => message.role === "assistant",
+    );
+    const toolMessage = followupReviewRequest?.messages.find(
+      (message) => message.role === "tool" && message.name === "file.read_many",
+    );
+
+    expect(assistantMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: "Requested `file.read_many` on 1 file.",
+        }),
+      ]),
+    );
+    expect(
+      assistantMessages?.some((message) =>
+        String(message.content ?? "").includes(
+          "This extra decision text should not be replayed.",
+        ),
+      ),
+    ).toBe(false);
+    expect(toolMessage?.content).toContain('"path":"src/example.ts"');
+    expect(toolMessage?.content).not.toContain("Inspect the changed file");
+  });
+
+  it("carries latest passing-check state into a revise-cycle Engineer brief", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+    commitFile(projectRoot, "src/example.ts", "export const value = 1;\n");
+
+    const loadedConfig = await createLoadedConfig(projectRoot);
+    const architect = createQueuedModelClient([
+      {
+        steps: ["Update the source file", "Run the required test command"],
+        summary: "Change the export and verify it.",
+        type: "plan",
+      },
+      {
+        decision: "revise",
+        nextActions: [
+          "Confirm the passing test result and complete if stable.",
+        ],
+        summary: "One more confirmation pass before approval.",
+        type: "review",
+      },
+      {
+        decision: "approve",
+        summary: "The change is complete and verified.",
+        type: "review",
+      },
+    ]);
+    const engineerRequests: Array<ModelChatRequest<unknown>> = [];
+    let engineerCallCount = 0;
+    const engineer = {
+      async chat<TRequestStructured>(
+        request: ModelChatRequest<TRequestStructured>,
+      ): Promise<ModelChatResponse<TRequestStructured>> {
+        engineerRequests.push(request as ModelChatRequest<unknown>);
+        engineerCallCount += 1;
+
+        if (engineerCallCount === 1) {
+          return {
+            id: "engineer-1",
+            rawContent: JSON.stringify({
+              request: {
+                content: "export const value = 2;\n",
+                path: "src/example.ts",
+                toolName: "file.write",
+              },
+              summary: "Update the source file.",
+              type: "tool",
+            }),
+            role: "assistant",
+            structuredOutput: {
+              request: {
+                content: "export const value = 2;\n",
+                path: "src/example.ts",
+                toolName: "file.write",
+              },
+              summary: "Update the source file.",
+              type: "tool",
+            } as TRequestStructured,
+          };
+        }
+
+        if (engineerCallCount === 2) {
+          return {
+            id: "engineer-2",
+            rawContent: JSON.stringify({
+              request: {
+                accessMode: "mutate",
+                command: "npm run test",
+                toolName: "command.execute",
+              },
+              stopWhenSuccessful: true,
+              summary:
+                "Verification passed after running the required test command.",
+              type: "tool",
+            }),
+            role: "assistant",
+            structuredOutput: {
+              request: {
+                accessMode: "mutate",
+                command: "npm run test",
+                toolName: "command.execute",
+              },
+              stopWhenSuccessful: true,
+              summary:
+                "Verification passed after running the required test command.",
+              type: "tool",
+            } as TRequestStructured,
+          };
+        }
+
+        const userPrompt = request.messages
+          .filter((message) => message.role === "user")
+          .map((message) => message.content)
+          .join("\n");
+
+        expect(userPrompt).toContain("## Current Run State");
+        expect(userPrompt).toContain(
+          "- The latest required check already passed.",
+        );
+        expect(userPrompt).toContain(
+          "Prefer the smallest confirming step requested by the Architect",
+        );
+
+        return {
+          id: "engineer-3",
+          rawContent:
+            "COMPLETE: The latest required check already passed and no further work is needed.",
+          role: "assistant",
+          structuredOutput: undefined as TRequestStructured,
+        };
+      },
+    };
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 20,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: 0,
+          role: "engineer",
+          stderr: "",
+          stdout: "tests passed\n",
+          timestamp: "2026-04-14T12:00:30.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeArchitectEngineerRun({
+      architectModelClient: architect.client,
+      createdAt: new Date("2026-04-14T12:00:00.000Z"),
+      engineerModelClient: engineer,
+      loadedConfig,
+      now: () => new Date("2026-04-14T12:00:30.000Z"),
+      projectCommandRunner: fakeCommandRunner,
+      runId: "20260414T120000.000Z-abc139",
+      task: "Update `src/example.ts` so it exports `2` instead of `1`.",
+    });
+
+    expect(execution.result.status).toBe("success");
+    expect(engineerRequests).toHaveLength(3);
   });
 
   it("stops safely before branching when the repository starts dirty", async () => {
@@ -967,6 +1445,10 @@ args = ["repo-mcp.js"]`,
     expect(secondEngineerUserMessage?.content).toContain(
       "Latest Architect Review",
     );
+    expect(secondEngineerUserMessage?.content).toContain(
+      "## Architect Execution Order",
+    );
+    expect(secondEngineerUserMessage?.content).not.toContain("\n# Objective\n");
     expect(secondEngineerUserMessage?.content).toContain("Add `nextValue`");
     expect(secondEngineerUserMessage?.content).toContain(
       "The main fix landed, but the follow-up export is still missing.",

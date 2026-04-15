@@ -89,6 +89,37 @@ describe("engineer output validation", () => {
       toolCallId: "legacy-engineer-action",
       type: "tool",
     });
+
+    await expect(
+      resolveEngineerTurn({
+        rawContent: [
+          "Rewrite the file with the trailing newline.",
+          'Tool call: file.write {"path":"SANITY.md","content":"Sanity check completed.\\n"}',
+        ].join("\n"),
+      }),
+    ).resolves.toEqual({
+      request: {
+        content: "Sanity check completed.\n",
+        path: "SANITY.md",
+        toolName: "file.write",
+      },
+      summary: "Rewrite the file with the trailing newline.",
+      toolCallId: "textual-engineer-tool-call",
+      type: "tool",
+    });
+
+    await expect(
+      resolveEngineerTurn({
+        rawContent: [
+          "The required check already passed and the task is satisfied.",
+          "COMPLETE: SANITY.md contains the required content and npm test passes.",
+        ].join("\n"),
+      }),
+    ).resolves.toEqual({
+      outcome: "complete",
+      summary: "SANITY.md contains the required content and npm test passes.",
+      type: "final",
+    });
   });
 
   it("rejects malformed native tool turns", async () => {

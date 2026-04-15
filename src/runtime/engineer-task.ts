@@ -93,6 +93,7 @@ export interface ExecuteEngineerTaskOptions {
   runId?: string;
   runProcess?: RunProcess;
   task: string;
+  taskFormat?: "brief" | "objective";
   timeoutMs?: number;
 }
 
@@ -195,6 +196,7 @@ export async function executeEngineerTask(
       maxConsecutiveFailedChecks,
       maxIterations,
       task: options.task,
+      taskFormat: options.taskFormat ?? "objective",
       timeoutMs,
       toolCatalog,
     });
@@ -948,12 +950,19 @@ function renderFailureNotes(options: {
 
 function renderToolFeedbackForModel(feedback: ToolFeedback): string {
   if (feedback.ok === false) {
-    return JSON.stringify(feedback);
+    return JSON.stringify({
+      error: {
+        code: feedback.error.code,
+        message: feedback.error.message,
+        name: feedback.error.name,
+      },
+      ok: false,
+      toolName: feedback.toolName,
+    });
   }
 
   switch (feedback.result.toolName) {
     case "file.search":
-    case "file.read_many":
     case "file.list":
       return JSON.stringify({
         ok: true,
@@ -961,6 +970,25 @@ function renderToolFeedbackForModel(feedback: ToolFeedback): string {
           feedback.result.toolName === "file.list"
             ? summarizeFileListForModel(feedback.result)
             : feedback.result,
+        toolName: feedback.toolName,
+      });
+    case "file.read_many":
+      return JSON.stringify({
+        ok: true,
+        result: {
+          ...feedback.result,
+          files: feedback.result.files.map((file) => ({
+            ...file,
+            content: truncateWithNotice(
+              file.content,
+              Math.min(1600, MAX_MODEL_VISIBLE_FILE_READ_CHARS),
+            ),
+          })),
+          summary:
+            feedback.result.files.length === 0
+              ? "No files were returned."
+              : `Read ${feedback.result.files.length} file${feedback.result.files.length === 1 ? "" : "s"}.`,
+        },
         toolName: feedback.toolName,
       });
     case "file.read":
@@ -975,11 +1003,28 @@ function renderToolFeedbackForModel(feedback: ToolFeedback): string {
         },
         toolName: feedback.toolName,
       });
-    case "command.execute":
+    case "file.write":
       return JSON.stringify({
         ok: true,
         result: {
           ...feedback.result,
+          summary: `${
+            feedback.result.created ? "Created" : "Updated"
+          } \`${feedback.result.path}\`.`,
+        },
+        toolName: feedback.toolName,
+      });
+    case "command.execute":
+      return JSON.stringify({
+        ok: true,
+        result: {
+          command: feedback.result.command,
+          durationMs: feedback.result.durationMs,
+          exitCode: feedback.result.exitCode,
+          summary:
+            feedback.result.exitCode === 0
+              ? "Command completed successfully."
+              : `Command failed with exit code ${feedback.result.exitCode}.`,
           stderr: truncateWithNotice(
             feedback.result.stderr,
             MAX_MODEL_VISIBLE_COMMAND_OUTPUT_CHARS,
@@ -988,6 +1033,38 @@ function renderToolFeedbackForModel(feedback: ToolFeedback): string {
             feedback.result.stdout,
             MAX_MODEL_VISIBLE_COMMAND_OUTPUT_CHARS,
           ),
+          toolName: feedback.result.toolName,
+        },
+        toolName: feedback.toolName,
+      });
+    case "git.status":
+      return JSON.stringify({
+        ok: true,
+        result: {
+          branch: feedback.result.branch,
+          entries: feedback.result.entries.slice(0, 12),
+          isClean: feedback.result.isClean,
+          summary: feedback.result.isClean
+            ? "Working tree is clean."
+            : `Working tree has ${feedback.result.entries.length} changed path${
+                feedback.result.entries.length === 1 ? "" : "s"
+              }.`,
+          toolName: feedback.result.toolName,
+        },
+        toolName: feedback.toolName,
+      });
+    case "git.diff":
+      return JSON.stringify({
+        ok: true,
+        result: {
+          byteLength: feedback.result.byteLength,
+          diff: truncateWithNotice(feedback.result.diff, 4000),
+          isEmpty: feedback.result.isEmpty,
+          staged: feedback.result.staged,
+          summary: feedback.result.isEmpty
+            ? "Diff is empty."
+            : "Diff contains workspace changes.",
+          toolName: feedback.result.toolName,
         },
         toolName: feedback.toolName,
       });
@@ -1077,7 +1154,7 @@ function createPostToolGuidance(options: {
                 .join(" ")}`,
             ]),
         "Choose one already-inspected file for the smallest reasonable change, or run the required check if the work is done.",
-        'If neither is possible, return `final` with `outcome: "blocked"` and concrete blockers.',
+        "If neither is possible, reply with `BLOCKED: <summary>` and concrete blocker lines.",
       ].join(" "),
       usedRepoMemory: options.recentRepoFacts.length > 0,
     };
@@ -1104,7 +1181,7 @@ function createExplorationBudgetFeedback(options: {
       message: [
         `Exploration budget exhausted. The harness refused ${options.request.toolName}.`,
         recentFacts,
-        'Edit a file, run the required check, or return `final` with `outcome: "blocked"`.',
+        "Edit a file, run the required check, or reply with `BLOCKED: <summary>`.",
       ].join(" "),
       name: "BuiltInToolStateError",
     },
@@ -1231,6 +1308,8 @@ function createRetryableModelErrorGuidance(options: {
     issueDetails,
     "Return exactly one next step.",
     "If you need repository or workspace access, call exactly one native tool and do not wrap it in a JSON envelope.",
+    "If you are done, put `COMPLETE:` on the first completion line with no prose before it.",
+    "If you are blocked, put `BLOCKED:` on the first completion line with no prose before it.",
     "If you call a tool, keep any assistant text brief. Use `STOP_ON_SUCCESS` only when the tool call is the required check and the run should end immediately if it passes.",
     "If the task is done, reply with `COMPLETE: <summary>` after the required check has passed.",
     "If you cannot continue, reply with `BLOCKED: <summary>` and optional `- blocker` lines.",
@@ -1375,6 +1454,7 @@ function renderEngineerTaskBrief(options: {
   maxConsecutiveFailedChecks: number;
   maxIterations: number;
   task: string;
+  taskFormat: "brief" | "objective";
   timeoutMs: number;
   toolCatalog: ToolCatalog;
 }): string {
@@ -1382,24 +1462,45 @@ function renderEngineerTaskBrief(options: {
   const mcpTools = renderMcpToolsMarkdown(options.toolCatalog);
   const requiredCheckCommand = getRequiredCheckCommand(options.loadedConfig);
 
+  const taskSection =
+    options.taskFormat === "brief"
+      ? [
+          "# Engineer Task Brief",
+          "",
+          "Follow the Architect brief literally. The harness rules, stop conditions, and available tools appear after it.",
+          "",
+          options.task.trim(),
+        ]
+      : [
+          "# Engineer Task Brief",
+          "",
+          "## Objective",
+          "",
+          options.task.trim(),
+          "",
+          "## Execution Order",
+          "",
+          "1. Follow the objective literally and prefer the smallest correct action.",
+          "2. If the task already names exact files or commands, act on those first.",
+          "3. Avoid broad repository exploration unless the task is ambiguous.",
+          `4. Before finishing, run \`${requiredCheckCommand}\` if passing checks are required.`,
+          "5. As soon as the acceptance criteria are satisfied, return `COMPLETE:` instead of continuing to explore.",
+          "",
+          "## Project Adapter",
+          "",
+          `- Adapter: ${formatProjectAdapter(options.loadedConfig.resolvedProject.adapter)}`,
+          ...Object.entries(toResolvedCommandRecord(options.loadedConfig)).map(
+            ([commandName, command]) =>
+              `- ${commandName}: ${command === undefined ? "not resolved" : `\`${command}\``}`,
+          ),
+          "",
+          "## Required Check",
+          "",
+          `Run \`${requiredCheckCommand}\` through \`command.execute\` before final completion when passing checks are required.`,
+        ];
+
   return [
-    "# Engineer Task Brief",
-    "",
-    "## Objective",
-    "",
-    options.task.trim(),
-    "",
-    "## Project Adapter",
-    "",
-    `- Adapter: ${formatProjectAdapter(options.loadedConfig.resolvedProject.adapter)}`,
-    ...Object.entries(toResolvedCommandRecord(options.loadedConfig)).map(
-      ([commandName, command]) =>
-        `- ${commandName}: ${command === undefined ? "not resolved" : `\`${command}\``}`,
-    ),
-    "",
-    "## Required Check",
-    "",
-    `Run \`${requiredCheckCommand}\` through \`command.execute\` before final completion when passing checks are required.`,
+    ...taskSection,
     "",
     "## Stop Conditions",
     "",
@@ -1432,8 +1533,8 @@ function renderEngineerProtocol(options: {
     "",
     "Rules:",
     "- If you need a tool, call exactly one native tool.",
-    `- If the task is complete, reply with \`COMPLETE: <summary>\`.`,
-    `- If you are blocked, reply with \`BLOCKED: <summary>\` and optional \`- blocker\` lines.`,
+    `- If the task is complete, reply with \`COMPLETE: <summary>\` on the first completion line with no prose before it.`,
+    `- If you are blocked, reply with \`BLOCKED: <summary>\` on the first completion line and optional \`- blocker\` lines after it.`,
     `- Include \`STOP_ON_SUCCESS\` in the same assistant message only when running the required check \`${options.requiredCheckCommand}\` and the run should end immediately if it passes.`,
     `- The harness stops after ${formatIterationLimit(options.maxIterations)} Engineer iterations, ${options.timeoutMs}ms, or ${options.maxConsecutiveFailedChecks} consecutive failed required checks.`,
     `- After ${options.explorationBudget} consecutive exploration steps, you must either edit a file, run \`${options.requiredCheckCommand}\`, or return \`BLOCKED:\`. Additional exploration requests will be refused.`,
@@ -1441,6 +1542,7 @@ function renderEngineerProtocol(options: {
     "- Built-in tool names always route to built-in tools. MCP is only available through `mcp.call`.",
     "- Keep tool use explicit and auditable.",
     "- Ignore `.agent-harness`, `.git`, `node_modules`, and other generated or vendor paths unless the task explicitly depends on them.",
+    "- If the task already gives you an exact file path, exact content target, or exact command, prefer acting on that directly before exploring.",
     "- Explore search-first: prefer `file.search` to locate symbols, strings, and likely files before using `file.list`.",
     "- Once search yields a few candidates, prefer `file.read_many` for a small batch snapshot instead of repeated one-file reads.",
     "- When you need initial context, prefer `README.md`, `package.json`, `docs/`, `src/`, and `test/` over broad root relisting.",
@@ -1448,6 +1550,7 @@ function renderEngineerProtocol(options: {
     "- Do not reread the same file or relist the same directory unless the workspace changed. The harness will reuse stable repo facts and refuse duplicate rereads/listings.",
     "- If a path does not exist or a tool fails, adapt to that error instead of retrying the same invalid request.",
     "- Once you have enough context, stop exploring and either edit a file, run the required check, or return `COMPLETE:` / `BLOCKED:`.",
+    "- If the latest required check already passed and the task appears satisfied, prefer `COMPLETE:` or one minimal confirmation step instead of restarting repository exploration.",
   ].join("\n");
 }
 
@@ -1483,26 +1586,40 @@ function renderEngineerAssistantMessage(
     return `COMPLETE: ${action.summary}`;
   }
 
-  const lines = [action.summary];
+  const lines = [renderEngineerToolHistoryLine(action.request)];
 
   if (action.stopWhenSuccessful === true) {
     lines.push("STOP_ON_SUCCESS");
   }
 
-  lines.push(
-    `Tool call: ${action.request.toolName} ${JSON.stringify(stripToolName(action.request))}`,
-  );
-
   return lines.join("\n");
 }
 
-function stripToolName(request: ToolRequest): Record<string, unknown> {
-  const { toolName, ...argumentsRecord } = request as ToolRequest & {
-    [key: string]: unknown;
-  };
-
-  void toolName;
-  return argumentsRecord;
+function renderEngineerToolHistoryLine(request: ToolRequest): string {
+  switch (request.toolName) {
+    case "command.execute":
+      return `Used \`command.execute\` with \`${request.command}\`.`;
+    case "file.list":
+      return `Used \`file.list\` on \`${request.path ?? "."}\`.`;
+    case "file.read":
+      return `Used \`file.read\` on \`${request.path}\`.`;
+    case "file.read_many":
+      return `Used \`file.read_many\` on ${request.paths.length} file${
+        request.paths.length === 1 ? "" : "s"
+      }.`;
+    case "file.search":
+      return `Used \`file.search\` for \`${request.query}\` in \`${request.path ?? "."}\`.`;
+    case "file.write":
+      return `Used \`file.write\` on \`${request.path}\`.`;
+    case "git.diff":
+      return `Used \`git.diff\`${request.staged === true ? " (staged)" : ""}.`;
+    case "git.status":
+      return "Used `git.status`.";
+    case "mcp.call":
+      return `Used \`mcp.call\` for \`${request.server}.${request.name}\`.`;
+    default:
+      return "Used one tool step.";
+  }
 }
 
 function formatIterationLimit(maxIterations: number): string {
@@ -1512,36 +1629,28 @@ function formatIterationLimit(maxIterations: number): string {
 function renderBuiltInToolsMarkdown(): string {
   return [
     "### `file.search`",
-    "- Search file contents within a file or directory tree using a literal query. Prefer this over directory walking when you know what text you need.",
-    '- Request shape: `{ "toolName": "file.search", "query": "createToolRouter", "path": "src", "limit": 8 }`',
+    "- Search text first. Required: `query`. Optional: `path`, `limit`.",
     "",
     "### `file.read_many`",
-    "- Read a few likely-relevant small files in one step. Prefer this over repeated `file.read` calls once search narrows the candidates.",
-    '- Request shape: `{ "toolName": "file.read_many", "paths": ["src/example.ts", "test/example.test.ts"] }`',
+    "- Read a small batch after search narrows candidates. Required: `paths`.",
     "",
     "### `file.list`",
-    "- List directory entries when structure matters. Do not use directory listing as a stand-in for text search.",
-    '- Request shape: `{ "toolName": "file.list", "path": "." }`',
+    "- List structure only when needed. Optional: `path`. Not a text-search substitute.",
     "",
     "### `file.read`",
-    "- Read one specific file from the workspace after search or listing identifies it.",
-    '- Request shape: `{ "toolName": "file.read", "path": "src/example.ts" }`',
+    "- Read one file after search or listing identifies it. Required: `path`.",
     "",
     "### `file.write`",
-    "- Write a file inside permitted workspace paths.",
-    '- Request shape: `{ "toolName": "file.write", "path": "src/example.ts", "content": "..." }`',
+    "- Write one file. Required: `path`, `content`.",
     "",
     "### `command.execute`",
-    "- Run one shell command through the configured execution target.",
-    '- Request shape: `{ "toolName": "command.execute", "command": "npm test", "accessMode": "mutate" }`',
+    "- Run one command. Required: `command`. Optional: `accessMode`, `workingDirectory`, `timeoutMs`, `environment`.",
     "",
     "### `git.status`",
-    "- Inspect working tree state.",
-    '- Request shape: `{ "toolName": "git.status" }`',
+    "- Inspect working tree state. No arguments.",
     "",
     "### `git.diff`",
-    "- Capture the current patch.",
-    '- Request shape: `{ "toolName": "git.diff", "staged": false }`',
+    "- Read the current patch. Optional: `staged`.",
   ].join("\n");
 }
 
@@ -1617,15 +1726,8 @@ function renderMcpToolsMarkdown(toolCatalog: ToolCatalog): string {
     lines.push("- Allowlisted MCP tools available now: none");
   } else {
     for (const tool of toolCatalog.mcpTools) {
-      lines.push("", `### \`${tool.server}.${tool.name}\``);
-      lines.push(`- Server: \`${tool.server}\``);
-
-      if (tool.description !== undefined) {
-        lines.push(`- Description: ${tool.description}`);
-      }
-
       lines.push(
-        `- Request shape: \`{ "toolName": "mcp.call", "server": "${tool.server}", "name": "${tool.name}", "arguments": {} }\``,
+        `- \`${tool.server}.${tool.name}\`${tool.description === undefined ? "" : `: ${tool.description}`}. Use \`mcp.call\` with \`server\`, \`name\`, and optional \`arguments\`.`,
       );
     }
   }

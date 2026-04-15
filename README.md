@@ -208,6 +208,10 @@ blueprint status
 blueprint inspect
 ```
 
+Live sanity prompts for post-change validation:
+
+- see [docs/live-sanity-suite.md](docs/live-sanity-suite.md)
+
 ## Commands
 
 `init`
