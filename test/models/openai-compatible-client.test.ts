@@ -1159,6 +1159,69 @@ describe("OpenAiCompatibleChatClient", () => {
     ]);
   });
 
+  it("omits blank optional workingDirectory from native Engineer tool calls", async () => {
+    const mockServer = await startMockServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              finish_reason: "tool_calls",
+              message: {
+                content: "Run the required check.",
+                role: "assistant",
+                tool_calls: [
+                  {
+                    function: {
+                      arguments: JSON.stringify({
+                        command: "npm run test",
+                        workingDirectory: "   ",
+                      }),
+                      name: "command.execute",
+                    },
+                    id: "call_blank_working_directory",
+                    type: "function",
+                  },
+                ],
+              },
+            },
+          ],
+          id: "chatcmpl-engineer-tools-blank-working-directory",
+        }),
+      );
+    });
+    servers.push(mockServer);
+
+    const { loadedConfig, projectRoot } = await createLoadedConfig(
+      renderConfig({
+        architectBaseUrl: `${mockServer.url}/remote/v1`,
+        engineerBaseUrl: `${mockServer.url}/local/v1`,
+        engineerProvider: "openai-compatible",
+      }),
+    );
+    projectRoots.push(projectRoot);
+
+    const client = new OpenAiCompatibleChatClient({
+      config: resolveModelConfigForRole(loadedConfig, "engineer"),
+      retryDelayMs: 0,
+    });
+
+    const response = await client.chat({
+      messages: [{ content: "Return the next engineer step.", role: "user" }],
+      tools: createEngineerToolDefinitions(),
+    });
+
+    expect(response.toolCalls).toEqual([
+      {
+        arguments: {
+          command: "npm run test",
+        },
+        id: "call_blank_working_directory",
+        name: "command.execute",
+      },
+    ]);
+  });
+
   it("uses Qwen-native tool message formatting for engineer requests", async () => {
     const seenBodies: Array<Record<string, unknown>> = [];
     const mockServer = await startMockServer((request, response) => {
@@ -1343,6 +1406,65 @@ describe("OpenAiCompatibleChatClient", () => {
         },
         id: "qwen-tool-call-1",
         name: "file.write",
+      },
+    ]);
+  });
+
+  it("omits blank optional workingDirectory from Qwen3-Coder inline Engineer tool calls", async () => {
+    const mockServer = await startMockServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                content: renderQwen3CoderToolCall({
+                  arguments: {
+                    command: "npm run test",
+                    workingDirectory: "",
+                  },
+                  name: "command.execute",
+                  summary: "Run the required check.",
+                }),
+                role: "assistant",
+              },
+            },
+          ],
+          id: "chatcmpl-qwen3-coder-blank-working-directory",
+        }),
+      );
+    });
+    servers.push(mockServer);
+
+    const { loadedConfig, projectRoot } = await createLoadedConfig(
+      renderConfig({
+        architectBaseUrl: `${mockServer.url}/remote/v1`,
+        engineerBaseUrl: `${mockServer.url}/local/v1`,
+        engineerModel: "Qwen/Qwen3-Coder-Next",
+        engineerProvider: "openai-compatible",
+      }),
+    );
+    projectRoots.push(projectRoot);
+
+    const client = new OpenAiCompatibleChatClient({
+      config: resolveModelConfigForRole(loadedConfig, "engineer"),
+      retryDelayMs: 0,
+    });
+
+    const response = await client.chat({
+      messages: [{ content: "Return the next engineer step.", role: "user" }],
+      tools: createEngineerToolDefinitions(),
+    });
+
+    expect(response.rawContent).toBe("Run the required check.");
+    expect(response.toolCalls).toEqual([
+      {
+        arguments: {
+          command: "npm run test",
+        },
+        id: "qwen-tool-call-1",
+        name: "command.execute",
       },
     ]);
   });
@@ -1630,6 +1752,61 @@ describe("OpenAiCompatibleChatClient", () => {
       },
       stopWhenSuccessful: true,
       summary: "Run npm run test and confirm it passes.",
+      type: "tool",
+    });
+  });
+
+  it("omits blank optional workingDirectory during Engineer structured-output salvage", async () => {
+    const mockServer = await startMockServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  request: {
+                    command: "npm run test",
+                    toolName: "command.execute",
+                    workingDirectory: "   ",
+                  },
+                  summary: "Run npm run test.",
+                  type: "tool",
+                }),
+                role: "assistant",
+              },
+            },
+          ],
+          id: "chatcmpl-engineer-structured-output-blank-working-directory",
+        }),
+      );
+    });
+    servers.push(mockServer);
+
+    const { loadedConfig, projectRoot } = await createLoadedConfig(
+      renderConfig({
+        architectBaseUrl: `${mockServer.url}/remote/v1`,
+        engineerBaseUrl: `${mockServer.url}/local/v1`,
+      }),
+    );
+    projectRoots.push(projectRoot);
+
+    const client = new OpenAiCompatibleChatClient({
+      config: resolveModelConfigForRole(loadedConfig, "engineer"),
+      retryDelayMs: 0,
+    });
+
+    const response = await client.chat({
+      messages: [{ content: "Return an engineer action.", role: "user" }],
+      structuredOutput: await createEngineerStructuredOutputFormat(),
+    });
+
+    expect(response.structuredOutput).toEqual({
+      request: {
+        command: "npm run test",
+        toolName: "command.execute",
+      },
+      summary: "Run npm run test.",
       type: "tool",
     });
   });

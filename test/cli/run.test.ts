@@ -433,9 +433,9 @@ describe("CLI run", () => {
       );
 
       expect(externalRunIds).toHaveLength(1);
-      expect(existsSync(path.join(launcherRoot, ".agent-harness", "runs"))).toBe(
-        false,
-      );
+      expect(
+        existsSync(path.join(launcherRoot, ".agent-harness", "runs")),
+      ).toBe(false);
 
       const eventsPath = path.join(
         projectRoot,

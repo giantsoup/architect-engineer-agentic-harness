@@ -50,6 +50,60 @@ describe("engineer output validation", () => {
     });
   });
 
+  it("normalizes blank optional workingDirectory across native and textual Engineer tool turns", async () => {
+    await expect(
+      validateEngineerToolRequest({
+        command: " npm run test ",
+        toolName: " command.execute ",
+        workingDirectory: "   ",
+      }),
+    ).resolves.toEqual({
+      command: "npm run test",
+      toolName: "command.execute",
+    });
+
+    await expect(
+      resolveEngineerTurn({
+        rawContent: "Run the required check.",
+        toolCalls: [
+          {
+            arguments: {
+              command: "npm run test",
+              workingDirectory: "   ",
+            },
+            id: "call_blank_working_directory",
+            name: "command.execute",
+          },
+        ],
+      }),
+    ).resolves.toEqual({
+      request: {
+        command: "npm run test",
+        toolName: "command.execute",
+      },
+      summary: "Run the required check.",
+      toolCallId: "call_blank_working_directory",
+      type: "tool",
+    });
+
+    await expect(
+      resolveEngineerTurn({
+        rawContent: [
+          "Run the required check.",
+          'Tool call: command.execute {"command":"npm run test","workingDirectory":"   "}',
+        ].join("\n"),
+      }),
+    ).resolves.toEqual({
+      request: {
+        command: "npm run test",
+        toolName: "command.execute",
+      },
+      summary: "Run the required check.",
+      toolCallId: "textual-engineer-tool-call",
+      type: "tool",
+    });
+  });
+
   it("resolves concise final Engineer responses and low-cost legacy fallback", async () => {
     await expect(
       resolveEngineerTurn({
@@ -149,6 +203,25 @@ describe("engineer output validation", () => {
       expect((error as Error).message).toContain(
         "Call exactly one tool through the native tool interface",
       );
+
+      return true;
+    });
+
+    await expect(
+      validateEngineerToolRequest(
+        {
+          command: "   ",
+          toolName: "command.execute",
+          workingDirectory: "   ",
+        },
+        "tool_call.command.execute",
+      ),
+    ).rejects.toSatisfy((error: unknown) => {
+      expect(error).toBeInstanceOf(EngineerTurnValidationError);
+      expect((error as Error).message).toContain(
+        "tool_call.command.execute.command: Expected at least 1 character.",
+      );
+      expect((error as Error).message).not.toContain("workingDirectory");
 
       return true;
     });

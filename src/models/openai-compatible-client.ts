@@ -13,6 +13,7 @@ import {
   type ModelFamilyAdapter,
   type ModelToolCallMode,
 } from "./model-family-adapter.js";
+import { normalizeEngineerToolRequestCandidate } from "./engineer-output.js";
 
 export type ModelClientErrorClassification =
   | "config"
@@ -347,7 +348,10 @@ export class OpenAiCompatibleChatClient {
           const extractedResponse =
             this.modelFamilyAdapter.extractToolCalls(choice);
           assistantContent = extractedResponse.assistantContent;
-          toolCalls = extractedResponse.toolCalls;
+          toolCalls =
+            this.config.role === "engineer"
+              ? normalizeEngineerToolCalls(extractedResponse.toolCalls)
+              : extractedResponse.toolCalls;
         } catch (error) {
           throw new ModelResponseError(
             `OpenAI-compatible response from ${this.describeTarget()} could not be parsed.`,
@@ -1136,93 +1140,9 @@ function normalizeArchitectReviewCandidate(
 }
 
 function normalizeToolRequestCandidate(value: unknown): unknown {
-  if (!isPlainObject(value)) {
-    return value;
-  }
-
-  const toolName = normalizeTrimmedString(value.toolName);
-
-  if (toolName === undefined) {
-    return value;
-  }
-
-  switch (toolName) {
-    case "file.search":
-      return {
-        ...(normalizeIntegerLike(value.limit) === undefined
-          ? {}
-          : { limit: normalizeIntegerLike(value.limit) }),
-        ...(normalizeTrimmedString(value.path) === undefined
-          ? {}
-          : { path: normalizeTrimmedString(value.path) }),
-        query: normalizeTrimmedString(value.query),
-        toolName,
-      };
-    case "file.read_many":
-      return {
-        paths: normalizeStringList(value.paths),
-        toolName,
-      };
-    case "file.read":
-      return {
-        path: normalizeTrimmedString(value.path),
-        toolName,
-      };
-    case "file.write":
-      return {
-        content: value.content,
-        path: normalizeTrimmedString(value.path),
-        toolName,
-      };
-    case "file.list":
-      return {
-        ...(normalizeTrimmedString(value.path) === undefined
-          ? {}
-          : { path: normalizeTrimmedString(value.path) }),
-        toolName,
-      };
-    case "command.execute":
-      return {
-        ...(normalizeCommandAccessMode(value.accessMode) === undefined
-          ? {}
-          : { accessMode: normalizeCommandAccessMode(value.accessMode) }),
-        command: normalizeTrimmedString(value.command),
-        ...(value.environment === undefined
-          ? {}
-          : { environment: value.environment }),
-        ...(normalizeIntegerLike(value.timeoutMs) === undefined
-          ? {}
-          : { timeoutMs: normalizeIntegerLike(value.timeoutMs) }),
-        toolName,
-        ...(normalizeTrimmedString(value.workingDirectory) === undefined
-          ? {}
-          : {
-              workingDirectory: normalizeTrimmedString(value.workingDirectory),
-            }),
-      };
-    case "git.status":
-      return {
-        toolName,
-      };
-    case "git.diff":
-      return {
-        ...(normalizeBooleanLike(value.staged) === undefined
-          ? {}
-          : { staged: normalizeBooleanLike(value.staged) }),
-        toolName,
-      };
-    case "mcp.call":
-      return {
-        ...(value.arguments === undefined
-          ? {}
-          : { arguments: value.arguments }),
-        name: normalizeTrimmedString(value.name),
-        server: normalizeTrimmedString(value.server),
-        toolName,
-      };
-    default:
-      return value;
-  }
+  return normalizeEngineerToolRequestCandidate(value, {
+    dropUnexpectedProperties: true,
+  });
 }
 
 function normalizeTrimmedString(value: unknown): string | undefined {
@@ -1267,18 +1187,6 @@ function normalizeStringList(value: unknown): string[] | undefined {
   ) as string[];
 }
 
-function normalizeIntegerLike(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isInteger(value)) {
-    return value;
-  }
-
-  if (typeof value !== "string" || !/^-?\d+$/u.test(value.trim())) {
-    return undefined;
-  }
-
-  return Number.parseInt(value.trim(), 10);
-}
-
 function normalizeBooleanLike(value: unknown): boolean | undefined {
   if (typeof value === "boolean") {
     return value;
@@ -1298,20 +1206,37 @@ function normalizeBooleanLike(value: unknown): boolean | undefined {
   }
 }
 
-function normalizeCommandAccessMode(
-  value: unknown,
-): "inspect" | "mutate" | undefined {
-  const normalized = normalizeKeywordLiteral(value);
-
-  if (normalized === "inspect" || normalized === "mutate") {
-    return normalized;
-  }
-
-  return undefined;
-}
-
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeEngineerToolCalls(
+  toolCalls: readonly ModelToolCall[],
+): readonly ModelToolCall[] {
+  return toolCalls.map((toolCall) => {
+    const normalizedRequest = normalizeEngineerToolRequestCandidate({
+      ...toolCall.arguments,
+      toolName: toolCall.name,
+    });
+
+    if (
+      !isPlainObject(normalizedRequest) ||
+      typeof normalizedRequest.toolName !== "string"
+    ) {
+      return toolCall;
+    }
+
+    const { toolName, ...argumentsValue } = normalizedRequest;
+
+    return {
+      arguments: JSON.parse(JSON.stringify(argumentsValue)) as Record<
+        string,
+        JsonValue
+      >,
+      id: toolCall.id,
+      name: toolName,
+    };
+  });
 }
 
 async function delay(durationMs: number): Promise<void> {

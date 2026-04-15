@@ -29,6 +29,10 @@ export interface EngineerControlOutputOptions {
   schemaVersion?: string;
 }
 
+interface NormalizeEngineerToolRequestOptions {
+  dropUnexpectedProperties?: boolean;
+}
+
 export interface EngineerToolCallAction extends EngineerToolAction {
   toolCallId: string;
 }
@@ -295,28 +299,29 @@ export async function validateEngineerControlOutput(
   await loadEngineerControlSchema({ schemaVersion });
 
   const issues: string[] = [];
+  const normalizedValue = normalizeEngineerActionCandidate(value);
 
-  if (!isPlainObject(value)) {
+  if (!isPlainObject(normalizedValue)) {
     throw new EngineerControlOutputValidationError(schemaPath, [
       "engineer_action: Expected an object.",
     ]);
   }
 
-  const type = value.type;
+  const type = normalizedValue.type;
 
   if (type !== "final" && type !== "tool") {
     issues.push('engineer_action.type: Expected `"tool"` or `"final"`.');
   } else if (type === "tool") {
-    validateToolAction(value, issues);
+    validateToolAction(normalizedValue, issues);
   } else {
-    validateFinalAction(value, issues);
+    validateFinalAction(normalizedValue, issues);
   }
 
   if (issues.length > 0) {
     throw new EngineerControlOutputValidationError(schemaPath, issues);
   }
 
-  return value as unknown as EngineerAction;
+  return normalizedValue as unknown as EngineerAction;
 }
 
 export function createEngineerToolDefinitions(): readonly ModelToolDefinition[] {
@@ -367,15 +372,191 @@ export async function validateEngineerToolRequest(
   value: unknown,
   path: string = "tool_call.arguments",
 ): Promise<ToolRequest> {
+  const normalizedValue = normalizeEngineerToolRequestCandidate(value);
   const issues: string[] = [];
 
-  validateToolRequest(value, path, issues);
+  validateToolRequest(normalizedValue, path, issues);
 
   if (issues.length > 0) {
     throw new EngineerTurnValidationError(issues);
   }
 
-  return value as ToolRequest;
+  return normalizedValue as ToolRequest;
+}
+
+export function normalizeEngineerToolRequestCandidate(
+  value: unknown,
+  options: NormalizeEngineerToolRequestOptions = {},
+): unknown {
+  if (!isPlainObject(value)) {
+    return value;
+  }
+
+  const toolName = normalizeRequiredTrimmedString(value.toolName);
+
+  if (toolName === undefined) {
+    return value;
+  }
+
+  switch (toolName) {
+    case "file.search": {
+      const normalized = createNormalizedToolRequestRecord(
+        value,
+        toolName,
+        options,
+      );
+      const normalizedLimit = normalizeIntegerLike(value.limit);
+      const normalizedPath = normalizeOptionalTrimmedString(value.path);
+
+      if (normalizedLimit !== undefined) {
+        normalized.limit = normalizedLimit;
+      }
+
+      if (typeof value.path === "string") {
+        if (normalizedPath === undefined) {
+          delete normalized.path;
+        } else {
+          normalized.path = normalizedPath;
+        }
+      }
+
+      if (typeof value.query === "string") {
+        normalized.query = normalizeRequiredTrimmedString(value.query);
+      }
+
+      return normalized;
+    }
+    case "file.read_many": {
+      const normalized = createNormalizedToolRequestRecord(
+        value,
+        toolName,
+        options,
+      );
+      const normalizedPaths = normalizeStringList(value.paths);
+
+      if (normalizedPaths !== undefined) {
+        normalized.paths = normalizedPaths;
+      }
+
+      return normalized;
+    }
+    case "file.read": {
+      const normalized = createNormalizedToolRequestRecord(
+        value,
+        toolName,
+        options,
+      );
+
+      if (typeof value.path === "string") {
+        normalized.path = normalizeRequiredTrimmedString(value.path);
+      }
+
+      return normalized;
+    }
+    case "file.write": {
+      const normalized = createNormalizedToolRequestRecord(
+        value,
+        toolName,
+        options,
+      );
+
+      if (typeof value.path === "string") {
+        normalized.path = normalizeRequiredTrimmedString(value.path);
+      }
+
+      return normalized;
+    }
+    case "file.list": {
+      const normalized = createNormalizedToolRequestRecord(
+        value,
+        toolName,
+        options,
+      );
+      const normalizedPath = normalizeOptionalTrimmedString(value.path);
+
+      if (typeof value.path === "string") {
+        if (normalizedPath === undefined) {
+          delete normalized.path;
+        } else {
+          normalized.path = normalizedPath;
+        }
+      }
+
+      return normalized;
+    }
+    case "command.execute": {
+      const normalized = createNormalizedToolRequestRecord(
+        value,
+        toolName,
+        options,
+      );
+      const normalizedAccessMode = normalizeCommandAccessMode(value.accessMode);
+      const normalizedTimeoutMs = normalizeIntegerLike(value.timeoutMs);
+      const normalizedWorkingDirectory = normalizeOptionalTrimmedString(
+        value.workingDirectory,
+      );
+
+      if (normalizedAccessMode !== undefined) {
+        normalized.accessMode = normalizedAccessMode;
+      }
+
+      if (typeof value.command === "string") {
+        normalized.command = normalizeRequiredTrimmedString(value.command);
+      }
+
+      if (normalizedTimeoutMs !== undefined) {
+        normalized.timeoutMs = normalizedTimeoutMs;
+      }
+
+      if (typeof value.workingDirectory === "string") {
+        if (normalizedWorkingDirectory === undefined) {
+          delete normalized.workingDirectory;
+        } else {
+          normalized.workingDirectory = normalizedWorkingDirectory;
+        }
+      }
+
+      return normalized;
+    }
+    case "git.status":
+      return createNormalizedToolRequestRecord(value, toolName, options);
+    case "git.diff": {
+      const normalized = createNormalizedToolRequestRecord(
+        value,
+        toolName,
+        options,
+      );
+      const normalizedStaged = normalizeBooleanLike(value.staged);
+
+      if (normalizedStaged !== undefined) {
+        normalized.staged = normalizedStaged;
+      }
+
+      return normalized;
+    }
+    case "mcp.call": {
+      const normalized = createNormalizedToolRequestRecord(
+        value,
+        toolName,
+        options,
+      );
+
+      if (typeof value.name === "string") {
+        normalized.name = normalizeRequiredTrimmedString(value.name);
+      }
+
+      if (typeof value.server === "string") {
+        normalized.server = normalizeRequiredTrimmedString(value.server);
+      }
+
+      return normalized;
+    }
+    default:
+      return {
+        ...value,
+        toolName,
+      };
+  }
 }
 
 async function loadSchemaFromDisk(
@@ -481,6 +662,59 @@ function validateFinalAction(
   if (value.blockers !== undefined) {
     validateStringArray(value.blockers, "engineer_action.blockers", issues);
   }
+}
+
+function normalizeEngineerActionCandidate(value: unknown): unknown {
+  if (!isPlainObject(value)) {
+    return value;
+  }
+
+  const normalizedType = normalizeLowercaseString(value.type);
+
+  if (normalizedType === "tool") {
+    const normalized: Record<string, unknown> = {
+      ...value,
+      request: normalizeEngineerToolRequestCandidate(value.request),
+      summary:
+        typeof value.summary === "string"
+          ? normalizeRequiredTrimmedString(value.summary)
+          : value.summary,
+      type: normalizedType,
+    };
+    const normalizedStopWhenSuccessful = normalizeBooleanLike(
+      value.stopWhenSuccessful,
+    );
+
+    if (normalizedStopWhenSuccessful !== undefined) {
+      normalized.stopWhenSuccessful = normalizedStopWhenSuccessful;
+    }
+
+    return normalized;
+  }
+
+  if (normalizedType === "final") {
+    const normalized: Record<string, unknown> = {
+      ...value,
+      outcome:
+        typeof value.outcome === "string"
+          ? normalizeLowercaseString(value.outcome)
+          : value.outcome,
+      summary:
+        typeof value.summary === "string"
+          ? normalizeRequiredTrimmedString(value.summary)
+          : value.summary,
+      type: normalizedType,
+    };
+    const normalizedBlockers = normalizeStringList(value.blockers);
+
+    if (normalizedBlockers !== undefined) {
+      normalized.blockers = normalizedBlockers;
+    }
+
+    return normalized;
+  }
+
+  return value;
 }
 
 function validateToolRequest(
@@ -1031,6 +1265,107 @@ function validateStringArray(
   for (const [index, item] of value.entries()) {
     validateNonEmptyString(item, `${path}[${index}]`, issues);
   }
+}
+
+function normalizeRequiredTrimmedString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmedValue = value.trim();
+
+  return trimmedValue.length === 0 ? "" : trimmedValue;
+}
+
+function normalizeLowercaseString(value: unknown): string | undefined {
+  const normalized = normalizeRequiredTrimmedString(value);
+
+  return normalized === undefined ? undefined : normalized.toLowerCase();
+}
+
+function normalizeOptionalTrimmedString(value: unknown): string | undefined {
+  const normalized = normalizeRequiredTrimmedString(value);
+
+  return normalized === "" ? undefined : normalized;
+}
+
+function normalizeStringList(value: unknown): string[] | undefined {
+  if (typeof value === "string") {
+    const normalized = normalizeRequiredTrimmedString(value);
+
+    return normalized === undefined ? undefined : [normalized];
+  }
+
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value.map((entry) =>
+    typeof entry === "string" ? entry.trim() : entry,
+  ) as string[];
+}
+
+function normalizeIntegerLike(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isInteger(value)) {
+    return value;
+  }
+
+  if (typeof value !== "string" || !/^-?\d+$/u.test(value.trim())) {
+    return undefined;
+  }
+
+  return Number.parseInt(value.trim(), 10);
+}
+
+function normalizeBooleanLike(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  switch (value.trim().toLowerCase()) {
+    case "true":
+      return true;
+    case "false":
+      return false;
+    default:
+      return undefined;
+  }
+}
+
+function normalizeKeywordLiteral(value: unknown): string | undefined {
+  const normalized = normalizeRequiredTrimmedString(value);
+
+  if (normalized === undefined) {
+    return undefined;
+  }
+
+  return normalized.replace(/^[`"'“”‘’\s]+|[`"'“”‘’\s.,;:!?]+$/gu, "");
+}
+
+function normalizeCommandAccessMode(
+  value: unknown,
+): "inspect" | "mutate" | undefined {
+  const normalized = normalizeKeywordLiteral(value);
+
+  if (normalized === "inspect" || normalized === "mutate") {
+    return normalized;
+  }
+
+  return undefined;
+}
+
+function createNormalizedToolRequestRecord(
+  value: Record<string, unknown>,
+  toolName: string,
+  options: NormalizeEngineerToolRequestOptions,
+): Record<string, unknown> {
+  return options.dropUnexpectedProperties === true
+    ? { toolName }
+    : { ...value, toolName };
 }
 
 function pushUnexpectedProperties(

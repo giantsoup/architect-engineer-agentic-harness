@@ -185,12 +185,14 @@ describe.sequential("packaged CLI smoke", () => {
         readFileSync(path.join(launcherRoot, "src", "example.ts"), "utf8"),
       ).toContain("ORIGINAL");
 
-      const runIds = readdirSync(path.join(projectRoot, ".agent-harness", "runs"));
+      const runIds = readdirSync(
+        path.join(projectRoot, ".agent-harness", "runs"),
+      );
 
       expect(runIds).toHaveLength(1);
-      expect(existsSync(path.join(launcherRoot, ".agent-harness", "runs"))).toBe(
-        false,
-      );
+      expect(
+        existsSync(path.join(launcherRoot, ".agent-harness", "runs")),
+      ).toBe(false);
 
       const eventsPath = path.join(
         projectRoot,
