@@ -24,7 +24,6 @@ import {
   type McpToolCallResult,
   type ModelChatRequest,
   type ModelChatResponse,
-  ModelStructuredOutputError,
   McpServerUnavailableError,
 } from "../../src/index.js";
 
@@ -32,12 +31,42 @@ function createTempProject(): string {
   return mkdtempSync(path.join(os.tmpdir(), "aeah-engineer-task-"));
 }
 
+type MockModelResponse =
+  | Record<string, unknown>
+  | {
+      content?: string;
+      tool_calls?: Array<{
+        function: {
+          arguments: string;
+          name: string;
+        };
+        id: string;
+        type: "function";
+      }>;
+    };
+
 async function startMockServer(
-  responses: readonly Record<string, unknown>[],
+  responses: readonly MockModelResponse[],
 ): Promise<{ close: () => Promise<void>; url: string }> {
+  return startMockServerWithBodies(responses).then(({ close, url }) => ({
+    close,
+    url,
+  }));
+}
+
+async function startMockServerWithBodies(
+  responses: readonly MockModelResponse[],
+): Promise<{
+  close: () => Promise<void>;
+  requestBodies: Array<Record<string, unknown>>;
+  url: string;
+}> {
   const queuedResponses = [...responses];
+  const requestBodies: Array<Record<string, unknown>> = [];
   const server = createServer(async (request, response) => {
-    await readRequestBody(request);
+    requestBodies.push(
+      JSON.parse(await readRequestBody(request)) as Record<string, unknown>,
+    );
     const nextResponse = queuedResponses.shift();
 
     if (nextResponse === undefined) {
@@ -53,15 +82,13 @@ async function startMockServer(
     }
 
     response.writeHead(200, { "content-type": "application/json" });
+    const assistantMessage = normalizeMockAssistantMessage(nextResponse);
     response.end(
       JSON.stringify({
         choices: [
           {
             finish_reason: "stop",
-            message: {
-              content: JSON.stringify(nextResponse),
-              role: "assistant",
-            },
+            message: assistantMessage,
           },
         ],
         id: `chatcmpl-${Math.random().toString(16).slice(2)}`,
@@ -95,13 +122,50 @@ async function startMockServer(
           resolve();
         });
       }),
+    requestBodies,
     url: `http://127.0.0.1:${address.port}`,
+  };
+}
+
+function normalizeMockAssistantMessage(response: MockModelResponse): {
+  content?: string;
+  role: "assistant";
+  tool_calls?: Array<{
+    function: {
+      arguments: string;
+      name: string;
+    };
+    id: string;
+    type: "function";
+  }>;
+} {
+  if (
+    "tool_calls" in response ||
+    ("content" in response && !("request" in response) && !("type" in response))
+  ) {
+    const content =
+      typeof response.content === "string" ? response.content : undefined;
+    const toolCalls = Array.isArray(response.tool_calls)
+      ? response.tool_calls
+      : undefined;
+
+    return {
+      ...(content === undefined ? {} : { content }),
+      role: "assistant",
+      ...(toolCalls === undefined ? {} : { tool_calls: toolCalls }),
+    };
+  }
+
+  return {
+    content: JSON.stringify(response),
+    role: "assistant",
   };
 }
 
 async function createLoadedConfig(options: {
   engineerBaseUrl: string;
   engineerModel?: string;
+  engineerProvider?: string;
   mcpBlock?: string;
   projectRoot: string;
   stopConditions?: {
@@ -120,6 +184,10 @@ async function createLoadedConfig(options: {
     .replace(
       'model = "replace-with-your-engineer-model"',
       `model = ${JSON.stringify(options.engineerModel ?? "replace-with-your-engineer-model")}`,
+    )
+    .replace(
+      'provider = "llama.cpp"',
+      `provider = ${JSON.stringify(options.engineerProvider ?? "llama.cpp")}`,
     )
     .replace("maxEngineerAttempts = 5", () => {
       const value = options.stopConditions?.maxEngineerAttempts ?? 5;
@@ -178,6 +246,26 @@ async function readRequestBody(request: IncomingMessage): Promise<string> {
   }
 
   return Buffer.concat(chunks).toString("utf8");
+}
+
+function nativeToolCallResponse(
+  toolName: string,
+  argumentsObject: Record<string, unknown>,
+  content?: string,
+): MockModelResponse {
+  return {
+    ...(content === undefined ? {} : { content }),
+    tool_calls: [
+      {
+        function: {
+          arguments: JSON.stringify(argumentsObject),
+          name: toolName,
+        },
+        id: `call_${toolName.replace(/\W+/gu, "_")}`,
+        type: "function",
+      },
+    ],
+  };
 }
 
 function createQueuedModelClient<TStructured>(
@@ -541,6 +629,200 @@ describe("executeEngineerTask", () => {
           event.type === "tool-call" && event.toolName === "command.execute",
       ),
     ).toBe(true);
+  });
+
+  it("smoke: completes a hosted-style native tool-call loop through the shared runtime", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+
+    const modelServer = await startMockServerWithBodies([
+      nativeToolCallResponse(
+        "file.write",
+        {
+          content: "export const value = 3;\n",
+          path: "src/example.ts",
+        },
+        "Update the source file.",
+      ),
+      nativeToolCallResponse(
+        "command.execute",
+        {
+          accessMode: "mutate",
+          command: "npm run test",
+        },
+        "Run the required check.\nSTOP_ON_SUCCESS",
+      ),
+    ]);
+    servers.push(modelServer);
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: `${modelServer.url}/v1`,
+      engineerProvider: "openai-compatible",
+      projectRoot,
+    });
+    const sourcePath = path.join(projectRoot, "src", "example.ts");
+
+    mkdirSync(path.dirname(sourcePath), { recursive: true });
+    writeFileSync(sourcePath, "export const value = 1;\n", "utf8");
+    expect(
+      spawnSync("git", ["add", "src/example.ts"], {
+        cwd: projectRoot,
+        encoding: "utf8",
+      }).status,
+    ).toBe(0);
+    expect(
+      spawnSync(
+        "git",
+        [
+          "-c",
+          "user.name=Test User",
+          "-c",
+          "user.email=test@example.com",
+          "commit",
+          "-m",
+          "initial",
+        ],
+        {
+          cwd: projectRoot,
+          encoding: "utf8",
+        },
+      ).status,
+    ).toBe(0);
+
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 12,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: 0,
+          role: "engineer",
+          stderr: "",
+          stdout: "tests passed\n",
+          timestamp: "2026-04-14T12:00:05.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      projectCommandRunner: fakeCommandRunner,
+      runId: "20260414T120000.000Z-abcdaa",
+      task: "Update `src/example.ts` so the exported value becomes `3`.",
+    });
+
+    expect(execution.result.status).toBe("success");
+    expect(execution.stopReason).toBe("passing-checks");
+    expect(readFileSync(sourcePath, "utf8")).toBe("export const value = 3;\n");
+    expect(modelServer.requestBodies).toHaveLength(2);
+    expect(modelServer.requestBodies[0]?.tools).toBeDefined();
+    expect(modelServer.requestBodies[0]?.response_format).toBeUndefined();
+    expect(modelServer.requestBodies[0]?.tools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          function: expect.objectContaining({
+            name: "file.write",
+          }),
+          type: "function",
+        }),
+      ]),
+    );
+  });
+
+  it("smoke: completes a local llama.cpp-style native tool-call loop through the same runtime", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+
+    const modelServer = await startMockServerWithBodies([
+      nativeToolCallResponse(
+        "file.write",
+        {
+          content: "export const value = 4;\n",
+          path: "src/example.ts",
+        },
+        "Apply the requested edit.",
+      ),
+      nativeToolCallResponse(
+        "command.execute",
+        {
+          accessMode: "mutate",
+          command: "npm run test",
+        },
+        "Verify the change.\nSTOP_ON_SUCCESS",
+      ),
+    ]);
+    servers.push(modelServer);
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: `${modelServer.url}/v1`,
+      engineerProvider: "llama.cpp",
+      projectRoot,
+    });
+    const sourcePath = path.join(projectRoot, "src", "example.ts");
+
+    mkdirSync(path.dirname(sourcePath), { recursive: true });
+    writeFileSync(sourcePath, "export const value = 1;\n", "utf8");
+
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 8,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: 0,
+          role: "engineer",
+          stderr: "",
+          stdout: "tests passed\n",
+          timestamp: "2026-04-14T12:01:05.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      projectCommandRunner: fakeCommandRunner,
+      runId: "20260414T120100.000Z-abcdab",
+      task: "Update `src/example.ts` so the exported value becomes `4`.",
+    });
+
+    expect(execution.result.status).toBe("success");
+    expect(execution.stopReason).toBe("passing-checks");
+    expect(readFileSync(sourcePath, "utf8")).toBe("export const value = 4;\n");
+    expect(modelServer.requestBodies).toHaveLength(2);
+    expect(modelServer.requestBodies[0]?.tools).toBeDefined();
+    expect(modelServer.requestBodies[0]?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: expect.stringContaining(
+            "If you need a tool, call exactly one native tool.",
+          ),
+        }),
+      ]),
+    );
   });
 
   it("stops cleanly on timeout before requesting another model step", async () => {
@@ -1497,7 +1779,7 @@ args = ["repo-mcp.js"]`,
     ).toBe(true);
   });
 
-  it("continues after a retryable Engineer model-format error and accepts the next valid action", async () => {
+  it("continues after malformed Engineer output and accepts the next valid step", async () => {
     const projectRoot = createTempProject();
     projectRoots.push(projectRoot);
     initializeGitRepository(projectRoot);
@@ -1516,29 +1798,26 @@ args = ["repo-mcp.js"]`,
         callCount += 1;
 
         if (callCount === 1) {
-          throw new ModelStructuredOutputError(
-            "Structured output from engineer model `engineer-model` did not match engineer_action.",
-            {
-              issues: ["engineer_action.request.path: Unexpected property."],
-              retryable: true,
-              schemaName: "engineer_action",
-            },
-          );
+          return {
+            id: `mock-${callCount}`,
+            rawContent: "Inspect the workspace state first.",
+            role: "assistant",
+            toolCalls: [
+              {
+                arguments: {
+                  path: "README.md",
+                },
+                id: "call_bad_git_status",
+                name: "git.status",
+              },
+            ],
+          };
         }
 
         return {
           id: `mock-${callCount}`,
-          rawContent: JSON.stringify({
-            outcome: "blocked",
-            summary: "Blocked after retry guidance.",
-            type: "final",
-          }),
+          rawContent: "BLOCKED: Blocked after retry guidance.",
           role: "assistant",
-          structuredOutput: {
-            outcome: "blocked",
-            summary: "Blocked after retry guidance.",
-            type: "final",
-          } as TStructured,
         };
       },
     };
@@ -1556,9 +1835,7 @@ args = ["repo-mcp.js"]`,
       requests[1]?.messages.some(
         (message) =>
           message.role === "user" &&
-          message.content.includes(
-            "Match the chosen tool's exact request shape",
-          ),
+          message.content.includes("do not wrap it in a JSON envelope"),
       ),
     ).toBe(true);
   });

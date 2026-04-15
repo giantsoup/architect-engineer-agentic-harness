@@ -199,9 +199,13 @@ export {
   redactModelHeaders,
 } from "./models/dossier-logger.js";
 export {
+  createEngineerToolDefinitions,
   createEngineerStructuredOutputFormat,
   EngineerControlOutputValidationError,
+  EngineerTurnValidationError,
   loadEngineerControlSchema,
+  resolveEngineerTurn,
+  validateEngineerToolRequest,
   validateEngineerControlOutput,
 } from "./models/engineer-output.js";
 export {
@@ -273,7 +277,9 @@ export type {
 export type {
   EngineerAction,
   EngineerFinalAction,
+  EngineerToolCallAction,
   EngineerToolAction,
+  EngineerTurn,
 } from "./models/engineer-output.js";
 export type {
   ArchitectControlAction,
@@ -298,6 +304,8 @@ export type {
   ModelRequestLogger,
   ModelResponseUsage,
   ModelStructuredOutputSpec,
+  ModelToolCall,
+  ModelToolDefinition,
   ResolvedModelConfig,
   SupportedModelProvider,
 } from "./models/types.js";

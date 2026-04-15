@@ -18,6 +18,18 @@ export interface ModelChatMessage {
   toolCallId?: string | undefined;
 }
 
+export interface ModelToolDefinition {
+  description?: string | undefined;
+  inputSchema: Record<string, unknown>;
+  name: string;
+}
+
+export interface ModelToolCall {
+  arguments: Record<string, JsonValue>;
+  id: string;
+  name: string;
+}
+
 export interface ModelResponseUsage {
   completionTokens?: number | undefined;
   promptTokens?: number | undefined;
@@ -38,6 +50,8 @@ export interface ModelChatRequest<TStructured = never> {
   metadata?: { [key: string]: JsonValue | undefined } | undefined;
   structuredOutput?: ModelStructuredOutputSpec<TStructured> | undefined;
   temperature?: number | undefined;
+  toolFallbackInstruction?: string | undefined;
+  tools?: readonly ModelToolDefinition[] | undefined;
   topP?: number | undefined;
 }
 
@@ -48,6 +62,7 @@ export interface ModelChatResponse<TStructured = never> {
   rawContent: string;
   role: "assistant";
   structuredOutput?: TStructured | undefined;
+  toolCalls?: readonly ModelToolCall[] | undefined;
   usage?: ModelResponseUsage | undefined;
 }
 

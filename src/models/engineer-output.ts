@@ -3,7 +3,11 @@ import { fileURLToPath } from "node:url";
 
 import { DEFAULT_SCHEMA_VERSION } from "../versioning.js";
 import type { ToolRequest } from "../tools/types.js";
-import type { ModelStructuredOutputSpec } from "./types.js";
+import type {
+  ModelStructuredOutputSpec,
+  ModelToolCall,
+  ModelToolDefinition,
+} from "./types.js";
 
 export interface EngineerToolAction {
   request: ToolRequest;
@@ -23,6 +27,28 @@ export type EngineerAction = EngineerFinalAction | EngineerToolAction;
 
 export interface EngineerControlOutputOptions {
   schemaVersion?: string;
+}
+
+export interface EngineerToolCallAction extends EngineerToolAction {
+  toolCallId: string;
+}
+
+export type EngineerTurn = EngineerFinalAction | EngineerToolCallAction;
+
+export class EngineerTurnValidationError extends Error {
+  readonly issues: readonly string[];
+
+  constructor(issues: readonly string[]) {
+    super(
+      [
+        "Engineer response did not match the required tool-call/final protocol:",
+        ...issues.map((issue) => `- ${issue}`),
+      ].join("\n"),
+    );
+
+    this.name = "EngineerTurnValidationError";
+    this.issues = issues;
+  }
 }
 
 export class EngineerControlOutputValidationError extends Error {
@@ -55,6 +81,181 @@ const SUPPORTED_TOOL_NAMES = new Set([
   "git.status",
   "mcp.call",
 ]);
+
+const ENGINEER_TOOL_DEFINITIONS: readonly ModelToolDefinition[] = Object.freeze(
+  [
+    {
+      description:
+        "Run a project command. Use this for checks, tests, or build steps.",
+      inputSchema: {
+        additionalProperties: false,
+        properties: {
+          accessMode: {
+            enum: ["inspect", "mutate"],
+          },
+          command: {
+            minLength: 1,
+            type: "string",
+          },
+          environment: {
+            additionalProperties: {
+              type: ["boolean", "number", "string"],
+            },
+            type: "object",
+          },
+          timeoutMs: {
+            minimum: 1,
+            type: "integer",
+          },
+          workingDirectory: {
+            minLength: 1,
+            type: "string",
+          },
+        },
+        required: ["command"],
+        type: "object",
+      },
+      name: "command.execute",
+    },
+    {
+      description:
+        "List files in a directory when search-first inspection is not enough.",
+      inputSchema: {
+        additionalProperties: false,
+        properties: {
+          path: {
+            minLength: 1,
+            type: "string",
+          },
+        },
+        type: "object",
+      },
+      name: "file.list",
+    },
+    {
+      description: "Read a single file.",
+      inputSchema: {
+        additionalProperties: false,
+        properties: {
+          path: {
+            minLength: 1,
+            type: "string",
+          },
+        },
+        required: ["path"],
+        type: "object",
+      },
+      name: "file.read",
+    },
+    {
+      description: "Read a small batch of files together.",
+      inputSchema: {
+        additionalProperties: false,
+        properties: {
+          paths: {
+            items: {
+              minLength: 1,
+              type: "string",
+            },
+            maxItems: 8,
+            minItems: 1,
+            type: "array",
+          },
+        },
+        required: ["paths"],
+        type: "object",
+      },
+      name: "file.read_many",
+    },
+    {
+      description: "Search the repository for a symbol, string, or pattern.",
+      inputSchema: {
+        additionalProperties: false,
+        properties: {
+          limit: {
+            maximum: 20,
+            minimum: 1,
+            type: "integer",
+          },
+          path: {
+            minLength: 1,
+            type: "string",
+          },
+          query: {
+            minLength: 1,
+            type: "string",
+          },
+        },
+        required: ["query"],
+        type: "object",
+      },
+      name: "file.search",
+    },
+    {
+      description: "Write a file with the provided contents.",
+      inputSchema: {
+        additionalProperties: false,
+        properties: {
+          content: {
+            type: "string",
+          },
+          path: {
+            minLength: 1,
+            type: "string",
+          },
+        },
+        required: ["content", "path"],
+        type: "object",
+      },
+      name: "file.write",
+    },
+    {
+      description: "Show the current git diff.",
+      inputSchema: {
+        additionalProperties: false,
+        properties: {
+          staged: {
+            type: "boolean",
+          },
+        },
+        type: "object",
+      },
+      name: "git.diff",
+    },
+    {
+      description: "Show the current git status.",
+      inputSchema: {
+        additionalProperties: false,
+        properties: {},
+        type: "object",
+      },
+      name: "git.status",
+    },
+    {
+      description:
+        "Call an allowlisted MCP tool by server and tool name when built-in tools are not enough.",
+      inputSchema: {
+        additionalProperties: false,
+        properties: {
+          arguments: {
+            type: "object",
+          },
+          name: {
+            minLength: 1,
+            type: "string",
+          },
+          server: {
+            minLength: 1,
+            type: "string",
+          },
+        },
+        required: ["name", "server"],
+        type: "object",
+      },
+      name: "mcp.call",
+    },
+  ],
+);
 
 export async function loadEngineerControlSchema(
   options: EngineerControlOutputOptions = {},
@@ -116,6 +317,57 @@ export async function validateEngineerControlOutput(
   }
 
   return value as unknown as EngineerAction;
+}
+
+export function createEngineerToolDefinitions(): readonly ModelToolDefinition[] {
+  return ENGINEER_TOOL_DEFINITIONS;
+}
+
+export async function resolveEngineerTurn(options: {
+  rawContent: string;
+  toolCalls?: readonly ModelToolCall[] | undefined;
+}): Promise<EngineerTurn> {
+  if ((options.toolCalls?.length ?? 0) > 0) {
+    return parseEngineerToolTurn(options);
+  }
+
+  const finalTurn = parseEngineerFinalResponse(options.rawContent);
+
+  if (finalTurn !== undefined) {
+    return finalTurn;
+  }
+
+  const legacyAction = await parseLegacyEngineerAction(options.rawContent);
+
+  if (legacyAction !== undefined) {
+    if (legacyAction.type === "tool") {
+      return {
+        ...legacyAction,
+        toolCallId: "legacy-engineer-action",
+      };
+    }
+
+    return legacyAction;
+  }
+
+  throw new EngineerTurnValidationError([
+    "Call exactly one tool through the native tool interface, or return `COMPLETE:` / `BLOCKED:` as plain text.",
+  ]);
+}
+
+export async function validateEngineerToolRequest(
+  value: unknown,
+  path: string = "tool_call.arguments",
+): Promise<ToolRequest> {
+  const issues: string[] = [];
+
+  validateToolRequest(value, path, issues);
+
+  if (issues.length > 0) {
+    throw new EngineerTurnValidationError(issues);
+  }
+
+  return value as ToolRequest;
 }
 
 async function loadSchemaFromDisk(
@@ -405,6 +657,232 @@ function validateToolRequest(
 
       return;
   }
+}
+
+function parseEngineerToolTurn(options: {
+  rawContent: string;
+  toolCalls?: readonly ModelToolCall[] | undefined;
+}): Promise<EngineerToolCallAction> {
+  const toolCalls = options.toolCalls ?? [];
+
+  if (toolCalls.length !== 1) {
+    throw new EngineerTurnValidationError([
+      `Expected exactly one tool call, but received ${toolCalls.length}.`,
+    ]);
+  }
+
+  return toEngineerToolTurn(toolCalls[0]!, options.rawContent);
+}
+
+async function toEngineerToolTurn(
+  toolCall: ModelToolCall,
+  rawContent: string,
+): Promise<EngineerToolCallAction> {
+  const request = await validateEngineerToolRequest(
+    {
+      ...toolCall.arguments,
+      toolName: toolCall.name,
+    },
+    `tool_call.${toolCall.name}`,
+  );
+  const note = parseEngineerToolCallNote(rawContent, toolCall.name);
+
+  return {
+    request,
+    stopWhenSuccessful: note.stopWhenSuccessful,
+    summary: note.summary,
+    toolCallId: toolCall.id,
+    type: "tool",
+  };
+}
+
+function parseEngineerToolCallNote(
+  rawContent: string,
+  toolName: string,
+): { stopWhenSuccessful?: boolean | undefined; summary: string } {
+  const normalizedLines = rawContent
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const stopWhenSuccessful = normalizedLines.some(
+    (line) => line.toUpperCase() === "STOP_ON_SUCCESS",
+  );
+  const summary =
+    normalizedLines.find((line) => line.toUpperCase() !== "STOP_ON_SUCCESS") ??
+    `Call \`${toolName}\`.`;
+
+  return stopWhenSuccessful ? { stopWhenSuccessful, summary } : { summary };
+}
+
+function parseEngineerFinalResponse(
+  rawContent: string,
+): EngineerFinalAction | undefined {
+  const trimmed = rawContent.trim();
+
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+
+  const lines = trimmed
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const firstLine = lines[0];
+
+  if (firstLine === undefined) {
+    return undefined;
+  }
+
+  const matchedPrefix = /^(COMPLETE|BLOCKED)\s*:?\s*(.*)$/iu.exec(firstLine);
+
+  if (matchedPrefix === null) {
+    return undefined;
+  }
+
+  const outcome =
+    matchedPrefix[1]!.toLowerCase() === "blocked" ? "blocked" : "complete";
+  const summaryParts = [
+    matchedPrefix[2]!,
+    ...lines.slice(1).filter((line) => !line.startsWith("- ")),
+  ];
+  const summary = summaryParts.join(" ").trim();
+
+  if (summary.length === 0) {
+    throw new EngineerTurnValidationError([
+      `Final ${matchedPrefix[1]!.toUpperCase()} response must include a short summary.`,
+    ]);
+  }
+
+  const blockers =
+    outcome === "blocked"
+      ? lines
+          .slice(1)
+          .filter((line) => line.startsWith("- "))
+          .map((line) => line.slice(2).trim())
+          .filter((line) => line.length > 0)
+      : undefined;
+
+  return blockers === undefined || blockers.length === 0
+    ? {
+        outcome,
+        summary,
+        type: "final",
+      }
+    : {
+        blockers,
+        outcome,
+        summary,
+        type: "final",
+      };
+}
+
+async function parseLegacyEngineerAction(
+  rawContent: string,
+): Promise<EngineerAction | undefined> {
+  const candidates = collectJsonObjectCandidates(rawContent);
+
+  for (const candidate of candidates) {
+    try {
+      const parsedCandidate = JSON.parse(candidate);
+      return await validateEngineerControlOutput(parsedCandidate);
+    } catch {
+      continue;
+    }
+  }
+
+  return undefined;
+}
+
+function collectJsonObjectCandidates(rawContent: string): string[] {
+  const fencedCandidate = extractJsonFence(rawContent);
+
+  if (fencedCandidate !== undefined) {
+    return [fencedCandidate, ...collectBalancedJsonObjects(rawContent)];
+  }
+
+  return collectBalancedJsonObjects(rawContent);
+}
+
+function extractJsonFence(rawContent: string): string | undefined {
+  const fencedMatch = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(
+    rawContent.trim(),
+  );
+
+  return fencedMatch?.[1];
+}
+
+function collectBalancedJsonObjects(rawContent: string): string[] {
+  const candidates: string[] = [];
+
+  for (let index = 0; index < rawContent.length; index += 1) {
+    if (rawContent[index] !== "{") {
+      continue;
+    }
+
+    const endIndex = findBalancedJsonEnd(rawContent, index);
+
+    if (endIndex === undefined) {
+      continue;
+    }
+
+    candidates.push(rawContent.slice(index, endIndex + 1));
+    index = endIndex;
+  }
+
+  return candidates;
+}
+
+function findBalancedJsonEnd(
+  rawContent: string,
+  startIndex: number,
+): number | undefined {
+  const stack = [rawContent[startIndex]];
+  let inString = false;
+  let isEscaped = false;
+
+  for (let index = startIndex + 1; index < rawContent.length; index += 1) {
+    const character = rawContent[index];
+
+    if (inString) {
+      if (isEscaped) {
+        isEscaped = false;
+        continue;
+      }
+
+      if (character === "\\") {
+        isEscaped = true;
+        continue;
+      }
+
+      if (character === '"') {
+        inString = false;
+      }
+
+      continue;
+    }
+
+    if (character === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (character === "{") {
+      stack.push(character);
+      continue;
+    }
+
+    if (character !== "}") {
+      continue;
+    }
+
+    stack.pop();
+
+    if (stack.length === 0) {
+      return index;
+    }
+  }
+
+  return undefined;
 }
 
 function validateEnvironmentObject(

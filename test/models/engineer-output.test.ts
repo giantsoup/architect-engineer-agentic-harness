@@ -1,11 +1,128 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  createEngineerToolDefinitions,
   EngineerControlOutputValidationError,
+  EngineerTurnValidationError,
+  resolveEngineerTurn,
+  validateEngineerToolRequest,
   validateEngineerControlOutput,
 } from "../../src/index.js";
 
 describe("engineer output validation", () => {
+  it("defines native Engineer tools and resolves a native tool-call turn", async () => {
+    expect(createEngineerToolDefinitions().map((tool) => tool.name)).toEqual([
+      "command.execute",
+      "file.list",
+      "file.read",
+      "file.read_many",
+      "file.search",
+      "file.write",
+      "git.diff",
+      "git.status",
+      "mcp.call",
+    ]);
+
+    await expect(
+      resolveEngineerTurn({
+        rawContent: "Run the required check.\nSTOP_ON_SUCCESS",
+        toolCalls: [
+          {
+            arguments: {
+              accessMode: "mutate",
+              command: "npm run test",
+            },
+            id: "call_1",
+            name: "command.execute",
+          },
+        ],
+      }),
+    ).resolves.toEqual({
+      request: {
+        accessMode: "mutate",
+        command: "npm run test",
+        toolName: "command.execute",
+      },
+      stopWhenSuccessful: true,
+      summary: "Run the required check.",
+      toolCallId: "call_1",
+      type: "tool",
+    });
+  });
+
+  it("resolves concise final Engineer responses and low-cost legacy fallback", async () => {
+    await expect(
+      resolveEngineerTurn({
+        rawContent: "COMPLETE: Required check passed and the task is done.",
+      }),
+    ).resolves.toEqual({
+      outcome: "complete",
+      summary: "Required check passed and the task is done.",
+      type: "final",
+    });
+
+    await expect(
+      resolveEngineerTurn({
+        rawContent: [
+          "BLOCKED: Cannot continue until the fixture exists.",
+          "- tests/fixtures/input.json is missing",
+        ].join("\n"),
+      }),
+    ).resolves.toEqual({
+      blockers: ["tests/fixtures/input.json is missing"],
+      outcome: "blocked",
+      summary: "Cannot continue until the fixture exists.",
+      type: "final",
+    });
+
+    await expect(
+      resolveEngineerTurn({
+        rawContent:
+          '```json\n{"type":"tool","summary":"Legacy fallback","request":{"toolName":"file.read","path":"README.md"}}\n```',
+      }),
+    ).resolves.toEqual({
+      request: {
+        path: "README.md",
+        toolName: "file.read",
+      },
+      summary: "Legacy fallback",
+      toolCallId: "legacy-engineer-action",
+      type: "tool",
+    });
+  });
+
+  it("rejects malformed native tool turns", async () => {
+    await expect(
+      validateEngineerToolRequest(
+        {
+          toolName: "git.status",
+          path: "README.md",
+        },
+        "tool_call.git.status",
+      ),
+    ).rejects.toSatisfy((error: unknown) => {
+      expect(error).toBeInstanceOf(EngineerTurnValidationError);
+      expect((error as Error).message).toContain(
+        "tool_call.git.status.path: Unexpected property.",
+      );
+
+      return true;
+    });
+
+    await expect(
+      resolveEngineerTurn({
+        rawContent: "I am still thinking about it.",
+      }),
+    ).rejects.toSatisfy((error: unknown) => {
+      expect(error).toBeInstanceOf(EngineerTurnValidationError);
+      expect((error as Error).message).toContain(
+        "Call exactly one tool through the native tool interface",
+      );
+
+      return true;
+    });
+  });
+
   it("accepts file.search and file.read_many tool actions", async () => {
     await expect(
       validateEngineerControlOutput({

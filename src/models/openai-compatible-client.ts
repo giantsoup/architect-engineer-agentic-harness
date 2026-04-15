@@ -3,6 +3,8 @@ import type {
   ModelChatRequest,
   ModelChatResponse,
   ModelLogErrorEvent,
+  ModelToolCall,
+  ModelToolDefinition,
   ModelRequestLogger,
   ModelStructuredOutputSpec,
   ResolvedModelConfig,
@@ -162,7 +164,17 @@ interface OpenAiChatCompletionChoice {
   message?: {
     content?: string | Array<{ text?: string; type?: string }> | null;
     role?: string | null;
+    tool_calls?: OpenAiChatCompletionToolCall[] | null;
   } | null;
+}
+
+interface OpenAiChatCompletionToolCall {
+  function?: {
+    arguments?: string | Record<string, JsonValue> | null;
+    name?: string | null;
+  } | null;
+  id?: string | null;
+  type?: string | null;
 }
 
 interface OpenAiChatCompletionResponse {
@@ -200,6 +212,7 @@ export class OpenAiCompatibleChatClient {
     let usedNativeStructuredOutput = this.shouldUseNativeStructuredOutput(
       request.structuredOutput,
     );
+    let usedNativeToolCalls = (request.tools?.length ?? 0) > 0;
     let attempt = 1;
     const maxAttempts = this.config.maxRetries + 1;
 
@@ -209,6 +222,7 @@ export class OpenAiCompatibleChatClient {
       const payload = this.buildRequestPayload(
         request,
         usedNativeStructuredOutput,
+        usedNativeToolCalls,
       );
 
       await this.logger?.onRequest?.({
@@ -258,6 +272,27 @@ export class OpenAiCompatibleChatClient {
             continue;
           }
 
+          if (
+            usedNativeToolCalls &&
+            isNativeToolCallingUnsupported(httpError)
+          ) {
+            await this.logger?.onRetry?.({
+              attempt,
+              classification: "unsupported-provider",
+              message:
+                "Provider rejected native tool calling. Retrying with the fallback engineer tool protocol.",
+              nextAttempt: attempt,
+              provider: this.config.provider,
+              retryable: true,
+              role: this.config.role,
+              statusCode: response.status,
+              timestamp: new Date().toISOString(),
+              usedNativeStructuredOutput,
+            });
+            usedNativeToolCalls = false;
+            continue;
+          }
+
           if (httpError.retryable && attempt < maxAttempts) {
             await this.logRetry(httpError, attempt, usedNativeStructuredOutput);
             await delay(this.getRetryDelay(attempt));
@@ -274,7 +309,8 @@ export class OpenAiCompatibleChatClient {
           this.describeTarget(),
         );
         const choice = responseJson.choices?.[0];
-        const assistantContent = extractAssistantContent(choice);
+        const toolCalls = extractToolCalls(choice);
+        const assistantContent = extractAssistantContent(choice, toolCalls);
         const structuredOutput = await this.resolveStructuredOutput(
           request.structuredOutput,
           assistantContent,
@@ -288,6 +324,7 @@ export class OpenAiCompatibleChatClient {
           rawContent: assistantContent,
           role: "assistant",
           structuredOutput,
+          ...(toolCalls.length === 0 ? {} : { toolCalls }),
           usage:
             responseJson.usage === undefined
               ? undefined
@@ -332,10 +369,15 @@ export class OpenAiCompatibleChatClient {
   private buildRequestPayload<TStructured>(
     request: ModelChatRequest<TStructured>,
     useNativeStructuredOutput: boolean,
+    useNativeToolCalls: boolean,
   ): Record<string, unknown> {
     const payload: Record<string, unknown> = {
       max_tokens: request.maxOutputTokens,
-      messages: this.buildMessages(request, useNativeStructuredOutput),
+      messages: this.buildMessages(
+        request,
+        useNativeStructuredOutput,
+        useNativeToolCalls,
+      ),
       model: this.config.model,
       temperature: request.temperature,
       top_p: request.topP,
@@ -364,12 +406,17 @@ export class OpenAiCompatibleChatClient {
       };
     }
 
+    if (useNativeToolCalls && request.tools !== undefined) {
+      payload.tools = request.tools.map((tool) => toOpenAiTool(tool));
+    }
+
     return payload;
   }
 
   private buildMessages<TStructured>(
     request: ModelChatRequest<TStructured>,
     useNativeStructuredOutput: boolean,
+    useNativeToolCalls: boolean,
   ): Array<Record<string, string>> {
     const messages = request.messages.map((message) =>
       toOpenAiMessage(message),
@@ -380,6 +427,17 @@ export class OpenAiCompatibleChatClient {
         content: renderStructuredOutputFallbackInstruction(
           request.structuredOutput,
         ),
+        role: "developer",
+      });
+    }
+
+    if (
+      !useNativeToolCalls &&
+      (request.tools?.length ?? 0) > 0 &&
+      request.toolFallbackInstruction !== undefined
+    ) {
+      messages.push({
+        content: request.toolFallbackInstruction,
         role: "developer",
       });
     }
@@ -610,6 +668,7 @@ function renderToolResultMessage(message: ModelChatMessage): string {
 
 function extractAssistantContent(
   choice: OpenAiChatCompletionChoice | undefined,
+  toolCalls: readonly ModelToolCall[],
 ): string {
   const content = choice?.message?.content;
 
@@ -628,9 +687,25 @@ function extractAssistantContent(
     }
   }
 
+  if (toolCalls.length > 0) {
+    return "";
+  }
+
   throw new ModelResponseError(
     "OpenAI-compatible response did not include assistant text content in choices[0].message.content.",
   );
+}
+
+function extractToolCalls(
+  choice: OpenAiChatCompletionChoice | undefined,
+): ModelToolCall[] {
+  const toolCalls = choice?.message?.tool_calls;
+
+  if (toolCalls === undefined || toolCalls === null) {
+    return [];
+  }
+
+  return toolCalls.map((toolCall, index) => normalizeToolCall(toolCall, index));
 }
 
 function createHttpError(
@@ -694,6 +769,21 @@ function isNativeStructuredOutputUnsupported(error: ModelClientError): boolean {
   );
 }
 
+function isNativeToolCallingUnsupported(error: ModelClientError): boolean {
+  if (error.classification === "unsupported-provider") {
+    return false;
+  }
+
+  if (error.classification !== "http") {
+    return false;
+  }
+
+  return isNativeToolCallingUnsupportedStatus(
+    error.statusCode ?? 0,
+    error.message,
+  );
+}
+
 function isNativeStructuredOutputUnsupportedStatus(
   statusCode: number,
   message: string,
@@ -708,10 +798,29 @@ function isNativeStructuredOutputUnsupportedStatus(
     normalizedMessage.includes("response_format") ||
     normalizedMessage.includes("json_schema") ||
     normalizedMessage.includes("schema") ||
-    normalizedMessage.includes("unsupported") ||
     normalizedMessage.includes("iterating prediction stream") ||
     normalizedMessage.includes("'type' must be a string") ||
     normalizedMessage.includes('"type" must be a string')
+  );
+}
+
+function isNativeToolCallingUnsupportedStatus(
+  statusCode: number,
+  message: string,
+): boolean {
+  if (![400, 404, 415, 422, 501].includes(statusCode)) {
+    return false;
+  }
+
+  const normalizedMessage = message.toLowerCase();
+
+  return (
+    normalizedMessage.includes("tool_calls") ||
+    normalizedMessage.includes("tool_choice") ||
+    normalizedMessage.includes("parallel_tool_calls") ||
+    normalizedMessage.includes("function calling") ||
+    normalizedMessage.includes("tools are not supported") ||
+    normalizedMessage.includes("functions are not supported")
   );
 }
 
@@ -741,6 +850,19 @@ function toJsonValue(value: unknown): JsonValue | undefined {
   return JSON.parse(JSON.stringify(value)) as JsonValue;
 }
 
+function toOpenAiTool(tool: ModelToolDefinition): Record<string, unknown> {
+  return {
+    function: {
+      ...(tool.description === undefined
+        ? {}
+        : { description: tool.description }),
+      name: tool.name,
+      parameters: tool.inputSchema,
+    },
+    type: "function",
+  };
+}
+
 async function parseOpenAiChatCompletionResponse(
   response: Response,
   targetDescription: string,
@@ -761,6 +883,59 @@ function extractJsonCodeFence(rawContent: string): string | undefined {
     /```(?:json)?\s*([\s\S]*?)\s*```/iu.exec(rawContent);
 
   return fencedMatch?.[1];
+}
+
+function normalizeToolCall(
+  toolCall: OpenAiChatCompletionToolCall,
+  index: number,
+): ModelToolCall {
+  const name = toolCall.function?.name?.trim();
+
+  if (name === undefined || name.length === 0) {
+    throw new ModelResponseError(
+      `OpenAI-compatible response tool_calls[${index}] did not include a function name.`,
+    );
+  }
+
+  const id = toolCall.id?.trim();
+
+  if (id === undefined || id.length === 0) {
+    throw new ModelResponseError(
+      `OpenAI-compatible response tool_calls[${index}] did not include an id.`,
+    );
+  }
+
+  const rawArguments = toolCall.function?.arguments;
+  let parsedArguments: unknown;
+
+  if (typeof rawArguments === "string") {
+    try {
+      parsedArguments =
+        rawArguments.trim().length === 0 ? {} : JSON.parse(rawArguments);
+    } catch (error) {
+      throw new ModelResponseError(
+        `OpenAI-compatible response tool_calls[${index}] had invalid JSON arguments.`,
+        { cause: error },
+      );
+    }
+  } else {
+    parsedArguments = rawArguments ?? {};
+  }
+
+  if (!isPlainObject(parsedArguments)) {
+    throw new ModelResponseError(
+      `OpenAI-compatible response tool_calls[${index}] arguments must decode to an object.`,
+    );
+  }
+
+  return {
+    arguments: JSON.parse(JSON.stringify(parsedArguments)) as Record<
+      string,
+      JsonValue
+    >,
+    id,
+    name,
+  };
 }
 
 function collectStructuredOutputCandidates(rawContent: string): string[] {

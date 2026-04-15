@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   createArchitectStructuredOutputFormat,
+  createEngineerToolDefinitions,
   createEngineerStructuredOutputFormat,
   createRoleModelClient,
   initializeProject,
@@ -969,6 +970,160 @@ describe("OpenAiCompatibleChatClient", () => {
     expect(attempts).toBe(2);
     expect(seenBodies[0]?.response_format).toBeDefined();
     expect(seenBodies[1]?.response_format).toBeUndefined();
+  });
+
+  it("sends native Engineer tool definitions and parses native tool calls", async () => {
+    const seenBodies: Array<Record<string, unknown>> = [];
+    const mockServer = await startMockServer((request, response) => {
+      seenBodies.push(JSON.parse(request.bodyText) as Record<string, unknown>);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              finish_reason: "tool_calls",
+              message: {
+                content: "Run the required check.\nSTOP_ON_SUCCESS",
+                role: "assistant",
+                tool_calls: [
+                  {
+                    function: {
+                      arguments: JSON.stringify({
+                        accessMode: "mutate",
+                        command: "npm run test",
+                      }),
+                      name: "command.execute",
+                    },
+                    id: "call_engineer_test",
+                    type: "function",
+                  },
+                ],
+              },
+            },
+          ],
+          id: "chatcmpl-engineer-tools",
+        }),
+      );
+    });
+    servers.push(mockServer);
+
+    const { loadedConfig, projectRoot } = await createLoadedConfig(
+      renderConfig({
+        architectBaseUrl: `${mockServer.url}/remote/v1`,
+        engineerBaseUrl: `${mockServer.url}/local/v1`,
+        engineerProvider: "openai-compatible",
+      }),
+    );
+    projectRoots.push(projectRoot);
+
+    const client = new OpenAiCompatibleChatClient({
+      config: resolveModelConfigForRole(loadedConfig, "engineer"),
+      retryDelayMs: 0,
+    });
+
+    const response = await client.chat({
+      messages: [{ content: "Return the next engineer step.", role: "user" }],
+      tools: createEngineerToolDefinitions(),
+    });
+
+    expect(seenBodies[0]?.response_format).toBeUndefined();
+    expect(seenBodies[0]?.tools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          function: expect.objectContaining({
+            name: "command.execute",
+          }),
+          type: "function",
+        }),
+      ]),
+    );
+    expect(response.rawContent).toBe(
+      "Run the required check.\nSTOP_ON_SUCCESS",
+    );
+    expect(response.toolCalls).toEqual([
+      {
+        arguments: {
+          accessMode: "mutate",
+          command: "npm run test",
+        },
+        id: "call_engineer_test",
+        name: "command.execute",
+      },
+    ]);
+  });
+
+  it("falls back cleanly when a provider rejects native Engineer tool calling", async () => {
+    let attempts = 0;
+    const seenBodies: Array<Record<string, unknown>> = [];
+    const mockServer = await startMockServer((request, response) => {
+      attempts += 1;
+      seenBodies.push(JSON.parse(request.bodyText) as Record<string, unknown>);
+
+      if (attempts === 1) {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: {
+              message: "function calling unsupported on this endpoint",
+            },
+          }),
+        );
+        return;
+      }
+
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                content:
+                  '{"type":"tool","summary":"Fallback tool step","request":{"toolName":"file.read","path":"README.md"}}',
+                role: "assistant",
+              },
+            },
+          ],
+          id: "chatcmpl-engineer-tools-fallback",
+        }),
+      );
+    });
+    servers.push(mockServer);
+
+    const { loadedConfig, projectRoot } = await createLoadedConfig(
+      renderConfig({
+        architectBaseUrl: `${mockServer.url}/remote/v1`,
+        engineerBaseUrl: `${mockServer.url}/local/v1`,
+        engineerProvider: "openai-compatible",
+        engineerMaxRetries: 0,
+      }),
+    );
+    projectRoots.push(projectRoot);
+
+    const client = new OpenAiCompatibleChatClient({
+      config: resolveModelConfigForRole(loadedConfig, "engineer"),
+      retryDelayMs: 0,
+    });
+
+    const response = await client.chat({
+      messages: [{ content: "Return the next engineer step.", role: "user" }],
+      toolFallbackInstruction: "Fallback engineer tool protocol.",
+      tools: createEngineerToolDefinitions(),
+    });
+
+    expect(attempts).toBe(2);
+    expect(seenBodies[0]?.tools).toBeDefined();
+    expect(seenBodies[1]?.tools).toBeUndefined();
+    expect(seenBodies[1]?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: "Fallback engineer tool protocol.",
+          role: "developer",
+        }),
+      ]),
+    );
+    expect(response.rawContent).toContain("Fallback tool step");
+    expect(response.toolCalls).toBeUndefined();
   });
 
   it("accepts prose-wrapped Engineer JSON during local validation fallback", async () => {

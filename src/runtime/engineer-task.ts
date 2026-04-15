@@ -13,11 +13,16 @@ import type {
   ModelChatResponse,
 } from "../models/types.js";
 import {
-  createEngineerStructuredOutputFormat,
-  type EngineerAction,
+  createEngineerToolDefinitions,
+  EngineerTurnValidationError,
+  resolveEngineerTurn,
+  type EngineerTurn,
 } from "../models/engineer-output.js";
 import { createRoleModelClient } from "../models/provider-factory.js";
-import { ModelClientError } from "../models/openai-compatible-client.js";
+import {
+  ModelClientError,
+  ModelStructuredOutputError,
+} from "../models/openai-compatible-client.js";
 import { createToolRouter, type ToolRouter } from "../tools/tool-router.js";
 import type { CreateMcpServerClient } from "../tools/mcp/client.js";
 import type {
@@ -221,11 +226,11 @@ export async function executeEngineerTask(
       type: "engineer-run-started",
     });
 
-    const [systemPrompt, executePrompt, structuredOutput] = await Promise.all([
+    const [systemPrompt, executePrompt] = await Promise.all([
       loadPromptAsset(`prompts/${DEFAULT_PROMPT_VERSION}/engineer/system.md`),
       loadPromptAsset(`prompts/${DEFAULT_PROMPT_VERSION}/engineer/execute.md`),
-      createEngineerStructuredOutputFormat(),
     ]);
+    const engineerTools = createEngineerToolDefinitions();
 
     const messages: ModelChatMessage[] = [
       {
@@ -307,7 +312,8 @@ export async function executeEngineerTask(
           role: "engineer",
         });
 
-      let modelResponse: ModelChatResponse<EngineerAction>;
+      let modelResponse: ModelChatResponse;
+      let action: EngineerTurn;
 
       try {
         modelResponse = await modelClient.chat({
@@ -317,12 +323,29 @@ export async function executeEngineerTask(
             requiredCheckCommand,
             runId: dossier.paths.runId,
           },
-          structuredOutput,
+          toolFallbackInstruction:
+            createEngineerToolFallbackInstruction(requiredCheckCommand),
+          tools: engineerTools,
+        });
+        action = await resolveEngineerTurn({
+          rawContent: modelResponse.rawContent,
+          toolCalls: modelResponse.toolCalls,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const modelError =
-          error instanceof ModelClientError ? error : undefined;
+          error instanceof EngineerTurnValidationError
+            ? new ModelStructuredOutputError(
+                "Engineer response did not follow the required tool-call/final protocol.",
+                {
+                  issues: error.issues,
+                  retryable: true,
+                  schemaName: "engineer_turn",
+                },
+              )
+            : error instanceof ModelClientError
+              ? error
+              : undefined;
 
         if (
           modelError?.retryable === true &&
@@ -358,20 +381,12 @@ export async function executeEngineerTask(
       consecutiveRetryableModelErrors = 0;
 
       messages.push({
-        content: modelResponse.rawContent,
+        content: renderEngineerAssistantMessage(
+          action,
+          modelResponse.rawContent,
+        ),
         role: "assistant",
       });
-
-      const action = modelResponse.structuredOutput;
-
-      if (action === undefined) {
-        outcome = {
-          status: "failed",
-          stopReason: "model-error",
-          summary: "Engineer model returned no structured action.",
-        };
-        break;
-      }
 
       actionStepCount += 1;
 
@@ -401,7 +416,7 @@ export async function executeEngineerTask(
         if (requirePassingChecks && !hasPassingCheck) {
           const reminder = [
             `Required check \`${requiredCheckCommand}\` has not passed yet.`,
-            "Run it through `command.execute` before returning `final`.",
+            "Run it through `command.execute` before replying with `COMPLETE:`.",
           ].join(" ");
 
           messages.push({
@@ -1212,16 +1227,18 @@ function createRetryableModelErrorGuidance(options: {
 }): string {
   const issueDetails =
     options.error.issues === undefined || options.error.issues.length === 0
-      ? "The previous response did not match the required engineer_action schema."
-      : `The previous response did not match the required engineer_action schema: ${options.error.issues.join("; ")}`;
+      ? "The previous response could not be applied as a single Engineer step."
+      : `The previous response could not be applied as a single Engineer step: ${options.error.issues.join("; ")}`;
 
   return [
     issueDetails,
-    "Return exactly one JSON object matching the schema and nothing else.",
-    "Use only one tool request or one final action.",
-    "Match the chosen tool's exact request shape and omit extra fields.",
-    "For example, `file.read`, `file.write`, `file.list`, and `file.search` may include `path`, while `file.read_many` uses `paths`.",
-    `If the work is already done, run \`${options.requiredCheckCommand}\` or return a valid \`final\` action after a passing check is recorded.`,
+    "Return exactly one next step.",
+    "If you need repository or workspace access, call exactly one native tool and do not wrap it in a JSON envelope.",
+    "If you call a tool, keep any assistant text brief. Use `STOP_ON_SUCCESS` only when the tool call is the required check and the run should end immediately if it passes.",
+    "If the task is done, reply with `COMPLETE: <summary>` after the required check has passed.",
+    "If you cannot continue, reply with `BLOCKED: <summary>` and optional `- blocker` lines.",
+    "If this endpoint already received a fallback tool instruction because native tools were rejected, follow that fallback exactly instead of inventing a new format.",
+    `The required check is \`${options.requiredCheckCommand}\`.`,
   ].join(" ");
 }
 
@@ -1415,20 +1432,21 @@ function renderEngineerProtocol(options: {
   timeoutMs: number;
 }): string {
   return [
-    "Return exactly one JSON action per turn.",
+    "Return exactly one Engineer step per turn.",
     "",
     "Rules:",
-    `- Use \`type: "tool"\` to request exactly one tool call, either a built-in tool or \`mcp.call\`.`,
-    `- Use \`type: "final"\` only when the task is complete or blocked.`,
-    `- Set \`stopWhenSuccessful: true\` only when running the required check \`${options.requiredCheckCommand}\` and the run should end immediately if it passes.`,
+    "- If you need a tool, call exactly one native tool.",
+    `- If the task is complete, reply with \`COMPLETE: <summary>\`.`,
+    `- If you are blocked, reply with \`BLOCKED: <summary>\` and optional \`- blocker\` lines.`,
+    `- Include \`STOP_ON_SUCCESS\` in the same assistant message only when running the required check \`${options.requiredCheckCommand}\` and the run should end immediately if it passes.`,
     `- The harness stops after ${formatIterationLimit(options.maxIterations)} Engineer iterations, ${options.timeoutMs}ms, or ${options.maxConsecutiveFailedChecks} consecutive failed required checks.`,
-    `- After ${options.explorationBudget} consecutive exploration steps, you must either edit a file, run \`${options.requiredCheckCommand}\`, or return \`final\` with \`outcome: "blocked"\`. Additional exploration requests will be refused.`,
+    `- After ${options.explorationBudget} consecutive exploration steps, you must either edit a file, run \`${options.requiredCheckCommand}\`, or return \`BLOCKED:\`. Additional exploration requests will be refused.`,
     `- Passing checks required: ${options.requirePassingChecks ? "yes" : "no"}.`,
     "- Built-in tool names always route to built-in tools. MCP is only available through `mcp.call`.",
     "- Keep tool use explicit and auditable.",
     ...(options.preferNonThinkingMode
       ? [
-          "- Stay in non-thinking mode. Do not emit `<think>` blocks, hidden reasoning, or extra analysis outside the required JSON action.",
+          "- Stay in non-thinking mode. Do not emit `<think>` blocks, hidden reasoning, or extra analysis outside the required step.",
         ]
       : []),
     "- Ignore `.agent-harness`, `.git`, `node_modules`, and other generated or vendor paths unless the task explicitly depends on them.",
@@ -1438,8 +1456,62 @@ function renderEngineerProtocol(options: {
     "- Prefer converging quickly: after a few discovery steps, choose one concrete file and make the smallest reasonable change.",
     "- Do not reread the same file or relist the same directory unless the workspace changed. The harness will reuse stable repo facts and refuse duplicate rereads/listings.",
     "- If a path does not exist or a tool fails, adapt to that error instead of retrying the same invalid request.",
-    "- Once you have enough context, stop exploring and either edit a file, run the required check, or return `final` if complete or blocked.",
+    "- Once you have enough context, stop exploring and either edit a file, run the required check, or return `COMPLETE:` / `BLOCKED:`.",
   ].join("\n");
+}
+
+function createEngineerToolFallbackInstruction(
+  requiredCheckCommand: string,
+): string {
+  return [
+    "Native tool calling is unavailable for this model endpoint.",
+    "Fallback protocol: return exactly one JSON object and nothing else.",
+    'Tool step: {"type":"tool","summary":"...","request":{"toolName":"file.read","path":"README.md"}}',
+    'Final step: {"type":"final","outcome":"complete","summary":"..."}',
+    'Blocked step: {"type":"final","outcome":"blocked","summary":"...","blockers":["..."]}',
+    `Set \`stopWhenSuccessful: true\` only when the tool request runs \`${requiredCheckCommand}\` and the run should end immediately if it passes.`,
+  ].join("\n");
+}
+
+function renderEngineerAssistantMessage(
+  action: EngineerTurn,
+  rawContent: string,
+): string {
+  if (action.type === "final") {
+    if (rawContent.trim().length > 0) {
+      return rawContent;
+    }
+
+    if (action.outcome === "blocked") {
+      return [
+        `BLOCKED: ${action.summary}`,
+        ...(action.blockers ?? []).map((blocker) => `- ${blocker}`),
+      ].join("\n");
+    }
+
+    return `COMPLETE: ${action.summary}`;
+  }
+
+  const lines = [action.summary];
+
+  if (action.stopWhenSuccessful === true) {
+    lines.push("STOP_ON_SUCCESS");
+  }
+
+  lines.push(
+    `Tool call: ${action.request.toolName} ${JSON.stringify(stripToolName(action.request))}`,
+  );
+
+  return lines.join("\n");
+}
+
+function stripToolName(request: ToolRequest): Record<string, unknown> {
+  const { toolName, ...argumentsRecord } = request as ToolRequest & {
+    [key: string]: unknown;
+  };
+
+  void toolName;
+  return argumentsRecord;
 }
 
 function formatIterationLimit(maxIterations: number): string {
