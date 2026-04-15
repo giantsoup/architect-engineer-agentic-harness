@@ -1130,6 +1130,10 @@ args = ["repo-mcp.js"]`,
         expect(userPrompt).toContain(
           "- The latest required check already passed.",
         );
+        expect(userPrompt).toContain("## Current Green State");
+        expect(userPrompt).toContain(
+          "- Required check `npm run test` passed for the current workspace state.",
+        );
         expect(userPrompt).toContain(
           "Prefer the smallest confirming step requested by the Architect",
         );

@@ -52,6 +52,7 @@ import {
 const DEFAULT_RUN_TIMEOUT_MS = 60 * 60 * 1000;
 const MAX_MODEL_VISIBLE_FILE_READ_CHARS = 4000;
 const MAX_MODEL_VISIBLE_COMMAND_OUTPUT_CHARS = 3000;
+const MAX_MODEL_VISIBLE_SUCCESSFUL_COMMAND_OUTPUT_CHARS = 160;
 const MAX_MODEL_VISIBLE_FILE_LIST_ENTRIES = 12;
 const EXPLORATION_BUDGET_STEPS = 12;
 const MAX_CONSECUTIVE_RETRYABLE_MODEL_ERRORS = 3;
@@ -299,6 +300,17 @@ export async function executeEngineerTask(
       completionOnly: false,
     };
 
+    if (postPassCompletionGate.active) {
+      await appendModelGuidance({
+        content: createGreenStateGuidance({
+          requiredCheckCommand,
+        }),
+        dossierPaths: dossier.paths,
+        messages,
+        now,
+      });
+    }
+
     while (iterationCount < maxIterations) {
       const iterationTimestamp = now().toISOString();
       const remainingTimeMs = deadlineMs - now().getTime();
@@ -398,14 +410,11 @@ export async function executeEngineerTask(
             requiredCheckCommand,
           });
 
-          messages.push({
+          await appendModelGuidance({
             content: reminder,
-            role: "user",
-          });
-          await appendStructuredMessage(dossier.paths, {
-            content: reminder,
-            role: "system",
-            timestamp: now().toISOString(),
+            dossierPaths: dossier.paths,
+            messages,
+            now,
           });
           continue;
         }
@@ -459,14 +468,11 @@ export async function executeEngineerTask(
             "Run it through `command.execute` before replying with `COMPLETE:`.",
           ].join(" ");
 
-          messages.push({
+          await appendModelGuidance({
             content: reminder,
-            role: "user",
-          });
-          await appendStructuredMessage(dossier.paths, {
-            content: reminder,
-            role: "system",
-            timestamp: now().toISOString(),
+            dossierPaths: dossier.paths,
+            messages,
+            now,
           });
           continue;
         }
@@ -640,14 +646,11 @@ export async function executeEngineerTask(
         if (guidance.usedRepoMemory) {
           repoMemoryFeedbackCount += 1;
         }
-        messages.push({
+        await appendModelGuidance({
           content: guidance.content,
-          role: "user",
-        });
-        await appendStructuredMessage(dossier.paths, {
-          content: guidance.content,
-          role: "system",
-          timestamp: now().toISOString(),
+          dossierPaths: dossier.paths,
+          messages,
+          now,
         });
       }
 
@@ -661,16 +664,14 @@ export async function executeEngineerTask(
         const completionOnlyGuidance = createCompletionOnlyGuidance(
           convergenceGuardReason,
           usedGreenCheckFollowUpStep,
+          requiredCheckCommand,
         );
 
-        messages.push({
+        await appendModelGuidance({
           content: completionOnlyGuidance,
-          role: "user",
-        });
-        await appendStructuredMessage(dossier.paths, {
-          content: completionOnlyGuidance,
-          role: "system",
-          timestamp: now().toISOString(),
+          dossierPaths: dossier.paths,
+          messages,
+          now,
         });
       }
 
@@ -696,6 +697,17 @@ export async function executeEngineerTask(
           groundingSinceLastFailedCheck = false;
           postPassCompletionGate.active = true;
           postPassCompletionGate.completionOnly = false;
+
+          if (action.stopWhenSuccessful !== true) {
+            await appendModelGuidance({
+              content: createGreenStateGuidance({
+                requiredCheckCommand,
+              }),
+              dossierPaths: dossier.paths,
+              messages,
+              now,
+            });
+          }
 
           if (action.stopWhenSuccessful === true) {
             outcome = {
@@ -1106,6 +1118,31 @@ function renderFailureNotes(options: {
   return lines.join("\n");
 }
 
+async function appendModelGuidance(options: {
+  content: string;
+  dossierPaths: RunDossier["paths"];
+  messages: ModelChatMessage[];
+  now: () => Date;
+}): Promise<void> {
+  const lastUserMessage = [...options.messages]
+    .reverse()
+    .find((message) => message.role === "user");
+
+  if (lastUserMessage?.content === options.content) {
+    return;
+  }
+
+  options.messages.push({
+    content: options.content,
+    role: "user",
+  });
+  await appendStructuredMessage(options.dossierPaths, {
+    content: options.content,
+    role: "system",
+    timestamp: options.now().toISOString(),
+  });
+}
+
 function renderToolFeedbackForModel(feedback: ToolFeedback): string {
   if (feedback.ok === false) {
     return JSON.stringify({
@@ -1185,14 +1222,26 @@ function renderToolFeedbackForModel(feedback: ToolFeedback): string {
             feedback.result.exitCode === 0
               ? "Command completed successfully."
               : `Command failed with exit code ${feedback.result.exitCode}.`,
-          stderr: truncateWithNotice(
-            feedback.result.stderr,
-            MAX_MODEL_VISIBLE_COMMAND_OUTPUT_CHARS,
-          ),
-          stdout: truncateWithNotice(
-            feedback.result.stdout,
-            MAX_MODEL_VISIBLE_COMMAND_OUTPUT_CHARS,
-          ),
+          stderr:
+            feedback.result.exitCode === 0
+              ? summarizeSuccessfulCommandStream(
+                  "stderr",
+                  feedback.result.stderr,
+                )
+              : truncateWithNotice(
+                  feedback.result.stderr,
+                  MAX_MODEL_VISIBLE_COMMAND_OUTPUT_CHARS,
+                ),
+          stdout:
+            feedback.result.exitCode === 0
+              ? summarizeSuccessfulCommandStream(
+                  "stdout",
+                  feedback.result.stdout,
+                )
+              : truncateWithNotice(
+                  feedback.result.stdout,
+                  MAX_MODEL_VISIBLE_COMMAND_OUTPUT_CHARS,
+                ),
           toolName: feedback.result.toolName,
         },
         toolName: feedback.toolName,
@@ -1243,6 +1292,30 @@ function truncateWithNotice(value: string, maxChars: number): string {
     "",
     `[truncated ${value.length - maxChars} additional characters]`,
   ].join("\n");
+}
+
+function summarizeSuccessfulCommandStream(
+  streamName: "stderr" | "stdout",
+  value: string,
+): string {
+  if (value.length === 0) {
+    return `Successful command ${streamName} was empty.`;
+  }
+
+  const trimmedValue = truncateWithNotice(
+    value,
+    MAX_MODEL_VISIBLE_SUCCESSFUL_COMMAND_OUTPUT_CHARS,
+  );
+
+  if (trimmedValue === value) {
+    return trimmedValue;
+  }
+
+  const lineCount = value
+    .split(/\r?\n/u)
+    .filter((line) => line.length > 0).length;
+
+  return `Successful command ${streamName} was trimmed to keep the prompt compact (${lineCount} non-empty line${lineCount === 1 ? "" : "s"}, ${value.length} chars total).\n${trimmedValue}`;
 }
 
 function isExplorationToolRequest(request: ToolRequest): boolean {
@@ -1385,25 +1458,6 @@ function createPostToolGuidance(options: {
   if (
     options.toolFeedback.ok === false &&
     options.toolFeedback.error.code === "invalid-state" &&
-    options.postPassCompletionGateActive &&
-    shouldBlockAfterPassingCheck(
-      options.toolRequest,
-      options.requiredCheckCommand,
-    )
-  ) {
-    return {
-      content: [
-        `The latest required check already passed.`,
-        "Do not restart broad exploration or rerun the required check from this green state.",
-        "Reply with `COMPLETE: <summary>` if the task is satisfied, or take one concrete follow-up step that is still required.",
-      ].join(" "),
-      usedRepoMemory: false,
-    };
-  }
-
-  if (
-    options.toolFeedback.ok === false &&
-    options.toolFeedback.error.code === "invalid-state" &&
     isRequiredCheckCommand(options.toolRequest, options.requiredCheckCommand)
   ) {
     return {
@@ -1450,6 +1504,18 @@ function createPostToolGuidance(options: {
   }
 
   return undefined;
+}
+
+function createGreenStateGuidance(options: {
+  requiredCheckCommand: string;
+}): string {
+  return [
+    "## Current Green State",
+    "",
+    `- Required check \`${options.requiredCheckCommand}\` passed for the current workspace state.`,
+    "- No later tool result has invalidated that passing check.",
+    "- Reply with `COMPLETE: <summary>` if the task is done, or take one concrete follow-up step that still needs verification.",
+  ].join("\n");
 }
 
 function createExplorationBudgetFeedback(options: {
@@ -1518,20 +1584,16 @@ function createRepeatedNoOpWriteFeedback(
 function createCompletionOnlyGuidance(
   reason: EngineerConvergenceGuardReason | undefined,
   usedGreenCheckFollowUpStep: boolean,
+  requiredCheckCommand: string,
 ): string {
   return [
-    "The latest required check is already green and the previous post-pass step did not justify more tool work.",
-    reason === "post-pass-no-progress"
-      ? "That step repeated a no-op write from the green-check state."
-      : reason === "post-pass-completion-gate"
-        ? "That step restarted blocked exploration or re-ran the required check from the green-check state."
-        : usedGreenCheckFollowUpStep
-          ? "The single allowed post-pass follow-up step has already been used."
-          : "Do not continue tool work from this green-check state.",
-    "The next turn is completion-only.",
-    "Do not call tools.",
-    "Reply with plain-text `COMPLETE: <summary>` if the task is done, or plain-text `BLOCKED: <summary>` with optional `- blocker` lines.",
-  ].join(" ");
+    "## Completion-Only Green State",
+    "",
+    `- Required check \`${requiredCheckCommand}\` is still green for the current workspace state.`,
+    `- ${reason === "post-pass-no-progress" ? "The previous post-pass step repeated a no-op write." : reason === "post-pass-completion-gate" ? "The previous post-pass step retried blocked exploration or re-ran the required check." : usedGreenCheckFollowUpStep ? "The single allowed post-pass follow-up step has already been used." : "Do not continue tool work from this green state."}`,
+    "- The next turn is completion-only. Do not call tools.",
+    "- Reply with plain-text `COMPLETE: <summary>` if the task is done, or plain-text `BLOCKED: <summary>` with optional `- blocker` lines.",
+  ].join("\n");
 }
 
 function createRepeatedRequiredCheckFeedback(options: {

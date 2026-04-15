@@ -1049,6 +1049,14 @@ describe("executeEngineerTask", () => {
       projectRoot,
     });
     const sourcePath = path.join(projectRoot, "src", "example.ts");
+    const longSuccessfulStdout = Array.from(
+      { length: 60 },
+      (_, index) => `tests passed line ${index + 1}`,
+    ).join("\n");
+    const longSuccessfulStderr = Array.from(
+      { length: 20 },
+      (_, index) => `warning line ${index + 1}`,
+    ).join("\n");
     const { client, requests } = createCapturingModelClient([
       {
         request: {
@@ -1101,8 +1109,8 @@ describe("executeEngineerTask", () => {
           executionTarget: "docker",
           exitCode: 0,
           role: "engineer",
-          stderr: "",
-          stdout: "tests passed\n",
+          stderr: longSuccessfulStderr,
+          stdout: longSuccessfulStdout,
           timestamp: "2026-04-15T12:00:00.000Z",
           workingDirectory: "/workspace",
         };
@@ -1116,10 +1124,20 @@ describe("executeEngineerTask", () => {
       task: "Update `src/example.ts` so the exported value becomes `2`.",
     });
 
-    const finalUserPrompt = requests[3]?.messages
-      .filter((message) => message.role === "user")
-      .map((message) => String(message.content))
-      .join("\n");
+    const firstGreenStatePrompt =
+      requests[2]?.messages
+        .filter((message) => message.role === "user")
+        .map((message) => String(message.content))
+        .join("\n") ?? "";
+    const finalUserPrompt =
+      requests[3]?.messages
+        .filter((message) => message.role === "user")
+        .map((message) => String(message.content))
+        .join("\n") ?? "";
+    const successfulCheckToolMessage = requests[2]?.messages.find(
+      (message) =>
+        message.role === "tool" && message.name === "command.execute",
+    );
     const events = parseJsonLines(
       execution.dossier.paths.files.events.absolutePath,
     );
@@ -1128,13 +1146,35 @@ describe("executeEngineerTask", () => {
     expect(execution.stopReason).toBe("engineer-complete");
     expect(engineerCommandCalls).toBe(1);
     expect(readFileSync(sourcePath, "utf8")).toBe("export const value = 2;\n");
+    expect(firstGreenStatePrompt).toContain("## Current Green State");
+    expect(firstGreenStatePrompt).toContain(
+      "Required check `npm run test` passed for the current workspace state.",
+    );
+    expect(finalUserPrompt).toContain("## Completion-Only Green State");
     expect(finalUserPrompt).toContain(
-      "The latest required check already passed.",
+      "The previous post-pass step retried blocked exploration or re-ran the required check.",
     );
     expect(finalUserPrompt).toContain(
-      "Do not restart broad exploration or rerun the required check from this green state.",
+      "- The next turn is completion-only. Do not call tools.",
     );
-    expect(finalUserPrompt).toContain("The next turn is completion-only.");
+    expect(finalUserPrompt.match(/## Current Green State/g) ?? []).toHaveLength(
+      1,
+    );
+    expect(successfulCheckToolMessage?.content).toContain(
+      '"summary":"Command completed successfully."',
+    );
+    expect(successfulCheckToolMessage?.content).toContain(
+      "Successful command stdout was trimmed to keep the prompt compact",
+    );
+    expect(successfulCheckToolMessage?.content).toContain(
+      "Successful command stderr was trimmed to keep the prompt compact",
+    );
+    expect(successfulCheckToolMessage?.content).not.toContain(
+      "tests passed line 60",
+    );
+    expect(successfulCheckToolMessage?.content).not.toContain(
+      "warning line 20",
+    );
     expect(requests[3]?.tools).toBeUndefined();
     expect(
       events.some(
@@ -1230,10 +1270,11 @@ describe("executeEngineerTask", () => {
       task: "Update `src/example.ts` so the exported value becomes `2`.",
     });
 
-    const finalUserPrompt = requests[3]?.messages
-      .filter((message) => message.role === "user")
-      .map((message) => String(message.content))
-      .join("\n");
+    const finalUserPrompt =
+      requests[3]?.messages
+        .filter((message) => message.role === "user")
+        .map((message) => String(message.content))
+        .join("\n") ?? "";
     const checks = JSON.parse(
       readFileSync(execution.dossier.paths.files.checks.absolutePath, "utf8"),
     ) as {
@@ -1244,10 +1285,16 @@ describe("executeEngineerTask", () => {
     expect(execution.stopReason).toBe("engineer-complete");
     expect(engineerCommandCalls).toBe(1);
     expect(readFileSync(sourcePath, "utf8")).toBe("export const value = 2;\n");
+    expect(finalUserPrompt).toContain("## Completion-Only Green State");
     expect(finalUserPrompt).toContain(
-      "Do not restart broad exploration or rerun the required check from this green state.",
+      "The previous post-pass step retried blocked exploration or re-ran the required check.",
     );
-    expect(finalUserPrompt).toContain("The next turn is completion-only.");
+    expect(finalUserPrompt).toContain(
+      "- The next turn is completion-only. Do not call tools.",
+    );
+    expect(finalUserPrompt.match(/## Current Green State/g) ?? []).toHaveLength(
+      1,
+    );
     expect(requests[3]?.tools).toBeUndefined();
     expect(checks.checks).toHaveLength(1);
     expect(checks.checks[0]).toMatchObject({
@@ -1451,10 +1498,13 @@ describe("executeEngineerTask", () => {
     expect(execution.stopReason).toBe("engineer-complete");
     expect(engineerCommandCalls).toBe(1);
     expect(readFileSync(sourcePath, "utf8")).toBe("export const value = 2;\n");
+    expect(completionPrompt).toContain("## Completion-Only Green State");
     expect(completionPrompt).toContain(
       "The single allowed post-pass follow-up step has already been used.",
     );
-    expect(completionPrompt).toContain("The next turn is completion-only.");
+    expect(completionPrompt).toContain(
+      "- The next turn is completion-only. Do not call tools.",
+    );
     expect(requests[3]?.tools).toBeUndefined();
     expect(
       events.some(
@@ -1555,10 +1605,13 @@ describe("executeEngineerTask", () => {
     expect(execution.stopReason).not.toBe("max-iterations");
     expect(engineerCommandCalls).toBe(1);
     expect(readFileSync(sourcePath, "utf8")).toBe("export const value = 2;\n");
+    expect(completionPrompt).toContain("## Completion-Only Green State");
     expect(completionPrompt).toContain(
       "The single allowed post-pass follow-up step has already been used.",
     );
-    expect(completionPrompt).toContain("The next turn is completion-only.");
+    expect(completionPrompt).toContain(
+      "- The next turn is completion-only. Do not call tools.",
+    );
     expect(requests[3]?.tools).toBeUndefined();
   });
 
