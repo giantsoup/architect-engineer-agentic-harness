@@ -1898,7 +1898,7 @@ describe("OpenAiCompatibleChatClient", () => {
     expect(attempts).toBe(2);
   });
 
-  it("normalizes salvageable Engineer request shapes before validation", async () => {
+  it("rejects Engineer structured-output salvage when unexpected tool properties remain", async () => {
     const mockServer = await startMockServer((_request, response) => {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(
@@ -1937,17 +1937,21 @@ describe("OpenAiCompatibleChatClient", () => {
       retryDelayMs: 0,
     });
 
-    const response = await client.chat({
-      messages: [{ content: "Return an engineer action.", role: "user" }],
-      structuredOutput: await createEngineerStructuredOutputFormat(),
-    });
+    await expect(
+      client.chat({
+        messages: [{ content: "Return an engineer action.", role: "user" }],
+        structuredOutput: await createEngineerStructuredOutputFormat(),
+      }),
+    ).rejects.toSatisfy((error: unknown) => {
+      expect(error).toBeInstanceOf(ModelStructuredOutputError);
+      expect((error as Error).message).toContain(
+        "did not match engineer_action",
+      );
+      expect((error as { issues?: readonly string[] }).issues ?? []).toContain(
+        "engineer_action.request.path: Unexpected property.",
+      );
 
-    expect(response.structuredOutput).toEqual({
-      request: {
-        toolName: "git.status",
-      },
-      summary: "Inspect git status for the workspace.",
-      type: "tool",
+      return true;
     });
   });
 

@@ -1140,9 +1140,7 @@ function normalizeArchitectReviewCandidate(
 }
 
 function normalizeToolRequestCandidate(value: unknown): unknown {
-  return normalizeEngineerToolRequestCandidate(value, {
-    dropUnexpectedProperties: true,
-  });
+  return normalizeEngineerToolRequestCandidate(value);
 }
 
 function normalizeTrimmedString(value: unknown): string | undefined {

@@ -277,7 +277,6 @@ export async function executeEngineerTask(
     let consecutiveRetryableModelErrors = 0;
     let actionStepCount = 0;
     let explorationBudgetExhaustedAtStep: number | null = null;
-    let hasPassingCheck = !requirePassingChecks;
     let iterationCount = 0;
     const recentRepoFacts: RepoFact[] = [];
     let repoMemoryFeedbackCount = 0;
@@ -289,10 +288,6 @@ export async function executeEngineerTask(
     const postPassCompletionGate: PostPassCompletionGateState = {
       active: requirePassingChecks && checks.at(-1)?.status === "passed",
     };
-
-    if (requirePassingChecks) {
-      hasPassingCheck = checks.some((check) => check.status === "passed");
-    }
 
     while (iterationCount < maxIterations) {
       const iterationTimestamp = now().toISOString();
@@ -428,9 +423,9 @@ export async function executeEngineerTask(
           break;
         }
 
-        if (requirePassingChecks && !hasPassingCheck) {
+        if (requirePassingChecks && !postPassCompletionGate.active) {
           const reminder = [
-            `Required check \`${requiredCheckCommand}\` has not passed yet.`,
+            `Required check \`${requiredCheckCommand}\` is not currently green for the latest workspace state.`,
             "Run it through `command.execute` before replying with `COMPLETE:`.",
           ].join(" ");
 
@@ -619,7 +614,6 @@ export async function executeEngineerTask(
           consecutiveFailedChecks = 0;
           editSinceLastFailedCheck = false;
           groundingSinceLastFailedCheck = false;
-          hasPassingCheck = true;
           postPassCompletionGate.active = true;
 
           if (action.stopWhenSuccessful === true) {

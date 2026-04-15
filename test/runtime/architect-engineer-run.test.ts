@@ -1877,7 +1877,7 @@ args = ["repo-mcp.js"]`,
           (message) =>
             message.role === "user" &&
             message.content.includes(
-              "Required check `npm run test` has not passed yet.",
+              "Required check `npm run test` is not currently green for the latest workspace state.",
             ),
         ),
       ),
