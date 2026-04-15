@@ -427,10 +427,7 @@ async function writeInitialArtifactFile(
       await writeJsonFile(paths.files.checks.absolutePath, { checks: [] });
       return;
     case "result":
-      await writeJsonFile(paths.files.result.absolutePath, {
-        status: "stopped",
-        summary: "Run initialized. Final result pending.",
-      });
+      await writeFile(paths.files.result.absolutePath, "", "utf8");
       return;
     default:
       await writeFile(paths.files[key].absolutePath, "", "utf8");

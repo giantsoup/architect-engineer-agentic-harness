@@ -146,8 +146,14 @@ interface PostPassCompletionGateState {
 
 type EngineerConvergenceGuardReason =
   | "exploration-budget"
+  | "post-pass-no-progress"
   | "post-pass-completion-gate"
   | "required-check-without-progress";
+
+interface NoOpWriteFact {
+  path: string;
+  signature: string;
+}
 
 export async function executeEngineerTask(
   options: ExecuteEngineerTaskOptions,
@@ -284,6 +290,7 @@ export async function executeEngineerTask(
     let stepsToFirstEdit: number | null = null;
     let editSinceLastFailedCheck = false;
     let groundingSinceLastFailedCheck = false;
+    let lastNoOpWrite: NoOpWriteFact | undefined;
     let outcome: FinalizedOutcome | undefined;
     const postPassCompletionGate: PostPassCompletionGateState = {
       active: requirePassingChecks && checks.at(-1)?.status === "passed",
@@ -454,10 +461,6 @@ export async function executeEngineerTask(
         remainingTimeMs,
       );
 
-      if (stepsToFirstEdit === null && toolRequest.toolName === "file.write") {
-        stepsToFirstEdit = actionStepCount;
-      }
-
       if (
         stepsToFirstCheck === null &&
         isRequiredCheckCommand(toolRequest, requiredCheckCommand)
@@ -530,6 +533,19 @@ export async function executeEngineerTask(
           toolRequest: summarizeToolRequestForEvent(toolRequest),
           type: "engineer-convergence-guard-triggered",
         });
+      } else if (
+        isRepeatedNoOpWriteRequest(toolRequest, lastNoOpWrite) &&
+        postPassCompletionGate.active
+      ) {
+        convergenceGuardReason = "post-pass-no-progress";
+        toolFeedback = createRepeatedNoOpWriteFeedback(toolRequest);
+        await appendRunEvent(dossier.paths, {
+          actionStep: actionStepCount,
+          reason: "post-pass-no-progress",
+          timestamp: now().toISOString(),
+          toolRequest: summarizeToolRequestForEvent(toolRequest),
+          type: "engineer-convergence-guard-triggered",
+        });
       } else {
         toolFeedback = await executeEngineerTool({
           executor: toolExecutor,
@@ -554,8 +570,23 @@ export async function executeEngineerTask(
 
       updateRecentRepoFacts(recentRepoFacts, toolFeedback);
 
-      if (toolFeedback.ok && toolRequest.toolName === "file.write") {
-        editSinceLastFailedCheck = true;
+      if (
+        toolFeedback.ok &&
+        toolRequest.toolName === "file.write" &&
+        toolFeedback.result.toolName === "file.write"
+      ) {
+        if (toolFeedback.result.changed) {
+          if (stepsToFirstEdit === null) {
+            stepsToFirstEdit = actionStepCount;
+          }
+          editSinceLastFailedCheck = true;
+          lastNoOpWrite = undefined;
+        } else {
+          lastNoOpWrite = {
+            path: toolFeedback.result.path,
+            signature: createFileWriteSignature(toolRequest),
+          };
+        }
       }
 
       if (toolFeedback.ok && isGroundingToolRequest(toolRequest)) {
@@ -564,7 +595,7 @@ export async function executeEngineerTask(
 
       if (
         toolFeedback.ok &&
-        invalidatesPassingCheck(toolRequest, requiredCheckCommand)
+        invalidatesPassingCheck(toolFeedback, toolRequest, requiredCheckCommand)
       ) {
         postPassCompletionGate.active = false;
       }
@@ -1084,9 +1115,11 @@ function renderToolFeedbackForModel(feedback: ToolFeedback): string {
         ok: true,
         result: {
           ...feedback.result,
-          summary: `${
-            feedback.result.created ? "Created" : "Updated"
-          } \`${feedback.result.path}\`.`,
+          summary: feedback.result.created
+            ? `Created \`${feedback.result.path}\`.`
+            : feedback.result.changed
+              ? `Updated \`${feedback.result.path}\`.`
+              : `No changes written to \`${feedback.result.path}\`; the file already matched the requested content.`,
         },
         toolName: feedback.toolName,
       });
@@ -1198,17 +1231,21 @@ function shouldSkipRequiredCheckRecording(
   convergenceGuardReason: EngineerConvergenceGuardReason | undefined,
 ): boolean {
   return (
+    convergenceGuardReason === "post-pass-no-progress" ||
     convergenceGuardReason === "post-pass-completion-gate" ||
     convergenceGuardReason === "required-check-without-progress"
   );
 }
 
 function invalidatesPassingCheck(
+  feedback: ToolFeedback,
   request: ToolRequest,
   requiredCheckCommand: string,
 ): boolean {
   if (request.toolName === "file.write") {
-    return true;
+    return feedback.ok && feedback.result.toolName === "file.write"
+      ? feedback.result.changed
+      : true;
   }
 
   if (isRequiredCheckCommand(request, requiredCheckCommand)) {
@@ -1220,6 +1257,27 @@ function invalidatesPassingCheck(
   }
 
   return request.toolName === "mcp.call";
+}
+
+function createFileWriteSignature(
+  request: Extract<ToolRequest, { toolName: "file.write" }>,
+): string {
+  return JSON.stringify({
+    content: request.content,
+    path: request.path,
+  });
+}
+
+function isRepeatedNoOpWriteRequest(
+  request: ToolRequest,
+  lastNoOpWrite: NoOpWriteFact | undefined,
+): request is Extract<ToolRequest, { toolName: "file.write" }> {
+  return (
+    request.toolName === "file.write" &&
+    lastNoOpWrite !== undefined &&
+    request.path === lastNoOpWrite.path &&
+    createFileWriteSignature(request) === lastNoOpWrite.signature
+  );
 }
 
 function isDuplicateExplorationRequest(request: ToolRequest): boolean {
@@ -1255,6 +1313,21 @@ function createPostToolGuidance(options: {
         "List a known existing parent directory or switch to another known path.",
       ].join(" "),
       usedRepoMemory: knownPathsHint !== undefined,
+    };
+  }
+
+  if (
+    options.toolFeedback.ok === false &&
+    options.toolFeedback.error.code === "invalid-state" &&
+    options.toolRequest.toolName === "file.write"
+  ) {
+    return {
+      content: [
+        options.toolFeedback.error.message,
+        "If the requested change is already present and no other work is needed, reply with `COMPLETE: <summary>`.",
+        "Otherwise make one concrete new change before running the required check again.",
+      ].join(" "),
+      usedRepoMemory: false,
     };
   }
 
@@ -1370,6 +1443,24 @@ function createPostPassCompletionGateFeedback(options: {
     },
     ok: false,
     toolName: options.toolName,
+  };
+}
+
+function createRepeatedNoOpWriteFeedback(
+  request: Extract<ToolRequest, { toolName: "file.write" }>,
+): ToolFeedback {
+  return {
+    error: {
+      code: "invalid-state",
+      message: [
+        `The previous write to \`${request.path}\` did not change the workspace.`,
+        "Do not repeat the same no-op write from a green required-check state.",
+        "Reply with `COMPLETE: <summary>` if the task is done, or make one different concrete change that still needs verification.",
+      ].join(" "),
+      name: "BuiltInToolStateError",
+    },
+    ok: false,
+    toolName: request.toolName,
   };
 }
 

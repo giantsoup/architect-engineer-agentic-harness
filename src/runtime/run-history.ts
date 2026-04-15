@@ -130,9 +130,13 @@ export async function readRunInspection(
     paths.files.run.absolutePath,
     `run manifest at ${paths.files.run.relativePath}`,
   );
-  const result = await readOptionalJsonFile<RunResult>(
+  const recordedResult = await readOptionalJsonFile<RunResult>(
     paths.files.result.absolutePath,
   );
+  const result =
+    manifest.status === "initialized" || manifest.status === "running"
+      ? undefined
+      : recordedResult;
   const checks = await readOptionalJsonFile<RunChecksSummary>(
     paths.files.checks.absolutePath,
   );

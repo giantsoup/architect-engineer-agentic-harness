@@ -54,6 +54,7 @@ export interface FileWriteToolRequest {
 
 export interface FileWriteToolResult {
   byteLength: number;
+  changed: boolean;
   created: boolean;
   path: string;
   toolName: "file.write";

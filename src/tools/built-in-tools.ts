@@ -324,11 +324,27 @@ export class BuiltInToolExecutor {
     );
 
     const created = !(await pathExists(guardedPath.absolutePath));
+    let changed = true;
     const parentDirectory = path.dirname(guardedPath.absolutePath);
+
+    if (!created) {
+      try {
+        const existingContents = await readFile(guardedPath.absolutePath, "utf8");
+        changed = existingContents !== request.content;
+      } catch (error) {
+        throw new BuiltInToolPathError(
+          request.toolName,
+          `Could not read \`${guardedPath.path}\` before writing: ${describeUnknownError(error)}`,
+          { cause: error },
+        );
+      }
+    }
 
     try {
       await mkdir(parentDirectory, { recursive: true });
-      await writeFile(guardedPath.absolutePath, request.content, "utf8");
+      if (created || changed) {
+        await writeFile(guardedPath.absolutePath, request.content, "utf8");
+      }
     } catch (error) {
       throw new BuiltInToolPathError(
         request.toolName,
@@ -339,6 +355,7 @@ export class BuiltInToolExecutor {
 
     return {
       byteLength: Buffer.byteLength(request.content, "utf8"),
+      changed,
       created,
       path: guardedPath.path,
       toolName: request.toolName,
@@ -886,6 +903,7 @@ function summarizeToolResult(
     case "file.write":
       return {
         byteLength: result.byteLength,
+        changed: result.changed,
         created: result.created,
         path: result.path,
       };

@@ -68,17 +68,15 @@ describe("run dossier", () => {
         expect(artifactStats.isFile()).toBe(true);
       }
 
-      const initializedResult = JSON.parse(
-        readFileSync(dossier.paths.files.result.absolutePath, "utf8"),
+      const initializedResult = readFileSync(
+        dossier.paths.files.result.absolutePath,
+        "utf8",
       );
       const parsedEvents = readJsonLines(
         dossier.paths.files.events.absolutePath,
       );
 
-      expect(await validateRunResult(initializedResult)).toEqual({
-        status: "stopped",
-        summary: "Run initialized. Final result pending.",
-      });
+      expect(initializedResult).toBe("");
       expect(parsedEvents).toHaveLength(1);
       expect(parsedEvents[0]).toMatchObject({
         schemaVersion: "v1",

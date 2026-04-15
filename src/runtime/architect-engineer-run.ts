@@ -85,17 +85,11 @@ export async function executeArchitectEngineerRun(
       : { runProcess: options.runProcess }),
   };
   const ownsProjectCommandRunner = options.projectCommandRunner === undefined;
-  const projectCommandRunner =
-    options.projectCommandRunner ??
-    createProjectCommandRunner({
-      loadedConfig: options.loadedConfig,
-      now,
-      ...(options.runProcess === undefined
-        ? {}
-        : { runProcess: options.runProcess }),
-    });
+  let projectCommandRunner = options.projectCommandRunner;
 
-  nodeContext.projectCommandRunner = projectCommandRunner;
+  if (projectCommandRunner !== undefined) {
+    nodeContext.projectCommandRunner = projectCommandRunner;
+  }
 
   try {
     while (state.nextNode !== "finalize") {
@@ -107,6 +101,22 @@ export async function executeArchitectEngineerRun(
       }
 
       const nextNode = state.nextNode;
+
+      if (
+        projectCommandRunner === undefined &&
+        nextNode !== "prepare" &&
+        state.dossier !== undefined
+      ) {
+        projectCommandRunner = createProjectCommandRunner({
+          dossierPaths: state.dossier.paths,
+          loadedConfig: options.loadedConfig,
+          now,
+          ...(options.runProcess === undefined
+            ? {}
+            : { runProcess: options.runProcess }),
+        });
+        nodeContext.projectCommandRunner = projectCommandRunner;
+      }
 
       switch (nextNode) {
         case "prepare":
@@ -168,7 +178,7 @@ export async function executeArchitectEngineerRun(
       stopReason: state.finalOutcome?.stopReason ?? "timeout",
     };
   } finally {
-    if (ownsProjectCommandRunner) {
+    if (ownsProjectCommandRunner && projectCommandRunner !== undefined) {
       projectCommandRunner.close();
     }
   }

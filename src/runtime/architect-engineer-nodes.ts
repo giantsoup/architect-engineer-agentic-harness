@@ -259,7 +259,7 @@ export async function engineerExecutionNode(
       loadedConfig: context.loadedConfig,
       maxConsecutiveFailedChecks:
         state.stopConditions.maxConsecutiveFailedRequiredChecks,
-      maxIterations: Number.POSITIVE_INFINITY,
+      maxIterations: context.loadedConfig.config.stopConditions.maxIterations,
       now: context.now,
       persistFinalArtifacts: false,
       task: renderEngineerExecutionTask(

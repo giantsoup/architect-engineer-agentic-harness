@@ -131,6 +131,7 @@ describe("BuiltInToolExecutor", () => {
 
       expect(result).toEqual({
         byteLength: Buffer.byteLength("export const value = 2;\n", "utf8"),
+        changed: true,
         created: false,
         path: "src/example.ts",
         toolName: "file.write",
@@ -199,6 +200,7 @@ describe("BuiltInToolExecutor", () => {
           path: dossier.paths.files.architectPlan.relativePath,
         },
         result: {
+          changed: true,
           created: false,
           path: dossier.paths.files.architectPlan.relativePath,
         },
@@ -224,6 +226,41 @@ describe("BuiltInToolExecutor", () => {
         toolName: "file.write",
         type: "tool-call",
       });
+    } finally {
+      executor.close();
+    }
+  });
+
+  it("reports no-op writes without mutating an unchanged file", async () => {
+    const loadedConfig = await createInitializedProject();
+    createdPaths.push(loadedConfig.projectRoot);
+    const sourcePath = path.join(loadedConfig.projectRoot, "src", "example.ts");
+
+    mkdirSync(path.dirname(sourcePath), { recursive: true });
+    writeFileSync(sourcePath, "export const value = 2;\n", "utf8");
+
+    const executor = createBuiltInToolExecutor({ loadedConfig });
+
+    try {
+      const result = await executor.execute(
+        { role: "engineer" },
+        {
+          content: "export const value = 2;\n",
+          path: "src/example.ts",
+          toolName: "file.write",
+        },
+      );
+
+      expect(result).toEqual({
+        byteLength: Buffer.byteLength("export const value = 2;\n", "utf8"),
+        changed: false,
+        created: false,
+        path: "src/example.ts",
+        toolName: "file.write",
+      });
+      expect(readFileSync(sourcePath, "utf8")).toBe(
+        "export const value = 2;\n",
+      );
     } finally {
       executor.close();
     }

@@ -444,11 +444,22 @@ describe("CLI run", () => {
         externalRunIds[0]!,
         "events.jsonl",
       );
+      const commandLogPath = path.join(
+        projectRoot,
+        ".agent-harness",
+        "runs",
+        externalRunIds[0]!,
+        "command-log.jsonl",
+      );
       const events = readJsonLines(eventsPath) as Array<{
         request?: { command?: string };
         result?: { workingDirectory?: string };
         toolName?: string;
         type?: string;
+      }>;
+      const commandLog = readJsonLines(commandLogPath) as Array<{
+        command?: string;
+        role?: string;
       }>;
       const checks = JSON.parse(
         readFileSync(
@@ -476,6 +487,12 @@ describe("CLI run", () => {
         expect.objectContaining({
           command: "npm test",
           status: "passed",
+        }),
+      );
+      expect(commandLog).toContainEqual(
+        expect.objectContaining({
+          command: "npm test",
+          role: "engineer",
         }),
       );
       expect(checkCommandEvent?.result?.workingDirectory).toBe(projectRoot);
