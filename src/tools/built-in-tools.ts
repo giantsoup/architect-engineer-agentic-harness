@@ -52,11 +52,28 @@ import type {
   CommandExecutionToolResult,
   FileListEntry,
   FileListToolResult,
+  FileReadManyToolResult,
   FileReadToolResult,
+  FileSearchToolResult,
   FileWriteToolResult,
   GitDiffToolResult,
   GitStatusToolResult,
 } from "./types.js";
+
+const LOW_VALUE_SEARCH_PATH_SEGMENTS = new Set([
+  ".agent-harness",
+  ".git",
+  "dist",
+  "node_modules",
+]);
+const MAX_FILE_READ_MANY_PATHS = 8;
+const MAX_FILE_READ_MANY_TOTAL_CHARS = 6000;
+const MAX_FILE_READ_MANY_CHARS_PER_FILE = 2000;
+const MAX_FILE_SEARCH_DEFAULT_LIMIT = 8;
+const MAX_FILE_SEARCH_LIMIT = 20;
+const MAX_FILE_SEARCH_LINE_CHARS = 180;
+const MAX_FILE_SEARCH_MATCHES_PER_FILE = 3;
+const MAX_FILE_SEARCH_FILE_BYTES = 128 * 1024;
 
 export interface CreateBuiltInToolExecutorOptions extends Omit<
   CreateProjectCommandRunnerOptions,
@@ -181,6 +198,10 @@ export class BuiltInToolExecutor {
     request: BuiltInToolRequest,
   ): Promise<BuiltInToolResult> {
     switch (request.toolName) {
+      case "file.search":
+        return this.#searchFiles(request);
+      case "file.read_many":
+        return this.#readManyFiles(request);
       case "file.read":
         return this.#readFile(request);
       case "file.write":
@@ -216,6 +237,70 @@ export class BuiltInToolExecutor {
       byteLength: fileContents.byteLength,
       content: fileContents.toString("utf8"),
       path: guardedPath.path,
+      toolName: request.toolName,
+    };
+  }
+
+  async #readManyFiles(
+    request: Extract<BuiltInToolRequest, { toolName: "file.read_many" }>,
+  ): Promise<FileReadManyToolResult> {
+    if (!Array.isArray(request.paths) || request.paths.length === 0) {
+      throw new BuiltInToolInputError(
+        request.toolName,
+        "Expected `paths` to be a non-empty array of relative file paths.",
+      );
+    }
+
+    if (request.paths.length > MAX_FILE_READ_MANY_PATHS) {
+      throw new BuiltInToolInputError(
+        request.toolName,
+        `Expected at most ${MAX_FILE_READ_MANY_PATHS} paths.`,
+      );
+    }
+
+    const files: FileReadManyToolResult["files"] = [];
+    let hiddenPathCount = 0;
+    let remainingChars = MAX_FILE_READ_MANY_TOTAL_CHARS;
+
+    for (const requestedPath of request.paths) {
+      const guardedPath = await resolveReadableToolPath(
+        request.toolName,
+        requestedPath,
+        this.#paths,
+      );
+      const fileContents = await this.#readExistingFile(
+        request.toolName,
+        guardedPath.absolutePath,
+        guardedPath.path,
+      );
+
+      if (remainingChars <= 0) {
+        hiddenPathCount += 1;
+        continue;
+      }
+
+      const content = fileContents.toString("utf8");
+      const visibleCharCount = Math.min(
+        content.length,
+        MAX_FILE_READ_MANY_CHARS_PER_FILE,
+        remainingChars,
+      );
+
+      files.push({
+        byteLength: fileContents.byteLength,
+        content: content.slice(0, visibleCharCount),
+        path: guardedPath.path,
+        ...(visibleCharCount < content.length
+          ? { truncatedCharCount: content.length - visibleCharCount }
+          : {}),
+      });
+      remainingChars -= visibleCharCount;
+    }
+
+    return {
+      files,
+      ...(hiddenPathCount === 0 ? {} : { hiddenPathCount }),
+      requestedPathCount: request.paths.length,
       toolName: request.toolName,
     };
   }
@@ -305,6 +390,100 @@ export class BuiltInToolExecutor {
     return {
       entries,
       path: guardedPath.path,
+      toolName: request.toolName,
+    };
+  }
+
+  async #searchFiles(
+    request: Extract<BuiltInToolRequest, { toolName: "file.search" }>,
+  ): Promise<FileSearchToolResult> {
+    if (
+      typeof request.query !== "string" ||
+      request.query.trim().length === 0
+    ) {
+      throw new BuiltInToolInputError(
+        request.toolName,
+        "Expected `query` to be a non-empty string.",
+      );
+    }
+
+    if (
+      request.limit !== undefined &&
+      (!Number.isInteger(request.limit) ||
+        request.limit <= 0 ||
+        request.limit > MAX_FILE_SEARCH_LIMIT)
+    ) {
+      throw new BuiltInToolInputError(
+        request.toolName,
+        `Expected \`limit\` to be an integer between 1 and ${MAX_FILE_SEARCH_LIMIT}.`,
+      );
+    }
+
+    const guardedPath = await resolveReadableToolPath(
+      request.toolName,
+      request.path ?? ".",
+      this.#paths,
+    );
+    const targetStats = await this.#statExistingPath(
+      request.toolName,
+      guardedPath.absolutePath,
+      guardedPath.path,
+    );
+    const searchableFiles = targetStats.isDirectory()
+      ? await this.#collectSearchableFiles(
+          guardedPath.absolutePath,
+          guardedPath.path,
+        )
+      : [{ absolutePath: guardedPath.absolutePath, path: guardedPath.path }];
+    const matchingResults: FileSearchToolResult["results"] = [];
+    let searchedFileCount = 0;
+    let skippedFileCount = 0;
+
+    for (const file of searchableFiles) {
+      const fileStats = await this.#statExistingPath(
+        request.toolName,
+        file.absolutePath,
+        file.path,
+      );
+
+      if (!fileStats.isFile()) {
+        continue;
+      }
+
+      if (fileStats.size > MAX_FILE_SEARCH_FILE_BYTES) {
+        skippedFileCount += 1;
+        continue;
+      }
+
+      const fileContents = await this.#readExistingFile(
+        request.toolName,
+        file.absolutePath,
+        file.path,
+      );
+      const searchEntry = findMatchesInFile(
+        file.path,
+        fileContents,
+        request.query,
+      );
+      searchedFileCount += 1;
+
+      if (searchEntry !== undefined) {
+        matchingResults.push(searchEntry);
+      }
+    }
+
+    const limit = request.limit ?? MAX_FILE_SEARCH_DEFAULT_LIMIT;
+    const rankedResults = matchingResults.sort(compareFileSearchResults);
+    const visibleResults = rankedResults.slice(0, limit);
+    const hiddenResultCount = rankedResults.length - visibleResults.length;
+
+    return {
+      ...(hiddenResultCount === 0 ? {} : { hiddenResultCount }),
+      path: guardedPath.path,
+      query: request.query,
+      results: visibleResults,
+      searchedFileCount,
+      ...(skippedFileCount === 0 ? {} : { skippedFileCount }),
       toolName: request.toolName,
     };
   }
@@ -562,6 +741,59 @@ export class BuiltInToolExecutor {
       );
     }
   }
+
+  async #collectSearchableFiles(
+    absolutePath: string,
+    relativePath: string,
+  ): Promise<Array<{ absolutePath: string; path: string }>> {
+    const files: Array<{ absolutePath: string; path: string }> = [];
+    const pending = [{ absolutePath, path: relativePath }];
+    const allowLowValuePaths = isLowValueSearchPath(relativePath);
+
+    while (pending.length > 0) {
+      const current = pending.pop() as { absolutePath: string; path: string };
+      const directoryEntries = await readdir(current.absolutePath, {
+        withFileTypes: true,
+      });
+
+      directoryEntries.sort((left, right) =>
+        left.name.localeCompare(right.name, "en", { sensitivity: "base" }),
+      );
+
+      for (const entry of directoryEntries) {
+        const entryAbsolutePath = path.join(current.absolutePath, entry.name);
+        const entryRelativePath = toPortableRelativePath(
+          this.#paths.projectRoot,
+          entryAbsolutePath,
+        );
+
+        if (entry.isSymbolicLink()) {
+          continue;
+        }
+
+        if (entry.isDirectory()) {
+          if (!allowLowValuePaths && isLowValueSearchPath(entryRelativePath)) {
+            continue;
+          }
+
+          pending.push({
+            absolutePath: entryAbsolutePath,
+            path: entryRelativePath,
+          });
+          continue;
+        }
+
+        if (entry.isFile()) {
+          files.push({
+            absolutePath: entryAbsolutePath,
+            path: entryRelativePath,
+          });
+        }
+      }
+    }
+
+    return files;
+  }
 }
 
 export function createBuiltInToolExecutor(
@@ -574,6 +806,17 @@ function summarizeToolRequest(
   request: BuiltInToolRequest,
 ): Record<string, JsonValue | undefined> {
   switch (request.toolName) {
+    case "file.search":
+      return {
+        limit: request.limit,
+        path: request.path ?? ".",
+        query: request.query,
+      };
+    case "file.read_many":
+      return {
+        pathCount: request.paths.length,
+        paths: request.paths,
+      };
     case "file.read":
       return {
         path: request.path,
@@ -613,6 +856,28 @@ function summarizeToolResult(
   result: BuiltInToolResult,
 ): Record<string, JsonValue | undefined> {
   switch (result.toolName) {
+    case "file.search":
+      return {
+        hiddenResultCount: result.hiddenResultCount,
+        path: result.path,
+        query: result.query,
+        results: result.results.map((entry) => ({
+          matchCount: entry.matchCount,
+          path: entry.path,
+        })),
+        searchedFileCount: result.searchedFileCount,
+        skippedFileCount: result.skippedFileCount,
+      };
+    case "file.read_many":
+      return {
+        files: result.files.map((file) => ({
+          byteLength: file.byteLength,
+          path: file.path,
+          truncatedCharCount: file.truncatedCharCount,
+        })),
+        hiddenPathCount: result.hiddenPathCount,
+        requestedPathCount: result.requestedPathCount,
+      };
     case "file.read":
       return {
         byteLength: result.byteLength,
@@ -673,6 +938,119 @@ function sanitizeCommandEnvironment(
       value === undefined ? null : String(value),
     ]),
   );
+}
+
+function findMatchesInFile(
+  filePath: string,
+  fileContents: Buffer,
+  query: string,
+): FileSearchToolResult["results"][number] | undefined {
+  const text = fileContents.toString("utf8");
+  const lines = text.split(/\r?\n/u);
+  const hits: FileSearchToolResult["results"][number]["hits"] = [];
+  let matchCount = 0;
+
+  for (const [index, line] of lines.entries()) {
+    const lineMatchCount = countOccurrences(line, query);
+
+    if (lineMatchCount === 0) {
+      continue;
+    }
+
+    matchCount += lineMatchCount;
+
+    if (hits.length < MAX_FILE_SEARCH_MATCHES_PER_FILE) {
+      hits.push({
+        line: index + 1,
+        preview: truncatePreview(line, MAX_FILE_SEARCH_LINE_CHARS),
+      });
+    }
+  }
+
+  if (matchCount === 0) {
+    return undefined;
+  }
+
+  return {
+    hits,
+    matchCount,
+    path: filePath,
+  };
+}
+
+function compareFileSearchResults(
+  left: FileSearchToolResult["results"][number],
+  right: FileSearchToolResult["results"][number],
+): number {
+  const rankDifference =
+    getExplorationPathRank(left.path) - getExplorationPathRank(right.path);
+
+  if (rankDifference !== 0) {
+    return rankDifference;
+  }
+
+  if (left.matchCount !== right.matchCount) {
+    return right.matchCount - left.matchCount;
+  }
+
+  const leftFirstLine = left.hits[0]?.line ?? Number.MAX_SAFE_INTEGER;
+  const rightFirstLine = right.hits[0]?.line ?? Number.MAX_SAFE_INTEGER;
+
+  if (leftFirstLine !== rightFirstLine) {
+    return leftFirstLine - rightFirstLine;
+  }
+
+  return left.path.localeCompare(right.path, "en", { sensitivity: "base" });
+}
+
+function countOccurrences(value: string, query: string): number {
+  let count = 0;
+  let startIndex = 0;
+
+  while (true) {
+    const matchIndex = value.indexOf(query, startIndex);
+
+    if (matchIndex === -1) {
+      return count;
+    }
+
+    count += 1;
+    startIndex = matchIndex + Math.max(query.length, 1);
+  }
+}
+
+function truncatePreview(value: string, maxChars: number): string {
+  return value.length <= maxChars ? value : `${value.slice(0, maxChars)}...`;
+}
+
+function isLowValueSearchPath(pathValue: string): boolean {
+  return pathValue
+    .split("/")
+    .some((segment) => LOW_VALUE_SEARCH_PATH_SEGMENTS.has(segment));
+}
+
+function getExplorationPathRank(pathValue: string): number {
+  if (pathValue === "README.md" || pathValue.endsWith("/README.md")) {
+    return 0;
+  }
+
+  if (pathValue === "package.json" || pathValue.endsWith("/package.json")) {
+    return 1;
+  }
+
+  if (pathValue === "docs" || pathValue.startsWith("docs/")) {
+    return 2;
+  }
+
+  if (pathValue === "src" || pathValue.startsWith("src/")) {
+    return 3;
+  }
+
+  if (pathValue === "test" || pathValue.startsWith("test/")) {
+    return 4;
+  }
+
+  return 10;
 }
 
 function normalizeToolError(

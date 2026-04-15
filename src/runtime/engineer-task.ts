@@ -43,8 +43,16 @@ import {
 const DEFAULT_RUN_TIMEOUT_MS = 60 * 60 * 1000;
 const MAX_MODEL_VISIBLE_FILE_READ_CHARS = 4000;
 const MAX_MODEL_VISIBLE_COMMAND_OUTPUT_CHARS = 3000;
+const MAX_MODEL_VISIBLE_FILE_LIST_ENTRIES = 12;
 const MAX_CONSECUTIVE_EXPLORATION_STEPS = 12;
 const MAX_CONSECUTIVE_RETRYABLE_MODEL_ERRORS = 3;
+const MAX_CONSECUTIVE_DUPLICATE_EXPLORATION_STEPS = 2;
+const LOW_VALUE_EXPLORATION_PATH_SEGMENTS = new Set([
+  ".agent-harness",
+  ".git",
+  "dist",
+  "node_modules",
+]);
 
 export type EngineerTaskStopReason =
   | "blocked"
@@ -217,6 +225,9 @@ export async function executeEngineerTask(
           renderEngineerProtocol({
             maxConsecutiveFailedChecks,
             maxIterations,
+            preferNonThinkingMode: shouldPreferNonThinkingMode(
+              options.loadedConfig,
+            ),
             requiredCheckCommand,
             requirePassingChecks,
             timeoutMs,
@@ -232,7 +243,10 @@ export async function executeEngineerTask(
     const checks: RunCheckResult[] = [...(options.initialChecks ?? [])];
     let consecutiveFailedChecks = options.initialConsecutiveFailedChecks ?? 0;
     let consecutiveExplorationSteps = 0;
+    let consecutiveDuplicateExplorationSteps = 0;
     let consecutiveRetryableModelErrors = 0;
+    const exploredTargets = new Set<string>();
+    const exploredTargetOrder: string[] = [];
     let hasPassingCheck = !requirePassingChecks;
     let iterationCount = 0;
     let outcome: FinalizedOutcome | undefined;
@@ -404,12 +418,26 @@ export async function executeEngineerTask(
 
       if (isExplorationToolRequest(toolRequest)) {
         consecutiveExplorationSteps += 1;
+        const explorationTarget = getExplorationTarget(toolRequest);
+
+        if (explorationTarget !== undefined) {
+          if (exploredTargets.has(explorationTarget)) {
+            consecutiveDuplicateExplorationSteps += 1;
+          } else {
+            consecutiveDuplicateExplorationSteps = 0;
+            exploredTargets.add(explorationTarget);
+            exploredTargetOrder.push(explorationTarget);
+          }
+        }
       } else {
         consecutiveExplorationSteps = 0;
+        consecutiveDuplicateExplorationSteps = 0;
       }
 
       const guidance = createPostToolGuidance({
+        consecutiveDuplicateExplorationSteps,
         consecutiveExplorationSteps,
+        exploredTargetOrder,
         requiredCheckCommand,
         toolFeedback,
         toolRequest,
@@ -725,9 +753,20 @@ function summarizeToolRequestForEvent(
         command: request.command,
         toolName: request.toolName,
       };
+    case "file.search":
+      return {
+        path: request.path ?? ".",
+        query: request.query,
+        toolName: request.toolName,
+      };
     case "file.list":
       return {
         path: request.path ?? ".",
+        toolName: request.toolName,
+      };
+    case "file.read_many":
+      return {
+        paths: request.paths.join(", "),
         toolName: request.toolName,
       };
     case "file.read":
@@ -830,6 +869,17 @@ function renderToolFeedbackForModel(feedback: ToolFeedback): string {
   }
 
   switch (feedback.result.toolName) {
+    case "file.search":
+    case "file.read_many":
+    case "file.list":
+      return JSON.stringify({
+        ok: true,
+        result:
+          feedback.result.toolName === "file.list"
+            ? summarizeFileListForModel(feedback.result)
+            : feedback.result,
+        toolName: feedback.toolName,
+      });
     case "file.read":
       return JSON.stringify({
         ok: true,
@@ -877,6 +927,8 @@ function truncateWithNotice(value: string, maxChars: number): string {
 
 function isExplorationToolRequest(request: ToolRequest): boolean {
   return (
+    request.toolName === "file.search" ||
+    request.toolName === "file.read_many" ||
     request.toolName === "file.list" ||
     request.toolName === "file.read" ||
     request.toolName === "git.diff" ||
@@ -885,7 +937,9 @@ function isExplorationToolRequest(request: ToolRequest): boolean {
 }
 
 function createPostToolGuidance(options: {
+  consecutiveDuplicateExplorationSteps: number;
   consecutiveExplorationSteps: number;
+  exploredTargetOrder: string[];
   requiredCheckCommand: string;
   toolFeedback: ToolFeedback;
   toolRequest: ToolRequest;
@@ -901,7 +955,29 @@ function createPostToolGuidance(options: {
     ].join(" ");
   }
 
-  if (options.consecutiveExplorationSteps >= MAX_CONSECUTIVE_EXPLORATION_STEPS) {
+  if (
+    options.consecutiveDuplicateExplorationSteps >=
+    MAX_CONSECUTIVE_DUPLICATE_EXPLORATION_STEPS
+  ) {
+    const exploredTargets =
+      options.exploredTargetOrder.length === 0
+        ? "the current workspace"
+        : formatList(
+            options.exploredTargetOrder
+              .slice(-6)
+              .map((target) => `\`${target}\``),
+          );
+
+    return [
+      `You are repeating exploration on files or directories you already inspected: ${exploredTargets}.`,
+      "Do not reread the same file or relist the same directory again right now.",
+      "Choose one inspected file for the smallest reasonable change, or run the required check if the work is already done.",
+    ].join(" ");
+  }
+
+  if (
+    options.consecutiveExplorationSteps >= MAX_CONSECUTIVE_EXPLORATION_STEPS
+  ) {
     return [
       `You have spent ${options.consecutiveExplorationSteps} consecutive steps exploring without editing files or running \`${options.requiredCheckCommand}\`.`,
       "Stop broad exploration.",
@@ -927,7 +1003,7 @@ function createRetryableModelErrorGuidance(options: {
     "Return exactly one JSON object matching the schema and nothing else.",
     "Use only one tool request or one final action.",
     "Match the chosen tool's exact request shape and omit extra fields.",
-    "For example, only `file.read`, `file.write`, and `file.list` may include `path`.",
+    "For example, `file.read`, `file.write`, `file.list`, and `file.search` may include `path`, while `file.read_many` uses `paths`.",
     `If the work is already done, run \`${options.requiredCheckCommand}\` or return a valid \`final\` action after a passing check is recorded.`,
   ].join(" ");
 }
@@ -1099,6 +1175,7 @@ function renderEngineerTaskBrief(options: {
 function renderEngineerProtocol(options: {
   maxConsecutiveFailedChecks: number;
   maxIterations: number;
+  preferNonThinkingMode: boolean;
   requiredCheckCommand: string;
   requirePassingChecks: boolean;
   timeoutMs: number;
@@ -1114,6 +1191,15 @@ function renderEngineerProtocol(options: {
     `- Passing checks required: ${options.requirePassingChecks ? "yes" : "no"}.`,
     "- Built-in tool names always route to built-in tools. MCP is only available through `mcp.call`.",
     "- Keep tool use explicit and auditable.",
+    ...(options.preferNonThinkingMode
+      ? [
+          "- Stay in non-thinking mode. Do not emit `<think>` blocks, hidden reasoning, or extra analysis outside the required JSON action.",
+        ]
+      : []),
+    "- Ignore `.agent-harness`, `.git`, `node_modules`, and other generated or vendor paths unless the task explicitly depends on them.",
+    "- Explore search-first: prefer `file.search` to locate symbols, strings, and likely files before using `file.list`.",
+    "- Once search yields a few candidates, prefer `file.read_many` for a small batch snapshot instead of repeated one-file reads.",
+    "- When you need initial context, prefer `README.md`, `package.json`, `docs/`, `src/`, and `test/` over broad root relisting.",
     "- Prefer converging quickly: after a few discovery steps, choose one concrete file and make the smallest reasonable change.",
     "- Do not reread the same file or relist the same directory unless the state changed or you need one specific missing detail.",
     "- If a path does not exist or a tool fails, adapt to that error instead of retrying the same invalid request.",
@@ -1125,14 +1211,28 @@ function formatIterationLimit(maxIterations: number): string {
   return Number.isFinite(maxIterations) ? `${maxIterations}` : "no fixed limit";
 }
 
+function shouldPreferNonThinkingMode(
+  loadedConfig: LoadedHarnessConfig,
+): boolean {
+  return /qwen/i.test(loadedConfig.config.models.engineer.model);
+}
+
 function renderBuiltInToolsMarkdown(): string {
   return [
+    "### `file.search`",
+    "- Search file contents within a file or directory tree using a literal query. Prefer this over directory walking when you know what text you need.",
+    '- Request shape: `{ "toolName": "file.search", "query": "createToolRouter", "path": "src", "limit": 8 }`',
+    "",
+    "### `file.read_many`",
+    "- Read a few likely-relevant small files in one step. Prefer this over repeated `file.read` calls once search narrows the candidates.",
+    '- Request shape: `{ "toolName": "file.read_many", "paths": ["src/example.ts", "test/example.test.ts"] }`',
+    "",
     "### `file.list`",
-    "- List directory entries.",
+    "- List directory entries when structure matters. Do not use directory listing as a stand-in for text search.",
     '- Request shape: `{ "toolName": "file.list", "path": "." }`',
     "",
     "### `file.read`",
-    "- Read a file from the workspace.",
+    "- Read one specific file from the workspace after search or listing identifies it.",
     '- Request shape: `{ "toolName": "file.read", "path": "src/example.ts" }`',
     "",
     "### `file.write`",
@@ -1151,6 +1251,86 @@ function renderBuiltInToolsMarkdown(): string {
     "- Capture the current patch.",
     '- Request shape: `{ "toolName": "git.diff", "staged": false }`',
   ].join("\n");
+}
+
+function getExplorationTarget(request: ToolRequest): string | undefined {
+  switch (request.toolName) {
+    case "file.search":
+      return `${request.path ?? "."}:${request.query}`;
+    case "file.read_many":
+      return request.paths.join(",");
+    case "file.list":
+      return request.path ?? ".";
+    case "file.read":
+      return request.path;
+    case "git.diff":
+    case "git.status":
+      return request.toolName;
+    default:
+      return undefined;
+  }
+}
+
+function summarizeFileListForModel(
+  result: Extract<ToolResult, { toolName: "file.list" }>,
+): {
+  entries: typeof result.entries;
+  hiddenEntryCount?: number | undefined;
+  path: string;
+  toolName: "file.list";
+} {
+  const shouldFilterLowValueEntries = !isLowValueExplorationPath(result.path);
+  const candidateEntries = shouldFilterLowValueEntries
+    ? result.entries.filter((entry) => !isLowValueExplorationPath(entry.path))
+    : result.entries;
+  const filteredEntries =
+    candidateEntries.length === 0 ? result.entries : candidateEntries;
+  const rankedEntries = [...filteredEntries].sort((left, right) => {
+    const rankingDifference =
+      getModelVisibleEntryRank(left.path) -
+      getModelVisibleEntryRank(right.path);
+
+    if (rankingDifference !== 0) {
+      return rankingDifference;
+    }
+
+    return left.path.localeCompare(right.path, "en", { sensitivity: "base" });
+  });
+  const visibleEntries = rankedEntries.slice(
+    0,
+    MAX_MODEL_VISIBLE_FILE_LIST_ENTRIES,
+  );
+  const hiddenEntryCount = result.entries.length - visibleEntries.length;
+
+  return {
+    entries: visibleEntries,
+    ...(hiddenEntryCount <= 0 ? {} : { hiddenEntryCount }),
+    path: result.path,
+    toolName: result.toolName,
+  };
+}
+
+function isLowValueExplorationPath(pathValue: string): boolean {
+  return pathValue
+    .split("/")
+    .some((segment) => LOW_VALUE_EXPLORATION_PATH_SEGMENTS.has(segment));
+}
+
+function getModelVisibleEntryRank(pathValue: string): number {
+  switch (pathValue) {
+    case "README.md":
+      return 0;
+    case "package.json":
+      return 1;
+    case "docs":
+      return 2;
+    case "src":
+      return 3;
+    case "test":
+      return 4;
+    default:
+      return 10;
+  }
 }
 
 function renderMcpToolsMarkdown(toolCatalog: ToolCatalog): string {

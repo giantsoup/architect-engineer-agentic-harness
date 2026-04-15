@@ -47,7 +47,9 @@ const schemaCache = new Map<string, Promise<Record<string, unknown>>>();
 const SUPPORTED_TOOL_NAMES = new Set([
   "command.execute",
   "file.list",
+  "file.read_many",
   "file.read",
+  "file.search",
   "file.write",
   "git.diff",
   "git.status",
@@ -244,6 +246,51 @@ function validateToolRequest(
   }
 
   switch (toolName) {
+    case "file.search":
+      pushUnexpectedProperties(
+        path,
+        value,
+        new Set(["limit", "path", "query", "toolName"]),
+        issues,
+      );
+      validateNonEmptyString(value.query, `${path}.query`, issues);
+
+      if (value.path !== undefined) {
+        validateNonEmptyString(value.path, `${path}.path`, issues);
+      }
+
+      if (
+        value.limit !== undefined &&
+        (typeof value.limit !== "number" ||
+          !Number.isInteger(value.limit) ||
+          value.limit <= 0 ||
+          value.limit > 20)
+      ) {
+        issues.push(`${path}.limit: Expected an integer between 1 and 20.`);
+      }
+
+      return;
+    case "file.read_many":
+      pushUnexpectedProperties(
+        path,
+        value,
+        new Set(["paths", "toolName"]),
+        issues,
+      );
+
+      if (!Array.isArray(value.paths) || value.paths.length === 0) {
+        issues.push(
+          `${path}.paths: Expected a non-empty array of relative file paths.`,
+        );
+      } else if (value.paths.length > 8) {
+        issues.push(`${path}.paths: Expected at most 8 file paths.`);
+      } else {
+        for (const [index, item] of value.paths.entries()) {
+          validateNonEmptyString(item, `${path}.paths[${index}]`, issues);
+        }
+      }
+
+      return;
     case "file.read":
       pushUnexpectedProperties(
         path,

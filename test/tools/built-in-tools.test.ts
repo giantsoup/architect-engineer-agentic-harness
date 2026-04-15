@@ -261,6 +261,38 @@ describe("BuiltInToolExecutor", () => {
           },
         ),
       ).rejects.toBeInstanceOf(BuiltInToolPathError);
+
+      await expect(
+        executor.execute(
+          { role: "engineer" },
+          {
+            toolName: "file.read_many",
+            paths: ["../escape.txt"],
+          },
+        ),
+      ).rejects.toBeInstanceOf(BuiltInToolPathError);
+
+      await expect(
+        executor.execute(
+          { role: "engineer" },
+          {
+            path: "../",
+            query: "escape",
+            toolName: "file.search",
+          },
+        ),
+      ).rejects.toBeInstanceOf(BuiltInToolPathError);
+
+      await expect(
+        executor.execute(
+          { role: "engineer" },
+          {
+            path: "linked-out",
+            query: "escape",
+            toolName: "file.search",
+          },
+        ),
+      ).rejects.toBeInstanceOf(BuiltInToolPathError);
     } finally {
       executor.close();
     }
@@ -322,6 +354,128 @@ describe("BuiltInToolExecutor", () => {
         ],
         path: "docs",
         toolName: "file.list",
+      });
+    } finally {
+      executor.close();
+    }
+  });
+
+  it("returns ranked search results and truncated multi-file snapshots", async () => {
+    const loadedConfig = await createInitializedProject();
+    createdPaths.push(loadedConfig.projectRoot);
+    const workspaceDirectory = path.join(loadedConfig.projectRoot, "workspace");
+
+    mkdirSync(path.join(workspaceDirectory, "src"), { recursive: true });
+    mkdirSync(path.join(workspaceDirectory, "test"), { recursive: true });
+    mkdirSync(path.join(workspaceDirectory, "node_modules"), {
+      recursive: true,
+    });
+
+    writeFileSync(
+      path.join(workspaceDirectory, "README.md"),
+      "Use createToolRouter here.\n",
+      "utf8",
+    );
+    writeFileSync(
+      path.join(workspaceDirectory, "src", "router.ts"),
+      [
+        "export function createToolRouter() {",
+        "  return createToolRouter;",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    writeFileSync(
+      path.join(workspaceDirectory, "test", "router.test.ts"),
+      "it('covers createToolRouter', () => {})\n",
+      "utf8",
+    );
+    writeFileSync(
+      path.join(workspaceDirectory, "node_modules", "ignored.js"),
+      "createToolRouter\n",
+      "utf8",
+    );
+
+    const longFilePaths = ["a.ts", "b.ts", "c.ts", "d.ts"].map((fileName) =>
+      path.join(workspaceDirectory, "src", fileName),
+    );
+
+    for (const longFilePath of longFilePaths) {
+      writeFileSync(longFilePath, `${"x".repeat(2500)}\n`, "utf8");
+    }
+
+    const executor = createBuiltInToolExecutor({ loadedConfig });
+
+    try {
+      const searchResult = await executor.execute(
+        { role: "engineer" },
+        {
+          limit: 2,
+          path: "workspace",
+          query: "createToolRouter",
+          toolName: "file.search",
+        },
+      );
+      const readManyResult = await executor.execute(
+        { role: "engineer" },
+        {
+          paths: longFilePaths.map((filePath) =>
+            path
+              .relative(loadedConfig.projectRoot, filePath)
+              .split(path.sep)
+              .join("/"),
+          ),
+          toolName: "file.read_many",
+        },
+      );
+
+      expect(searchResult).toEqual({
+        hiddenResultCount: 1,
+        path: "workspace",
+        query: "createToolRouter",
+        results: [
+          {
+            hits: [{ line: 1, preview: "Use createToolRouter here." }],
+            matchCount: 1,
+            path: "workspace/README.md",
+          },
+          {
+            hits: [
+              { line: 1, preview: "export function createToolRouter() {" },
+              { line: 2, preview: "  return createToolRouter;" },
+            ],
+            matchCount: 2,
+            path: "workspace/src/router.ts",
+          },
+        ],
+        searchedFileCount: 7,
+        toolName: "file.search",
+      });
+      expect(readManyResult).toEqual({
+        files: [
+          {
+            byteLength: Buffer.byteLength(`${"x".repeat(2500)}\n`, "utf8"),
+            content: "x".repeat(2000),
+            path: "workspace/src/a.ts",
+            truncatedCharCount: 501,
+          },
+          {
+            byteLength: Buffer.byteLength(`${"x".repeat(2500)}\n`, "utf8"),
+            content: "x".repeat(2000),
+            path: "workspace/src/b.ts",
+            truncatedCharCount: 501,
+          },
+          {
+            byteLength: Buffer.byteLength(`${"x".repeat(2500)}\n`, "utf8"),
+            content: "x".repeat(2000),
+            path: "workspace/src/c.ts",
+            truncatedCharCount: 501,
+          },
+        ],
+        hiddenPathCount: 1,
+        requestedPathCount: 4,
+        toolName: "file.read_many",
       });
     } finally {
       executor.close();

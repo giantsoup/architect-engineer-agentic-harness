@@ -125,9 +125,7 @@ export function formatInitializeProjectSummary(
       ? ["- Commands: none detected automatically"]
       : [
           "- Commands:",
-          ...resolvedCommands.map(
-            ([name, command]) => `  ${name}: ${command}`,
-          ),
+          ...resolvedCommands.map(([name, command]) => `  ${name}: ${command}`),
         ]),
     "",
     "Next steps",

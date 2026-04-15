@@ -371,7 +371,9 @@ export class OpenAiCompatibleChatClient {
     request: ModelChatRequest<TStructured>,
     useNativeStructuredOutput: boolean,
   ): Array<Record<string, string>> {
-    const messages = request.messages.map((message) => toOpenAiMessage(message));
+    const messages = request.messages.map((message) =>
+      toOpenAiMessage(message),
+    );
 
     if (!useNativeStructuredOutput && request.structuredOutput !== undefined) {
       messages.push({
@@ -464,13 +466,13 @@ export class OpenAiCompatibleChatClient {
       const issues =
         lastValidationError instanceof Error && "issues" in lastValidationError
           ? ((lastValidationError as { issues?: readonly string[] }).issues ??
-              undefined)
+            undefined)
           : undefined;
       const schemaPath =
         lastValidationError instanceof Error &&
         "schemaPath" in lastValidationError
           ? ((lastValidationError as { schemaPath?: string }).schemaPath ??
-              undefined)
+            undefined)
           : undefined;
       const retryable = isRetryableStructuredOutputFailure({
         candidateCount: candidateJsonSnippets.length,
@@ -603,10 +605,7 @@ function normalizeOpenAiMessageRole(role: ModelChatMessage["role"]): string {
 function renderToolResultMessage(message: ModelChatMessage): string {
   const toolLabel = message.name === undefined ? "tool" : message.name;
 
-  return [
-    `Tool result for ${toolLabel}:`,
-    message.content,
-  ].join("\n");
+  return [`Tool result for ${toolLabel}:`, message.content].join("\n");
 }
 
 function extractAssistantContent(
@@ -789,7 +788,9 @@ function collectStructuredOutputCandidates(rawContent: string): string[] {
   const fencedJson = extractJsonCodeFence(trimmedContent);
   addCandidate(fencedJson);
 
-  for (const candidate of extractLikelyStructuredObjectCandidates(trimmedContent)) {
+  for (const candidate of extractLikelyStructuredObjectCandidates(
+    trimmedContent,
+  )) {
     addCandidate(candidate);
   }
 
@@ -798,7 +799,9 @@ function collectStructuredOutputCandidates(rawContent: string): string[] {
   }
 
   if (fencedJson !== undefined) {
-    for (const candidate of extractLikelyStructuredObjectCandidates(fencedJson)) {
+    for (const candidate of extractLikelyStructuredObjectCandidates(
+      fencedJson,
+    )) {
       addCandidate(candidate);
     }
 
@@ -985,6 +988,18 @@ function normalizeEngineerToolRequest(value: unknown): unknown {
   }
 
   switch (value.toolName) {
+    case "file.search":
+      return {
+        ...(value.limit === undefined ? {} : { limit: value.limit }),
+        ...(value.path === undefined ? {} : { path: value.path }),
+        query: value.query,
+        toolName: value.toolName,
+      };
+    case "file.read_many":
+      return {
+        paths: value.paths,
+        toolName: value.toolName,
+      };
     case "file.read":
       return {
         path: value.path,
@@ -1010,7 +1025,9 @@ function normalizeEngineerToolRequest(value: unknown): unknown {
         ...(value.environment === undefined
           ? {}
           : { environment: value.environment }),
-        ...(value.timeoutMs === undefined ? {} : { timeoutMs: value.timeoutMs }),
+        ...(value.timeoutMs === undefined
+          ? {}
+          : { timeoutMs: value.timeoutMs }),
         toolName: value.toolName,
         ...(value.workingDirectory === undefined
           ? {}
@@ -1027,7 +1044,9 @@ function normalizeEngineerToolRequest(value: unknown): unknown {
       };
     case "mcp.call":
       return {
-        ...(value.arguments === undefined ? {} : { arguments: value.arguments }),
+        ...(value.arguments === undefined
+          ? {}
+          : { arguments: value.arguments }),
         name: value.name,
         server: value.server,
         toolName: value.toolName,

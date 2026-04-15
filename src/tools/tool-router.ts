@@ -42,6 +42,8 @@ import type {
 
 const BUILT_IN_TOOL_NAMES: BuiltInToolName[] = [
   "command.execute",
+  "file.search",
+  "file.read_many",
   "file.list",
   "file.read",
   "file.write",

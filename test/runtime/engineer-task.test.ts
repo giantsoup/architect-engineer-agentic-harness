@@ -101,6 +101,7 @@ async function startMockServer(
 
 async function createLoadedConfig(options: {
   engineerBaseUrl: string;
+  engineerModel?: string;
   mcpBlock?: string;
   projectRoot: string;
   stopConditions?: {
@@ -115,6 +116,10 @@ async function createLoadedConfig(options: {
     .replace(
       'baseUrl = "http://127.0.0.1:8080/v1"',
       `baseUrl = ${JSON.stringify(options.engineerBaseUrl)}`,
+    )
+    .replace(
+      'model = "replace-with-your-engineer-model"',
+      `model = ${JSON.stringify(options.engineerModel ?? "replace-with-your-engineer-model")}`,
     )
     .replace("maxEngineerAttempts = 5", () => {
       const value = options.stopConditions?.maxEngineerAttempts ?? 5;
@@ -948,6 +953,14 @@ args = ["repo-mcp.js"]`,
     const projectRoot = createTempProject();
     projectRoots.push(projectRoot);
     initializeGitRepository(projectRoot);
+    const explorationDirectories = Array.from(
+      { length: 12 },
+      (_value, index) => `step-${index + 1}`,
+    );
+
+    for (const directoryName of explorationDirectories) {
+      mkdirSync(path.join(projectRoot, directoryName), { recursive: true });
+    }
 
     const loadedConfig = await createLoadedConfig({
       engineerBaseUrl: "http://127.0.0.1:65535/v1",
@@ -957,9 +970,9 @@ args = ["repo-mcp.js"]`,
       },
     });
     const outputs = [
-      ...Array.from({ length: 12 }, (_, index) => ({
-        request: { path: ".", toolName: "file.list" as const },
-        summary: `Explore step ${index + 1}`,
+      ...explorationDirectories.map((directoryName, index) => ({
+        request: { path: directoryName, toolName: "file.list" as const },
+        summary: `Explore ${directoryName} (${index + 1})`,
         type: "tool" as const,
       })),
       {
@@ -985,6 +998,53 @@ args = ["repo-mcp.js"]`,
         (message) =>
           message.role === "user" &&
           message.content.includes("Stop broad exploration."),
+      ),
+    ).toBe(true);
+  });
+
+  it("adds a duplicate-exploration reminder after repeated reads of the same target", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: "http://127.0.0.1:65535/v1",
+      projectRoot,
+      stopConditions: {
+        maxIterations: 10,
+      },
+    });
+    const outputs = [
+      ...Array.from({ length: 3 }, () => ({
+        request: { path: ".", toolName: "file.list" as const },
+        summary: "Repeat root listing",
+        type: "tool" as const,
+      })),
+      {
+        blockers: ["stop after duplicate reminder"],
+        outcome: "blocked" as const,
+        summary: "Blocked after duplicate reminder",
+        type: "final" as const,
+      },
+    ];
+    const { client, requests } = createCapturingModelClient(outputs);
+
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      modelClient: client,
+      persistFinalArtifacts: false,
+      task: "Find one tiny improvement.",
+    });
+
+    expect(execution.stopReason).toBe("blocked");
+    expect(requests).toHaveLength(4);
+    expect(
+      requests[3]?.messages.some(
+        (message) =>
+          message.role === "user" &&
+          message.content.includes(
+            "You are repeating exploration on files or directories you already inspected",
+          ),
       ),
     ).toBe(true);
   });
@@ -1032,6 +1092,142 @@ args = ["repo-mcp.js"]`,
 
     expect(toolMessage?.content).toContain("[truncated ");
     expect(toolMessage?.content.length).toBeLessThan(6000);
+  });
+
+  it("filters noisy root directory entries before feeding file lists back to the engineer model", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+
+    mkdirSync(path.join(projectRoot, "node_modules"), { recursive: true });
+    mkdirSync(path.join(projectRoot, "src"), { recursive: true });
+    writeFileSync(path.join(projectRoot, "README.md"), "# Test Repo\n", "utf8");
+    writeFileSync(
+      path.join(projectRoot, "package.json"),
+      '{"name":"test-repo"}\n',
+      "utf8",
+    );
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: "http://127.0.0.1:65535/v1",
+      projectRoot,
+    });
+    const outputs = [
+      {
+        request: { path: ".", toolName: "file.list" as const },
+        summary: "List repo root",
+        type: "tool" as const,
+      },
+      {
+        blockers: ["stop after list"],
+        outcome: "blocked" as const,
+        summary: "Blocked after list",
+        type: "final" as const,
+      },
+    ];
+    const { client, requests } = createCapturingModelClient(outputs);
+
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      modelClient: client,
+      persistFinalArtifacts: false,
+      task: "Inspect the repo root and stop.",
+    });
+
+    expect(execution.stopReason).toBe("blocked");
+
+    const toolMessage = requests[1]?.messages.find(
+      (message) => message.role === "tool" && message.name === "file.list",
+    );
+
+    expect(toolMessage?.content).toContain('"path":"."');
+    expect(toolMessage?.content).toContain("README.md");
+    expect(toolMessage?.content).not.toContain("node_modules");
+    expect(toolMessage?.content).not.toContain(".agent-harness");
+  });
+
+  it("advertises search-first exploration and batch reads in the engineer prompt", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: "http://127.0.0.1:65535/v1",
+      projectRoot,
+    });
+    const { client, requests } = createCapturingModelClient([
+      {
+        blockers: ["stop immediately"],
+        outcome: "blocked" as const,
+        summary: "Blocked immediately",
+        type: "final" as const,
+      },
+    ]);
+
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      modelClient: client,
+      persistFinalArtifacts: false,
+      task: "Stop immediately.",
+    });
+
+    expect(execution.stopReason).toBe("blocked");
+    expect(
+      requests[0]?.messages.some(
+        (message) =>
+          message.role === "developer" &&
+          message.content.includes(
+            "Explore search-first: prefer `file.search`",
+          ),
+      ),
+    ).toBe(true);
+    expect(
+      requests[0]?.messages.some(
+        (message) =>
+          message.role === "user" &&
+          message.content.includes("### `file.search`") &&
+          message.content.includes("### `file.read_many`") &&
+          message.content.includes(
+            "Do not use directory listing as a stand-in for text search.",
+          ),
+      ),
+    ).toBe(true);
+  });
+
+  it("adds non-thinking guidance for qwen engineer models", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: "http://127.0.0.1:65535/v1",
+      engineerModel: "qwen3-coder-next",
+      projectRoot,
+    });
+    const { client, requests } = createCapturingModelClient([
+      {
+        blockers: ["stop immediately"],
+        outcome: "blocked" as const,
+        summary: "Blocked immediately",
+        type: "final" as const,
+      },
+    ]);
+
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      modelClient: client,
+      persistFinalArtifacts: false,
+      task: "Stop immediately.",
+    });
+
+    expect(execution.stopReason).toBe("blocked");
+    expect(
+      requests[0]?.messages.some(
+        (message) =>
+          message.role === "developer" &&
+          message.content.includes("Stay in non-thinking mode."),
+      ),
+    ).toBe(true);
   });
 
   it("continues after a retryable Engineer model-format error and accepts the next valid action", async () => {
@@ -1093,7 +1289,9 @@ args = ["repo-mcp.js"]`,
       requests[1]?.messages.some(
         (message) =>
           message.role === "user" &&
-          message.content.includes("Match the chosen tool's exact request shape"),
+          message.content.includes(
+            "Match the chosen tool's exact request shape",
+          ),
       ),
     ).toBe(true);
   });

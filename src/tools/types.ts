@@ -8,7 +8,9 @@ import type { JsonValue } from "../types/run.js";
 export type BuiltInToolName =
   | "command.execute"
   | "file.list"
+  | "file.read_many"
   | "file.read"
+  | "file.search"
   | "file.write"
   | "git.diff"
   | "git.status";
@@ -23,6 +25,25 @@ export interface FileReadToolResult {
   content: string;
   path: string;
   toolName: "file.read";
+}
+
+export interface FileReadManyToolRequest {
+  paths: string[];
+  toolName: "file.read_many";
+}
+
+export interface FileReadManyToolResultEntry {
+  byteLength: number;
+  content: string;
+  path: string;
+  truncatedCharCount?: number | undefined;
+}
+
+export interface FileReadManyToolResult {
+  files: FileReadManyToolResultEntry[];
+  hiddenPathCount?: number | undefined;
+  requestedPathCount: number;
+  toolName: "file.read_many";
 }
 
 export interface FileWriteToolRequest {
@@ -53,6 +74,34 @@ export interface FileListToolResult {
   entries: FileListEntry[];
   path: string;
   toolName: "file.list";
+}
+
+export interface FileSearchToolRequest {
+  limit?: number;
+  path?: string;
+  query: string;
+  toolName: "file.search";
+}
+
+export interface FileSearchToolResultHit {
+  line: number;
+  preview: string;
+}
+
+export interface FileSearchToolResultEntry {
+  hits: FileSearchToolResultHit[];
+  matchCount: number;
+  path: string;
+}
+
+export interface FileSearchToolResult {
+  hiddenResultCount?: number | undefined;
+  path: string;
+  query: string;
+  results: FileSearchToolResultEntry[];
+  searchedFileCount: number;
+  skippedFileCount?: number | undefined;
+  toolName: "file.search";
 }
 
 export interface CommandExecutionToolRequest {
@@ -110,7 +159,9 @@ export interface GitDiffToolResult {
 export type BuiltInToolRequest =
   | CommandExecutionToolRequest
   | FileListToolRequest
+  | FileReadManyToolRequest
   | FileReadToolRequest
+  | FileSearchToolRequest
   | FileWriteToolRequest
   | GitDiffToolRequest
   | GitStatusToolRequest;
@@ -118,7 +169,9 @@ export type BuiltInToolRequest =
 export type BuiltInToolResult =
   | CommandExecutionToolResult
   | FileListToolResult
+  | FileReadManyToolResult
   | FileReadToolResult
+  | FileSearchToolResult
   | FileWriteToolResult
   | GitDiffToolResult
   | GitStatusToolResult;

@@ -719,9 +719,20 @@ function summarizeToolRequestForEvent(
         command: request.command,
         toolName: request.toolName,
       };
+    case "file.search":
+      return {
+        path: request.path ?? ".",
+        query: request.query,
+        toolName: request.toolName,
+      };
     case "file.list":
       return {
         path: request.path ?? ".",
+        toolName: request.toolName,
+      };
+    case "file.read_many":
+      return {
+        paths: request.paths.join(", "),
         toolName: request.toolName,
       };
     case "file.read":
@@ -868,6 +879,14 @@ function renderArchitectToolProtocol(
 
 function renderArchitectBuiltInToolsMarkdown(): string {
   return [
+    "### `file.search`",
+    "- Search file contents within a file or directory tree using a literal query.",
+    '- Request shape: `{ "toolName": "file.search", "query": "createToolRouter", "path": "src", "limit": 8 }`',
+    "",
+    "### `file.read_many`",
+    "- Read a few likely-relevant small files in one step.",
+    '- Request shape: `{ "toolName": "file.read_many", "paths": ["src/example.ts", "test/example.test.ts"] }`',
+    "",
     "### `file.list`",
     "- List directory entries.",
     '- Request shape: `{ "toolName": "file.list", "path": "." }`',
