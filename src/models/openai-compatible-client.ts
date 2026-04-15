@@ -515,6 +515,10 @@ export class OpenAiCompatibleChatClient {
     }
 
     const candidateJsonSnippets = collectStructuredOutputCandidates(rawContent);
+    const hasAmbiguousArchitectJson = isAmbiguousArchitectStructuredOutput(
+      structuredOutput.formatName,
+      rawContent,
+    );
     let lastParseError: unknown;
     let lastValidationError: unknown;
 
@@ -529,7 +533,16 @@ export class OpenAiCompatibleChatClient {
       }
 
       try {
-        return await structuredOutput.validate(parsedJson);
+        const validatedOutput = await structuredOutput.validate(parsedJson);
+
+        if (hasAmbiguousArchitectJson) {
+          throw createAmbiguousArchitectStructuredOutputError(
+            this.describeTarget(),
+            structuredOutput.formatName,
+          );
+        }
+
+        return validatedOutput;
       } catch (error) {
         lastValidationError = error;
 
@@ -540,7 +553,17 @@ export class OpenAiCompatibleChatClient {
 
         if (normalizedJson !== parsedJson) {
           try {
-            return await structuredOutput.validate(normalizedJson);
+            const validatedOutput =
+              await structuredOutput.validate(normalizedJson);
+
+            if (hasAmbiguousArchitectJson) {
+              throw createAmbiguousArchitectStructuredOutputError(
+                this.describeTarget(),
+                structuredOutput.formatName,
+              );
+            }
+
+            return validatedOutput;
           } catch (normalizedError) {
             lastValidationError = normalizedError;
           }
@@ -883,6 +906,35 @@ function collectStructuredOutputCandidates(rawContent: string): string[] {
   }
 
   return candidates;
+}
+
+function isAmbiguousArchitectStructuredOutput(
+  formatName: string,
+  rawContent: string,
+): boolean {
+  if (formatName !== "architect_plan" && formatName !== "architect_review") {
+    return false;
+  }
+
+  const topLevelCandidates = extractTopLevelJsonCandidates(rawContent.trim());
+
+  return topLevelCandidates.length > 1;
+}
+
+function createAmbiguousArchitectStructuredOutputError(
+  targetDescription: string,
+  formatName: string,
+): ModelStructuredOutputError {
+  return new ModelStructuredOutputError(
+    `Structured output from ${targetDescription} was ambiguous for ${formatName}.`,
+    {
+      issues: [
+        "Response contained multiple top-level JSON objects. Return exactly one JSON object and nothing else.",
+      ],
+      retryable: true,
+      schemaName: formatName,
+    },
+  );
 }
 
 function extractTopLevelJsonCandidates(rawContent: string): string[] {

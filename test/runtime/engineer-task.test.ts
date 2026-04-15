@@ -1615,6 +1615,113 @@ describe("executeEngineerTask", () => {
     expect(requests[3]?.tools).toBeUndefined();
   });
 
+  it("uses narrower retry guidance after a failed-check repair edit", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: "http://127.0.0.1:65535/v1",
+      projectRoot,
+    });
+    const sourcePath = path.join(projectRoot, "src", "example.ts");
+    const { client, requests } = createCapturingModelClient([
+      {
+        request: {
+          content: "export const value = 1;\n",
+          path: "src/example.ts",
+          toolName: "file.write" as const,
+        },
+        summary: "Write the initial attempt.",
+        type: "tool" as const,
+      },
+      {
+        request: {
+          accessMode: "mutate",
+          command: "npm run test",
+          toolName: "command.execute" as const,
+        },
+        summary: "Run the required check.",
+        type: "tool" as const,
+      },
+      {
+        request: {
+          content: "export const value = 2;\n",
+          path: "src/example.ts",
+          toolName: "file.write" as const,
+        },
+        summary: "Apply the smallest repair.",
+        type: "tool" as const,
+      },
+      {
+        rawContent:
+          "I fixed `src/example.ts` after the failed check and will now rerun the test.",
+      },
+      {
+        request: {
+          accessMode: "mutate",
+          command: "npm run test",
+          toolName: "command.execute" as const,
+        },
+        stopWhenSuccessful: true,
+        summary: "Run the required check after the repair.",
+        type: "tool" as const,
+      },
+    ]);
+    let engineerCommandCalls = 0;
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        engineerCommandCalls += 1;
+
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 10,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: engineerCommandCalls === 1 ? 1 : 0,
+          role: "engineer",
+          stderr: engineerCommandCalls === 1 ? "tests failed\n" : "",
+          stdout: engineerCommandCalls === 1 ? "" : "tests passed\n",
+          timestamp: "2026-04-15T12:07:00.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      modelClient: client,
+      projectCommandRunner: fakeCommandRunner,
+      task: "Update `src/example.ts` so the exported value becomes `2`.",
+    });
+
+    const retryPrompt =
+      requests[4]?.messages
+        .filter((message) => message.role === "user")
+        .map((message) => String(message.content))
+        .join("\n") ?? "";
+
+    expect(execution.result.status).toBe("success");
+    expect(execution.stopReason).toBe("passing-checks");
+    expect(engineerCommandCalls).toBe(2);
+    expect(readFileSync(sourcePath, "utf8")).toBe("export const value = 2;\n");
+    expect(retryPrompt).toContain(
+      "Since the last failed required check, you already edited `src/example.ts`.",
+    );
+    expect(retryPrompt).toContain(
+      'Your next step should usually be the required check: call exactly one native `command.execute` tool with `command: "npm run test"`.',
+    );
+  });
+
   it("fails fast with a specific stop reason when completion-only mode still gets a tool call", async () => {
     const projectRoot = createTempProject();
     projectRoots.push(projectRoot);

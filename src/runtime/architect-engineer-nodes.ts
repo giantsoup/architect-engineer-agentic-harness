@@ -113,7 +113,7 @@ const MAX_ARCHITECT_VISIBLE_DIFF_CHARS = 3000;
 const MAX_ARCHITECT_VISIBLE_FILE_READ_CHARS = 2500;
 const MAX_ARCHITECT_VISIBLE_MCP_TEXT_CHARS = 2000;
 const MAX_ARCHITECT_TOOL_STEPS = 8;
-const MAX_ARCHITECT_OUTPUT_REPAIRS = 2;
+const MAX_ARCHITECT_OUTPUT_REPAIRS = 4;
 
 export async function prepareArchitectEngineerRunNode(
   state: ArchitectEngineerState,
@@ -383,6 +383,12 @@ export async function architectReviewNode(
       context.loadedConfig,
       workspaceSnapshot,
     ),
+    validateAction: (action) =>
+      validateArchitectReviewApproval({
+        action,
+        loadedConfig: context.loadedConfig,
+        state,
+      }),
   });
 
   if (architectLoop.ok === false) {
@@ -563,6 +569,11 @@ async function runArchitectLoop<TKind extends "plan" | "review">(options: {
   state: ArchitectEngineerState;
   systemPrompt: string;
   userPrompt: string;
+  validateAction?: (
+    action: TKind extends "plan"
+      ? ArchitectPlanAction | ArchitectToolAction
+      : ArchitectReviewAction | ArchitectToolAction,
+  ) => string | undefined;
 }): Promise<
   | {
       ok: false;
@@ -622,6 +633,7 @@ async function runArchitectLoop<TKind extends "plan" | "review">(options: {
       { content: options.userPrompt, role: "user" as const },
     ];
     let repairAttempts = 0;
+    let latestRepairGuidanceIndex: number | undefined;
 
     for (
       let iteration = 1;
@@ -657,10 +669,11 @@ async function runArchitectLoop<TKind extends "plan" | "review">(options: {
           repairAttempts < MAX_ARCHITECT_OUTPUT_REPAIRS
         ) {
           repairAttempts += 1;
-          messages.push({
-            content: repairGuidance,
-            role: "developer",
-          });
+          latestRepairGuidanceIndex = upsertArchitectRepairGuidanceMessage(
+            messages,
+            repairGuidance,
+            latestRepairGuidanceIndex,
+          );
           await appendStructuredMessage(options.dossier.paths, {
             content: repairGuidance,
             role: "system",
@@ -675,8 +688,6 @@ async function runArchitectLoop<TKind extends "plan" | "review">(options: {
         };
       }
 
-      repairAttempts = 0;
-
       const action = modelResponse.structuredOutput;
 
       if (action === undefined) {
@@ -685,6 +696,42 @@ async function runArchitectLoop<TKind extends "plan" | "review">(options: {
           ok: false,
         };
       }
+
+      const validationIssue = options.validateAction?.(
+        action as TKind extends "plan"
+          ? ArchitectPlanAction | ArchitectToolAction
+          : ArchitectReviewAction | ArchitectToolAction,
+      );
+
+      if (validationIssue !== undefined) {
+        if (repairAttempts < MAX_ARCHITECT_OUTPUT_REPAIRS) {
+          repairAttempts += 1;
+          const repairGuidance = createArchitectActionValidationGuidance(
+            options.kind,
+            validationIssue,
+          );
+
+          latestRepairGuidanceIndex = upsertArchitectRepairGuidanceMessage(
+            messages,
+            repairGuidance,
+            latestRepairGuidanceIndex,
+          );
+          await appendStructuredMessage(options.dossier.paths, {
+            content: repairGuidance,
+            role: "system",
+            timestamp: options.context.now().toISOString(),
+          });
+          continue;
+        }
+
+        return {
+          message: `Architect ${options.kind} failed: ${validationIssue}`,
+          ok: false,
+        };
+      }
+
+      repairAttempts = 0;
+      latestRepairGuidanceIndex = undefined;
 
       const actionType = action.type ?? options.kind;
 
@@ -798,11 +845,54 @@ function createArchitectRepairGuidance(
     issueDetails,
     "Return exactly one JSON object and nothing else.",
     "Do not include markdown fences, prose, or multiple JSON objects.",
+    "Choose exactly one shape: a single tool object or a single final decision object.",
     "Do not combine a tool action and a final decision in the same response.",
-    'If you need one more tool, return `{"type":"tool","summary":"...","request":{...}}`.',
-    `If you are ready to finish, return \`${finalExample}\`.`,
+    'Tool shape: `{"type":"tool","summary":"...","request":{...}}`.',
+    `Final shape: \`${finalExample}\`.`,
     'For `command.execute`, `accessMode` must be exactly `"inspect"` or `"mutate"`.',
   ].join(" ");
+}
+
+function createArchitectActionValidationGuidance(
+  kind: "plan" | "review",
+  issue: string,
+): string {
+  const finalExample =
+    kind === "plan"
+      ? '{"type":"plan","summary":"...","steps":["..."],"acceptanceCriteria":["..."]}'
+      : '{"type":"review","decision":"approve|revise|fail","summary":"...","nextActions":["..."]}';
+
+  return [
+    issue,
+    "Return exactly one JSON object and nothing else.",
+    "Do not include markdown fences, prose, or multiple JSON objects.",
+    "Choose exactly one shape: a single tool object or a single final decision object.",
+    "Do not combine a tool action and a final decision in the same response.",
+    'Tool shape: `{"type":"tool","summary":"...","request":{...}}`.',
+    `Final shape: \`${finalExample}\`.`,
+  ].join(" ");
+}
+
+function upsertArchitectRepairGuidanceMessage(
+  messages: ModelChatMessage[],
+  guidance: string,
+  currentIndex?: number,
+): number {
+  if (currentIndex !== undefined && currentIndex < messages.length) {
+    messages[currentIndex] = {
+      content: guidance,
+      role: "developer",
+    };
+
+    return currentIndex;
+  }
+
+  messages.push({
+    content: guidance,
+    role: "developer",
+  });
+
+  return messages.length - 1;
 }
 
 function summarizeToolRequestForEvent(
@@ -1148,6 +1238,20 @@ function renderReviewRequest(
     lines.push("", "## Workspace Snapshot", "", workspaceSnapshot.gitStatus);
   }
 
+  if (
+    loadedConfig.config.stopConditions.requirePassingChecks &&
+    lastCheck?.status !== "passed"
+  ) {
+    lines.push(
+      "",
+      "## Review Guardrails",
+      "",
+      "- Approval is unavailable until the latest required check is green.",
+      "- If one more verification step is needed, prefer a `review` decision of `revise` with literal next actions for the Engineer over combining a tool request and a final decision.",
+      `- The narrowest useful revise path is usually: run \`${getRequiredCheckCommand(loadedConfig)}\` once, then either complete if it passes or report the blocker if it fails.`,
+    );
+  }
+
   lines.push(
     "",
     "## Command Context",
@@ -1181,6 +1285,38 @@ function renderReviewRequest(
   }
 
   return lines.join("\n");
+}
+
+function validateArchitectReviewApproval(options: {
+  action: ArchitectReviewAction | ArchitectToolAction;
+  loadedConfig: LoadedHarnessConfig;
+  state: ArchitectEngineerState;
+}): string | undefined {
+  if (options.action.type === "tool" || options.action.decision !== "approve") {
+    return undefined;
+  }
+
+  if (!options.loadedConfig.config.stopConditions.requirePassingChecks) {
+    return undefined;
+  }
+
+  const latestCheck = options.state.engineerExecution?.checks.at(-1);
+
+  if (latestCheck?.status === "passed") {
+    return undefined;
+  }
+
+  if (latestCheck === undefined) {
+    return [
+      "The previous Architect review tried to approve before any required check was recorded.",
+      "Do not approve until the latest required check is green or you explicitly revise/fail.",
+    ].join(" ");
+  }
+
+  return [
+    `The previous Architect review tried to approve even though the latest required check is not green (${latestCheck.summary ?? latestCheck.status}).`,
+    "Do not approve until the latest required check is green or you explicitly revise/fail.",
+  ].join(" ");
 }
 
 function renderEngineerExecutionTask(

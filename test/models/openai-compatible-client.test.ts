@@ -941,7 +941,7 @@ describe("OpenAiCompatibleChatClient", () => {
     });
   });
 
-  it("accepts the first valid structured JSON object when the response contains multiple JSON objects", async () => {
+  it("rejects ambiguous Architect structured output when the response contains multiple JSON objects", async () => {
     let attempts = 0;
     const mockServer = await startMockServer((_request, response) => {
       attempts += 1;
@@ -992,15 +992,17 @@ describe("OpenAiCompatibleChatClient", () => {
       retryDelayMs: 0,
     });
 
-    const response = await client.chat({
-      messages: [{ content: "Return one valid plan.", role: "user" }],
-      structuredOutput: await createArchitectStructuredOutputFormat("plan"),
-    });
-
-    expect(response.structuredOutput).toEqual({
-      type: "plan",
-      summary: "Inspect then implement",
-      steps: ["inspect the repo", "make one small change", "run tests"],
+    await expect(
+      client.chat({
+        messages: [{ content: "Return one valid plan.", role: "user" }],
+        structuredOutput: await createArchitectStructuredOutputFormat("plan"),
+      }),
+    ).rejects.toMatchObject({
+      classification: "invalid-structured-output",
+      issues: [
+        "Response contained multiple top-level JSON objects. Return exactly one JSON object and nothing else.",
+      ],
+      retryable: true,
     });
   });
 

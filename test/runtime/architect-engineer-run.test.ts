@@ -791,7 +791,7 @@ args = ["repo-mcp.js"]`,
     );
   }, 10000);
 
-  it("repairs an invalid Architect review response and continues with the corrected review", async () => {
+  it("repairs repeated invalid Architect review responses and keeps one repair instruction in context", async () => {
     const projectRoot = createTempProject();
     projectRoots.push(projectRoot);
     initializeGitRepository(projectRoot);
@@ -830,7 +830,7 @@ args = ["repo-mcp.js"]`,
           };
         }
 
-        if (architectAttempt === 2) {
+        if (architectAttempt === 2 || architectAttempt === 3) {
           throw new ModelStructuredOutputError(
             "Structured output did not match architect_review.",
             {
@@ -917,13 +917,147 @@ args = ["repo-mcp.js"]`,
     });
 
     expect(execution.result.status).toBe("success");
-    expect(architectRequests).toHaveLength(3);
+    expect(architectRequests).toHaveLength(4);
+    expect(
+      architectRequests[3]?.messages.some(
+        (message) =>
+          message.role === "developer" &&
+          typeof message.content === "string" &&
+          message.content.includes("did not match the required JSON output"),
+      ),
+    ).toBe(true);
+    expect(
+      architectRequests[3]?.messages.filter(
+        (message) =>
+          message.role === "developer" &&
+          typeof message.content === "string" &&
+          message.content.includes("did not match the required JSON output"),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("does not allow Architect approval when the latest required check is not green", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+    commitFile(projectRoot, "src/example.ts", "export const value = 1;\n");
+
+    const loadedConfig = await createLoadedConfig(projectRoot);
+    const architectRequests: Array<ModelChatRequest<unknown>> = [];
+    let architectAttempt = 0;
+    const architect = {
+      async chat<TRequestStructured>(
+        request: ModelChatRequest<TRequestStructured>,
+      ): Promise<ModelChatResponse<TRequestStructured>> {
+        architectRequests.push(request as ModelChatRequest<unknown>);
+        architectAttempt += 1;
+
+        if (architectAttempt === 1) {
+          return {
+            id: "mock-plan",
+            rawContent: JSON.stringify({
+              summary: "Run the required check and review the result.",
+              steps: ["Run the required test command"],
+              type: "plan",
+            }),
+            role: "assistant",
+            structuredOutput: {
+              summary: "Run the required check and review the result.",
+              steps: ["Run the required test command"],
+              type: "plan",
+            } as TRequestStructured,
+          };
+        }
+
+        return {
+          id: `mock-review-${architectAttempt}`,
+          rawContent: JSON.stringify({
+            decision: "approve",
+            summary:
+              "Approve the run even though the latest required check is still red.",
+            type: "review",
+          }),
+          role: "assistant",
+          structuredOutput: {
+            decision: "approve",
+            summary:
+              "Approve the run even though the latest required check is still red.",
+            type: "review",
+          } as TRequestStructured,
+        };
+      },
+    };
+    const engineer = createCapturingModelClient([
+      {
+        request: {
+          accessMode: "mutate",
+          command: "npm run test",
+          toolName: "command.execute",
+        },
+        summary: "Run the required check.",
+        type: "tool",
+      },
+      { rawContent: "Not a valid Engineer step." },
+      { rawContent: "Still not a valid Engineer step." },
+      { rawContent: "Another invalid Engineer step." },
+      { rawContent: "Final invalid Engineer step." },
+    ]);
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 20,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: 1,
+          role: "engineer",
+          stderr: "tests failed\n",
+          stdout: "",
+          timestamp: "2026-04-14T12:00:30.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeArchitectEngineerRun({
+      architectModelClient: architect,
+      createdAt: new Date("2026-04-14T12:00:00.000Z"),
+      engineerModelClient: engineer.client,
+      loadedConfig,
+      now: () => new Date("2026-04-14T12:00:30.000Z"),
+      projectCommandRunner: fakeCommandRunner,
+      runId: "20260414T120000.000Z-abc138",
+      task: "Update `src/example.ts` so it exports `2` instead of `1`.",
+    });
+
+    expect(execution.result.status).toBe("failed");
+    expect(execution.stopReason).toBe("architect-model-error");
+    expect(architectRequests).toHaveLength(6);
+    expect(
+      architectRequests[1]?.messages.some(
+        (message) =>
+          message.role === "user" &&
+          typeof message.content === "string" &&
+          message.content.includes(
+            "Approval is unavailable until the latest required check is green.",
+          ),
+      ),
+    ).toBe(true);
     expect(
       architectRequests[2]?.messages.some(
         (message) =>
           message.role === "developer" &&
           typeof message.content === "string" &&
-          message.content.includes("did not match the required JSON output"),
+          message.content.includes("latest required check is not green"),
       ),
     ).toBe(true);
   });

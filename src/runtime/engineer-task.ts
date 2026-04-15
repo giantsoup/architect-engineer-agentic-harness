@@ -292,6 +292,7 @@ export async function executeEngineerTask(
     let stepsToFirstCheck: number | null = null;
     let stepsToFirstEdit: number | null = null;
     let editSinceLastFailedCheck = false;
+    let editedPathsSinceLastFailedCheck: string[] = [];
     let groundingSinceLastFailedCheck = false;
     let lastNoOpWrite: NoOpWriteFact | undefined;
     let outcome: FinalizedOutcome | undefined;
@@ -404,11 +405,18 @@ export async function executeEngineerTask(
             MAX_CONSECUTIVE_RETRYABLE_MODEL_ERRORS
         ) {
           consecutiveRetryableModelErrors += 1;
-          const reminder = createRetryableModelErrorGuidance({
-            error: modelError,
-            recentRepoFacts,
-            requiredCheckCommand,
-          });
+          const reminder =
+            consecutiveFailedChecks > 0 && editSinceLastFailedCheck
+              ? createPostRepairRetryableModelErrorGuidance({
+                  editedPathsSinceLastFailedCheck,
+                  error: modelError,
+                  requiredCheckCommand,
+                })
+              : createRetryableModelErrorGuidance({
+                  error: modelError,
+                  recentRepoFacts,
+                  requiredCheckCommand,
+                });
 
           await appendModelGuidance({
             content: reminder,
@@ -611,6 +619,11 @@ export async function executeEngineerTask(
             stepsToFirstEdit = actionStepCount;
           }
           editSinceLastFailedCheck = true;
+          if (
+            !editedPathsSinceLastFailedCheck.includes(toolFeedback.result.path)
+          ) {
+            editedPathsSinceLastFailedCheck.push(toolFeedback.result.path);
+          }
           lastNoOpWrite = undefined;
         } else {
           lastNoOpWrite = {
@@ -694,6 +707,7 @@ export async function executeEngineerTask(
         if (recordedCheck.status === "passed") {
           consecutiveFailedChecks = 0;
           editSinceLastFailedCheck = false;
+          editedPathsSinceLastFailedCheck = [];
           groundingSinceLastFailedCheck = false;
           postPassCompletionGate.active = true;
           postPassCompletionGate.completionOnly = false;
@@ -720,6 +734,7 @@ export async function executeEngineerTask(
         } else {
           consecutiveFailedChecks += 1;
           editSinceLastFailedCheck = false;
+          editedPathsSinceLastFailedCheck = [];
           groundingSinceLastFailedCheck = false;
           postPassCompletionGate.active = false;
           postPassCompletionGate.completionOnly = false;
@@ -1771,6 +1786,33 @@ function createRetryableModelErrorGuidance(options: {
     "If you cannot continue, reply with `BLOCKED: <summary>` and optional `- blocker` lines.",
     "If this endpoint already received a fallback tool instruction because native tools were rejected, follow that fallback exactly instead of inventing a new format.",
     `The required check is \`${options.requiredCheckCommand}\`.`,
+  ].join(" ");
+}
+
+function createPostRepairRetryableModelErrorGuidance(options: {
+  editedPathsSinceLastFailedCheck: readonly string[];
+  error: ModelClientError;
+  requiredCheckCommand: string;
+}): string {
+  const issueDetails =
+    options.error.issues === undefined || options.error.issues.length === 0
+      ? "The previous response could not be applied as a single Engineer step."
+      : `The previous response could not be applied as a single Engineer step: ${options.error.issues.join("; ")}`;
+  const editedPathsSummary =
+    options.editedPathsSinceLastFailedCheck.length === 0
+      ? "Since the last failed required check, you already made a concrete file edit."
+      : `Since the last failed required check, you already edited ${options.editedPathsSinceLastFailedCheck
+          .map((path) => `\`${path}\``)
+          .join(", ")}.`;
+
+  return [
+    issueDetails,
+    editedPathsSummary,
+    `Your next step should usually be the required check: call exactly one native \`command.execute\` tool with \`command: "${options.requiredCheckCommand}"\`.`,
+    "Do not describe multiple steps or mix prose with a tool request.",
+    "If the workspace is still not ready, make exactly one concrete file change instead.",
+    "If you are done after the required check passes, reply with `COMPLETE: <summary>` on the following turn.",
+    "If you cannot continue, reply with `BLOCKED: <summary>` and optional `- blocker` lines.",
   ].join(" ");
 }
 
