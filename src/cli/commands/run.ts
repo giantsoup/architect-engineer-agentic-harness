@@ -19,6 +19,7 @@ interface RunCommandOptions {
   command?: string;
   cwd?: string;
   env: string[];
+  projectRoot?: string;
   role: "architect" | "engineer";
   task?: string;
   taskFile?: string;
@@ -33,7 +34,8 @@ export function createRunCommand(): Command {
     .option("-c, --command <command>", "Shell command to execute")
     .option("--task <markdown>", "Engineer task brief markdown")
     .option("--task-file <path>", "Read the Engineer task brief from a file")
-    .option("--cwd <directory>", "Working directory for command execution")
+    .option("--project-root <directory>", "Task-mode repository root")
+    .option("--cwd <directory>", "Single-command working directory")
     .option(
       "--env <NAME=VALUE>",
       "Inject an environment variable into the executed command",
@@ -49,8 +51,9 @@ export function createRunCommand(): Command {
     .action(async (options: RunCommandOptions) => {
       const environment = parseEnvironmentEntries(options.env);
       const runMode = await resolveRunMode(options);
+      const projectRoot = resolveRunProjectRoot(options, runMode);
       const loadedConfig = await loadHarnessConfig({
-        projectRoot: process.cwd(),
+        projectRoot,
       });
 
       if (runMode.type === "engineer-task") {
@@ -199,6 +202,12 @@ async function resolveRunMode(
   | { task: string; type: "engineer-task" }
 > {
   if (options.command !== undefined) {
+    if (options.projectRoot !== undefined) {
+      throw new InvalidArgumentError(
+        "`--project-root` is only supported with `--task` or `--task-file`.",
+      );
+    }
+
     if (options.task !== undefined || options.taskFile !== undefined) {
       throw new InvalidArgumentError(
         "Use either `--command` or `--task`/`--task-file`, not both.",
@@ -234,6 +243,19 @@ async function resolveRunMode(
   throw new InvalidArgumentError(
     "Provide `--command` for single-command mode or `--task`/`--task-file` for Architect-Engineer task mode.",
   );
+}
+
+function resolveRunProjectRoot(
+  options: RunCommandOptions,
+  runMode:
+    | { command: string; type: "single-command" }
+    | { task: string; type: "engineer-task" },
+): string {
+  if (runMode.type === "single-command") {
+    return process.cwd();
+  }
+
+  return path.resolve(options.projectRoot ?? process.cwd());
 }
 
 async function readTaskFile(taskFile: string): Promise<string> {

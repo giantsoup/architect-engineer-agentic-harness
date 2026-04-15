@@ -80,6 +80,7 @@ describe("CLI help", () => {
     expect(helpResult.stdout).toContain("--command <command>");
     expect(helpResult.stdout).toContain("--task <markdown>");
     expect(helpResult.stdout).toContain("--task-file <path>");
+    expect(helpResult.stdout).toContain("--project-root <directory>");
     expect(helpResult.stdout).toContain("--role <role>");
 
     const result = runCli(["run"]);
@@ -87,6 +88,21 @@ describe("CLI help", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
       "Provide `--command` for single-command mode or `--task`/`--task-file` for Architect-Engineer task mode.",
+    );
+  });
+
+  it("rejects task-mode project-root targeting in single-command mode", () => {
+    const result = runCli([
+      "run",
+      "--command",
+      "npm test",
+      "--project-root",
+      "/tmp/project",
+    ]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "`--project-root` is only supported with `--task` or `--task-file`.",
     );
   });
 });

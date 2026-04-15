@@ -195,6 +195,12 @@ Run the full Architect-Engineer loop from inline markdown:
 blueprint run --task "Implement Milestone 12 and keep all tests green."
 ```
 
+Run the full loop against a repo outside your current shell directory:
+
+```bash
+blueprint run --task "Implement Milestone 12 and keep all tests green." --project-root ../target-repo
+```
+
 Run the full loop from a file:
 
 ```bash
@@ -227,10 +233,12 @@ Live sanity prompts for post-change validation:
 `run`
 
 - `run --command <command>` executes one command and writes a dossier entry
-- `run --task <markdown>` runs the Architect-Engineer loop
+- `run --task <markdown>` runs the Architect-Engineer loop against the current repo by default
 - `run --task-file <path>` reads the task brief from disk
+- `--project-root <directory>` selects the repo root for task mode
 - `--role architect|engineer` applies to single-command mode
-- `--cwd`, `--env`, and `--timeout-ms` are supported
+- `--cwd` applies to single-command mode only
+- `--env` and `--timeout-ms` are supported
 
 `status [run-id]`
 
@@ -335,7 +343,8 @@ Host mode behavior:
 
 - commands run directly from the local checkout on your machine
 - the default command working directory is the repo root
-- `--cwd` may point to a repo-relative or absolute host path
+- for `run --command`, `--cwd` may point to a repo-relative or absolute host path
+- for `run --task` and `run --task-file`, use `--project-root` to target a different repo
 - this is convenient, but it is not a security boundary
 
 Recommended host pairing:

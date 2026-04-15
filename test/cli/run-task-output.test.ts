@@ -203,6 +203,64 @@ describe("CLI run task-mode summaries", () => {
     );
     expect(process.exitCode).toBe(1);
   });
+
+  it("loads task-mode config from the selected project root", async () => {
+    const { createRunCommand } = await import("../../src/cli/commands/run.js");
+    const liveConsole = {
+      start: vi.fn(),
+      stop: vi.fn().mockResolvedValue(undefined),
+    };
+    const dossierPaths = {
+      runDirRelativePath: ".agent-harness/runs/20260414T120000.000Z-abc125",
+      runId: "20260414T120000.000Z-abc125",
+    };
+
+    mockedModules.loadHarnessConfig.mockResolvedValue(createLoadedConfigStub());
+    mockedModules.createRunId.mockReturnValue("20260414T120000.000Z-abc125");
+    mockedModules.buildRunDossierPaths.mockReturnValue(dossierPaths);
+    mockedModules.createLiveConsoleRenderer.mockReturnValue(liveConsole);
+    mockedModules.executeArchitectEngineerRun.mockResolvedValue({
+      dossier: { paths: dossierPaths },
+      result: {
+        status: "success",
+        summary: "Task completed.",
+      },
+      state: {
+        engineerExecution: {
+          toolSummary: {
+            mcpServers: {
+              unavailable: [],
+            },
+          },
+        },
+      },
+    });
+    mockedModules.readRunInspection.mockResolvedValue(
+      createInspection({
+        phase: "Completed",
+        primaryArtifacts: [
+          {
+            key: "finalReport",
+            relativePath:
+              ".agent-harness/runs/20260414T120000.000Z-abc125/final-report.md",
+          },
+        ],
+        status: "success",
+        summary: "Task completed.",
+      }),
+    );
+
+    await parseRunCommand(createRunCommand(), [
+      "--task",
+      "Ship Milestone 11",
+      "--project-root",
+      "../external-project",
+    ]);
+
+    expect(mockedModules.loadHarnessConfig).toHaveBeenCalledWith({
+      projectRoot: expect.stringMatching(/external-project$/u),
+    });
+  });
 });
 
 async function parseRunCommand(
