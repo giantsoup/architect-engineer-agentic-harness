@@ -214,6 +214,71 @@ function createQueuedModelClient<TStructured>(
   };
 }
 
+function createCapturingModelClient<TStructured>(
+  outputs: readonly (
+    | TStructured
+    | {
+        rawContent: string;
+        toolCalls?: NonNullable<ModelChatResponse["toolCalls"]>;
+      }
+  )[],
+): {
+  requests: Array<ModelChatRequest<unknown>>;
+  client: {
+    chat<TRequestStructured>(
+      request: ModelChatRequest<TRequestStructured>,
+    ): Promise<ModelChatResponse<TRequestStructured>>;
+  };
+} {
+  const queue = [...outputs];
+  const requests: Array<ModelChatRequest<unknown>> = [];
+  let requestCount = 0;
+
+  return {
+    requests,
+    client: {
+      async chat<TRequestStructured>(
+        request: ModelChatRequest<TRequestStructured>,
+      ): Promise<ModelChatResponse<TRequestStructured>> {
+        requests.push(request as ModelChatRequest<unknown>);
+        const nextOutput = queue.shift();
+
+        if (nextOutput === undefined) {
+          throw new Error("Unexpected extra model request.");
+        }
+
+        requestCount += 1;
+
+        if (
+          typeof nextOutput === "object" &&
+          nextOutput !== null &&
+          ("rawContent" in nextOutput || "toolCalls" in nextOutput)
+        ) {
+          return {
+            id: `mock-${requestCount}`,
+            rawContent:
+              "rawContent" in nextOutput &&
+              typeof nextOutput.rawContent === "string"
+                ? nextOutput.rawContent
+                : "",
+            role: "assistant",
+            ...("toolCalls" in nextOutput && Array.isArray(nextOutput.toolCalls)
+              ? { toolCalls: nextOutput.toolCalls }
+              : {}),
+          };
+        }
+
+        return {
+          id: `mock-${requestCount}`,
+          rawContent: JSON.stringify(nextOutput),
+          role: "assistant",
+          structuredOutput: nextOutput as TRequestStructured,
+        };
+      },
+    },
+  };
+}
+
 function createFakeMcpClientFactory(
   behaviors: Record<
     string,
@@ -456,6 +521,10 @@ describe("executeArchitectEngineerRun", () => {
     expect(finalReport).toContain(`Run branch: ${currentBranch}`);
     expect(finalReport).toContain(headCommit);
     expect(finalReport).toContain("Stop reason: architect-approved");
+    expect(finalReport).toContain(
+      "Completion path: Architect approved after clean Engineer completion.",
+    );
+    expect(finalReport).toContain("Failure notes: not written");
     expect(result.status).toBe("success");
     expect(result.convergence).toMatchObject({
       stepsToFirstCheck: 2,
@@ -1561,8 +1630,166 @@ args = ["repo-mcp.js"]`,
     expect(secondEngineerUserMessage?.content).toContain(
       "The main fix landed, but the follow-up export is still missing.",
     );
-    expect(failureNotes).toContain("Architect Note");
-    expect(failureNotes).toContain("Add `nextValue`");
+    expect(failureNotes).toBe("");
+    expect(execution.result.artifacts).not.toContain(
+      execution.dossier.paths.files.failureNotes.relativePath,
+    );
+  });
+
+  it("reports Architect approval after an Engineer completion-path anomaly without publishing failure notes", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+    commitFile(projectRoot, "src/example.ts", "export const value = 1;\n");
+    commitFile(projectRoot, "docs/summary.md", "Old summary\n");
+
+    const loadedConfig = await createLoadedConfig(projectRoot);
+    const architect = createQueuedModelClient([
+      {
+        acceptanceCriteria: ["Export `2`", "Update `docs/summary.md`"],
+        steps: ["Update both requested files", "Run the required test command"],
+        summary: "Complete both requested edits and verify them once.",
+        type: "plan",
+      },
+      {
+        decision: "approve",
+        summary:
+          "The workspace is correct, even though the Engineer completion path ended awkwardly.",
+        type: "review",
+      },
+    ]);
+    const engineer = createCapturingModelClient([
+      {
+        request: {
+          content: "export const value = 2;\n",
+          path: "src/example.ts",
+          toolName: "file.write",
+        },
+        summary: "Update the source export.",
+        type: "tool",
+      },
+      {
+        request: {
+          content: "Updated summary\n",
+          path: "docs/summary.md",
+          toolName: "file.write",
+        },
+        summary: "Update the summary file.",
+        type: "tool",
+      },
+      {
+        request: {
+          accessMode: "mutate",
+          command: "npm run test",
+          toolName: "command.execute",
+        },
+        summary:
+          "Run the only required check after both acceptance files are complete.",
+        type: "tool",
+      },
+      {
+        request: {
+          toolName: "git.status",
+        },
+        summary:
+          "Inspect the workspace again even though the run is already green.",
+        type: "tool",
+      },
+      {
+        rawContent: "Try another post-pass inspection step.",
+        toolCalls: [
+          {
+            arguments: {},
+            id: "call_git_status_after_completion_only",
+            name: "git.status",
+          },
+        ],
+      },
+    ]);
+    let engineerCommandCalls = 0;
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        engineerCommandCalls += 1;
+
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 20,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: 0,
+          role: "engineer",
+          stderr: "",
+          stdout: "tests passed\n",
+          timestamp: "2026-04-14T12:02:00.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeArchitectEngineerRun({
+      architectModelClient: architect.client,
+      createdAt: new Date("2026-04-14T12:00:00.000Z"),
+      engineerModelClient: engineer.client,
+      loadedConfig,
+      now: () => new Date("2026-04-14T12:02:30.000Z"),
+      projectCommandRunner: fakeCommandRunner,
+      runId: "20260414T120000.000Z-abc138",
+      task: "Update the source export and docs summary.",
+    });
+    const finalReport = readFileSync(
+      execution.dossier.paths.files.finalReport.absolutePath,
+      "utf8",
+    );
+    const persistedResult = JSON.parse(
+      readFileSync(execution.dossier.paths.files.result.absolutePath, "utf8"),
+    ) as {
+      artifacts: string[];
+      status: string;
+    };
+    const failureNotes = readFileSync(
+      execution.dossier.paths.files.failureNotes.absolutePath,
+      "utf8",
+    );
+
+    expect(execution.result.status).toBe("success");
+    expect(execution.stopReason).toBe("architect-approved");
+    expect(execution.state.engineerExecution?.stopReason).toBe(
+      "completion-path-failed",
+    );
+    expect(execution.state.engineerExecution?.stopReason).not.toBe(
+      "max-iterations",
+    );
+    expect(engineerCommandCalls).toBe(1);
+    expect(readFileSync(path.join(projectRoot, "src/example.ts"), "utf8")).toBe(
+      "export const value = 2;\n",
+    );
+    expect(
+      readFileSync(path.join(projectRoot, "docs/summary.md"), "utf8"),
+    ).toBe("Updated summary\n");
+    expect(engineer.requests[4]?.tools).toBeUndefined();
+    expect(finalReport).toContain("Stop reason: architect-approved");
+    expect(finalReport).toContain(
+      "Completion path: Architect approval masked an Engineer completion-path anomaly (`completion-path-failed`).",
+    );
+    expect(finalReport).toContain("Latest stop reason: completion-path-failed");
+    expect(finalReport).toContain("Failure notes: not written");
+    expect(failureNotes).toBe("");
+    expect(execution.result.artifacts).not.toContain(
+      execution.dossier.paths.files.failureNotes.relativePath,
+    );
+    expect(persistedResult.status).toBe("success");
+    expect(persistedResult.artifacts).not.toContain(
+      execution.dossier.paths.files.failureNotes.relativePath,
+    );
   });
 
   it("fails the run when Architect review returns `fail`", async () => {

@@ -161,7 +161,8 @@ export async function executeArchitectEngineerRun(
           state.dossier!.paths.files.diff.relativePath,
           state.dossier!.paths.files.finalReport.relativePath,
           state.dossier!.paths.files.result.relativePath,
-          ...(state.failureNotes.length === 0
+          ...(state.failureNotes.length === 0 ||
+          state.finalOutcome?.status === "success"
             ? []
             : [state.dossier!.paths.files.failureNotes.relativePath]),
         ],

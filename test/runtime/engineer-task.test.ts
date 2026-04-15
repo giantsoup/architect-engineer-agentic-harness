@@ -1714,6 +1714,123 @@ describe("executeEngineerTask", () => {
     expect(requests[3]?.tools).toBeUndefined();
   });
 
+  it("does not spin to max iterations when stubborn post-pass tool calls continue after both acceptance files are complete", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: "http://127.0.0.1:65535/v1",
+      projectRoot,
+      stopConditions: {
+        maxIterations: 10,
+      },
+    });
+    const sourcePath = path.join(projectRoot, "src", "example.ts");
+    const summaryPath = path.join(projectRoot, "docs", "summary.md");
+    const { client, requests } = createCapturingModelClient([
+      {
+        request: {
+          content: "export const value = 2;\n",
+          path: "src/example.ts",
+          toolName: "file.write" as const,
+        },
+        summary: "Update the source file.",
+        type: "tool" as const,
+      },
+      {
+        request: {
+          content: "Updated summary\n",
+          path: "docs/summary.md",
+          toolName: "file.write" as const,
+        },
+        summary: "Update the summary file.",
+        type: "tool" as const,
+      },
+      {
+        request: {
+          accessMode: "mutate",
+          command: "npm run test",
+          toolName: "command.execute" as const,
+        },
+        summary:
+          "Run the only required check after both acceptance files are complete.",
+        type: "tool" as const,
+      },
+      {
+        request: {
+          toolName: "git.status" as const,
+        },
+        summary: "Inspect the workspace again from the green state.",
+        type: "tool" as const,
+      },
+      {
+        rawContent: "Try another post-pass inspection step.",
+        toolCalls: [
+          {
+            arguments: {},
+            id: "call_repeat_git_status_after_completion_only",
+            name: "git.status",
+          },
+        ],
+      },
+    ]);
+    let engineerCommandCalls = 0;
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        engineerCommandCalls += 1;
+
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 10,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: 0,
+          role: "engineer",
+          stderr: "",
+          stdout: "tests passed\n",
+          timestamp: "2026-04-15T12:08:00.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      modelClient: client,
+      projectCommandRunner: fakeCommandRunner,
+      task: "Update the source export and summary file.",
+    });
+    const completionPrompt = requests[4]?.messages
+      .filter((message) => message.role === "user")
+      .map((message) => String(message.content))
+      .join("\n");
+
+    expect(execution.result.status).toBe("failed");
+    expect(execution.stopReason).toBe("completion-path-failed");
+    expect(execution.stopReason).not.toBe("max-iterations");
+    expect(execution.result.summary).toContain(
+      "Engineer failed to complete from the green-check completion path",
+    );
+    expect(engineerCommandCalls).toBe(1);
+    expect(readFileSync(sourcePath, "utf8")).toBe("export const value = 2;\n");
+    expect(readFileSync(summaryPath, "utf8")).toBe("Updated summary\n");
+    expect(completionPrompt).toContain("## Completion-Only Green State");
+    expect(completionPrompt).toContain(
+      "The previous post-pass step retried blocked exploration or re-ran the required check.",
+    );
+    expect(requests[4]?.tools).toBeUndefined();
+  });
+
   it("requires a fresh required check after post-pass edits before completion", async () => {
     const projectRoot = createTempProject();
     projectRoots.push(projectRoot);

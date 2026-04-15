@@ -67,6 +67,7 @@ import {
 import {
   executeEngineerTask,
   type EngineerTaskModelClient,
+  type EngineerTaskStopReason,
 } from "./engineer-task.js";
 import {
   renderAcceptanceCriteriaLines,
@@ -489,13 +490,21 @@ export async function finalizeArchitectEngineerRunNode(
     context.loadedConfig,
     workspaceSnapshot,
   );
+  const shouldPublishFailureNotes =
+    resolvedFinalOutcome.status !== "success" &&
+    finalizedState.failureNotes.length > 0;
 
-  if (finalizedState.failureNotes.length > 0) {
+  if (shouldPublishFailureNotes) {
     await writeFailureNotes(
       dossier.paths,
       renderFailureNotesMarkdown(finalizedState.failureNotes),
       timestamp,
     );
+  } else if (
+    resolvedFinalOutcome.status === "success" &&
+    finalizedState.failureNotes.length > 0
+  ) {
+    await writeFailureNotes(dossier.paths, "", timestamp);
   }
 
   await writeFinalReport(dossier.paths, finalReport, timestamp);
@@ -513,7 +522,7 @@ export async function finalizeArchitectEngineerRunNode(
     dossier.paths.files.result.relativePath,
   ];
 
-  if (finalizedState.failureNotes.length > 0) {
+  if (shouldPublishFailureNotes) {
     resultArtifacts.push(dossier.paths.files.failureNotes.relativePath);
   }
 
@@ -1322,6 +1331,15 @@ function renderFinalReport(
   loadedConfig: LoadedHarnessConfig,
   workspaceSnapshot: ArchitectWorkspaceSnapshot,
 ): string {
+  const shouldPublishFailureNotes =
+    finalOutcome.status !== "success" && state.failureNotes.length > 0;
+  const completionPathSummary =
+    state.engineerExecution === undefined
+      ? undefined
+      : renderEngineerCompletionPathSummary(
+          finalOutcome,
+          state.engineerExecution.stopReason,
+        );
   const acceptanceCriteriaPolicy = resolveAcceptanceCriteriaPolicy({
     architectPlan: state.architectPlan,
     requiredTestCommand: getRequiredCheckCommand(loadedConfig),
@@ -1342,6 +1360,10 @@ function renderFinalReport(
     "",
     state.metadata.task.trim(),
   ];
+
+  if (completionPathSummary !== undefined) {
+    lines.splice(8, 0, `- Completion path: ${completionPathSummary}`);
+  }
 
   if (state.architectPlan !== undefined) {
     lines.push(
@@ -1421,7 +1443,7 @@ function renderFinalReport(
     `- Architect review: ${state.dossier?.paths.files.architectReview.relativePath ?? "unavailable"}`,
     `- Checks: ${state.dossier?.paths.files.checks.relativePath ?? "unavailable"}`,
     `- Diff: ${state.dossier?.paths.files.diff.relativePath ?? "unavailable"}`,
-    `- Failure notes: ${state.failureNotes.length > 0 ? state.dossier?.paths.files.failureNotes.relativePath : "not written"}`,
+    `- Failure notes: ${shouldPublishFailureNotes ? state.dossier?.paths.files.failureNotes.relativePath : "not written"}`,
   );
 
   if (workspaceSnapshot.gitStatus !== undefined) {
@@ -1437,6 +1459,25 @@ function renderFinalReport(
   }
 
   return lines.join("\n");
+}
+
+function renderEngineerCompletionPathSummary(
+  finalOutcome: ArchitectEngineerFinalOutcome,
+  engineerStopReason: EngineerTaskStopReason,
+): string | undefined {
+  if (finalOutcome.stopReason !== "architect-approved") {
+    return undefined;
+  }
+
+  return isCleanEngineerCompletionStopReason(engineerStopReason)
+    ? "Architect approved after clean Engineer completion."
+    : `Architect approval masked an Engineer completion-path anomaly (\`${engineerStopReason}\`).`;
+}
+
+function isCleanEngineerCompletionStopReason(
+  stopReason: EngineerTaskStopReason,
+): boolean {
+  return stopReason === "engineer-complete" || stopReason === "passing-checks";
 }
 
 async function syncFailureNotesArtifact(
