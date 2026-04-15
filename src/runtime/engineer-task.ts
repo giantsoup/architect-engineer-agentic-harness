@@ -64,6 +64,7 @@ const LOW_VALUE_EXPLORATION_PATH_SEGMENTS = new Set([
 
 export type EngineerTaskStopReason =
   | "blocked"
+  | "completion-path-failed"
   | "engineer-complete"
   | "max-consecutive-failed-checks"
   | "max-iterations"
@@ -142,6 +143,7 @@ interface PostToolGuidance {
 
 interface PostPassCompletionGateState {
   active: boolean;
+  completionOnly: boolean;
 }
 
 type EngineerConvergenceGuardReason =
@@ -294,6 +296,7 @@ export async function executeEngineerTask(
     let outcome: FinalizedOutcome | undefined;
     const postPassCompletionGate: PostPassCompletionGateState = {
       active: requirePassingChecks && checks.at(-1)?.status === "passed",
+      completionOnly: false,
     };
 
     while (iterationCount < maxIterations) {
@@ -330,6 +333,8 @@ export async function executeEngineerTask(
 
       let modelResponse: ModelChatResponse;
       let action: EngineerTurn;
+      const completionOnlyTurn =
+        postPassCompletionGate.active && postPassCompletionGate.completionOnly;
 
       try {
         modelResponse = await modelClient.chat({
@@ -339,14 +344,23 @@ export async function executeEngineerTask(
             requiredCheckCommand,
             runId: dossier.paths.runId,
           },
-          toolFallbackInstruction:
-            createEngineerToolFallbackInstruction(requiredCheckCommand),
-          tools: engineerTools,
+          ...(completionOnlyTurn
+            ? {}
+            : {
+                toolFallbackInstruction:
+                  createEngineerToolFallbackInstruction(requiredCheckCommand),
+                tools: engineerTools,
+              }),
         });
-        action = await resolveEngineerTurn({
-          rawContent: modelResponse.rawContent,
-          toolCalls: modelResponse.toolCalls,
-        });
+        action = completionOnlyTurn
+          ? resolveEngineerCompletionOnlyTurn({
+              rawContent: modelResponse.rawContent,
+              toolCalls: modelResponse.toolCalls,
+            })
+          : await resolveEngineerTurn({
+              rawContent: modelResponse.rawContent,
+              toolCalls: modelResponse.toolCalls,
+            });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const modelError =
@@ -362,6 +376,15 @@ export async function executeEngineerTask(
             : error instanceof ModelClientError
               ? error
               : undefined;
+
+        if (completionOnlyTurn && modelError?.retryable === true) {
+          outcome = {
+            status: "failed",
+            stopReason: "completion-path-failed",
+            summary: `Engineer failed to complete from the green-check completion path: ${message}`,
+          };
+          break;
+        }
 
         if (
           modelError?.retryable === true &&
@@ -456,6 +479,8 @@ export async function executeEngineerTask(
         break;
       }
 
+      const usedGreenCheckFollowUpStep =
+        postPassCompletionGate.active && !postPassCompletionGate.completionOnly;
       const toolRequest = applyRemainingTimeToToolRequest(
         action.request,
         remainingTimeMs,
@@ -598,6 +623,7 @@ export async function executeEngineerTask(
         invalidatesPassingCheck(toolFeedback, toolRequest, requiredCheckCommand)
       ) {
         postPassCompletionGate.active = false;
+        postPassCompletionGate.completionOnly = false;
       }
 
       const guidance = createPostToolGuidance({
@@ -626,6 +652,29 @@ export async function executeEngineerTask(
       }
 
       if (
+        postPassCompletionGate.active &&
+        (usedGreenCheckFollowUpStep ||
+          convergenceGuardReason === "post-pass-completion-gate" ||
+          convergenceGuardReason === "post-pass-no-progress")
+      ) {
+        postPassCompletionGate.completionOnly = true;
+        const completionOnlyGuidance = createCompletionOnlyGuidance(
+          convergenceGuardReason,
+          usedGreenCheckFollowUpStep,
+        );
+
+        messages.push({
+          content: completionOnlyGuidance,
+          role: "user",
+        });
+        await appendStructuredMessage(dossier.paths, {
+          content: completionOnlyGuidance,
+          role: "system",
+          timestamp: now().toISOString(),
+        });
+      }
+
+      if (
         isRequiredCheckCommand(toolRequest, requiredCheckCommand) &&
         !shouldSkipRequiredCheckRecording(convergenceGuardReason)
       ) {
@@ -646,6 +695,7 @@ export async function executeEngineerTask(
           editSinceLastFailedCheck = false;
           groundingSinceLastFailedCheck = false;
           postPassCompletionGate.active = true;
+          postPassCompletionGate.completionOnly = false;
 
           if (action.stopWhenSuccessful === true) {
             outcome = {
@@ -660,6 +710,7 @@ export async function executeEngineerTask(
           editSinceLastFailedCheck = false;
           groundingSinceLastFailedCheck = false;
           postPassCompletionGate.active = false;
+          postPassCompletionGate.completionOnly = false;
 
           if (consecutiveFailedChecks >= maxConsecutiveFailedChecks) {
             outcome = {
@@ -1464,6 +1515,25 @@ function createRepeatedNoOpWriteFeedback(
   };
 }
 
+function createCompletionOnlyGuidance(
+  reason: EngineerConvergenceGuardReason | undefined,
+  usedGreenCheckFollowUpStep: boolean,
+): string {
+  return [
+    "The latest required check is already green and the previous post-pass step did not justify more tool work.",
+    reason === "post-pass-no-progress"
+      ? "That step repeated a no-op write from the green-check state."
+      : reason === "post-pass-completion-gate"
+        ? "That step restarted blocked exploration or re-ran the required check from the green-check state."
+        : usedGreenCheckFollowUpStep
+          ? "The single allowed post-pass follow-up step has already been used."
+          : "Do not continue tool work from this green-check state.",
+    "The next turn is completion-only.",
+    "Do not call tools.",
+    "Reply with plain-text `COMPLETE: <summary>` if the task is done, or plain-text `BLOCKED: <summary>` with optional `- blocker` lines.",
+  ].join(" ");
+}
+
 function createRepeatedRequiredCheckFeedback(options: {
   recentRepoFacts: RepoFact[];
   requiredCheckCommand: string;
@@ -1891,6 +1961,75 @@ function createEngineerToolFallbackInstruction(
     'Blocked step: {"type":"final","outcome":"blocked","summary":"...","blockers":["..."]}',
     `Set \`stopWhenSuccessful: true\` only when the tool request runs \`${requiredCheckCommand}\` and the run should end immediately if it passes.`,
   ].join("\n");
+}
+
+function resolveEngineerCompletionOnlyTurn(options: {
+  rawContent: string;
+  toolCalls?: ModelChatResponse["toolCalls"];
+}): Extract<EngineerTurn, { type: "final" }> {
+  if ((options.toolCalls?.length ?? 0) > 0) {
+    throw new EngineerTurnValidationError([
+      "Completion-only turns cannot call tools.",
+      "Reply with plain-text `COMPLETE:` or `BLOCKED:` only.",
+    ]);
+  }
+
+  const lines = options.rawContent
+    .trim()
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  if (lines.length === 0) {
+    throw new EngineerTurnValidationError([
+      "Completion-only turns must reply with plain-text `COMPLETE:` or `BLOCKED:`.",
+    ]);
+  }
+
+  const matchedPrefix = /^(COMPLETE|BLOCKED)\s*:?\s*(.*)$/iu.exec(lines[0]!);
+
+  if (matchedPrefix === null) {
+    throw new EngineerTurnValidationError([
+      "Completion-only turns must start with plain-text `COMPLETE:` or `BLOCKED:`.",
+    ]);
+  }
+
+  const outcome =
+    matchedPrefix[1]!.toLowerCase() === "blocked" ? "blocked" : "complete";
+  const summary = [
+    matchedPrefix[2]!,
+    ...lines.slice(1).filter((line) => !line.startsWith("- ")),
+  ]
+    .join(" ")
+    .trim();
+
+  if (summary.length === 0) {
+    throw new EngineerTurnValidationError([
+      `Final ${matchedPrefix[1]!.toUpperCase()} response must include a short summary.`,
+    ]);
+  }
+
+  const blockers =
+    outcome === "blocked"
+      ? lines
+          .slice(1)
+          .filter((line) => line.startsWith("- "))
+          .map((line) => line.slice(2).trim())
+          .filter((line) => line.length > 0)
+      : undefined;
+
+  return blockers === undefined || blockers.length === 0
+    ? {
+        outcome,
+        summary,
+        type: "final",
+      }
+    : {
+        blockers,
+        outcome,
+        summary,
+        type: "final",
+      };
 }
 
 function renderEngineerAssistantMessage(

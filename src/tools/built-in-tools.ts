@@ -329,7 +329,10 @@ export class BuiltInToolExecutor {
 
     if (!created) {
       try {
-        const existingContents = await readFile(guardedPath.absolutePath, "utf8");
+        const existingContents = await readFile(
+          guardedPath.absolutePath,
+          "utf8",
+        );
         changed = existingContents !== request.content;
       } catch (error) {
         throw new BuiltInToolPathError(

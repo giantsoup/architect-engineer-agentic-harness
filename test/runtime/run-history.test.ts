@@ -24,7 +24,9 @@ describe("readRunInspection", () => {
   });
 
   it("ignores stale result artifacts while the manifest still reports a running task", async () => {
-    const projectRoot = mkdtempSync(path.join(os.tmpdir(), "aeah-run-history-"));
+    const projectRoot = mkdtempSync(
+      path.join(os.tmpdir(), "aeah-run-history-"),
+    );
 
     projectRoots.push(projectRoot);
     await initializeProject(projectRoot);
@@ -72,6 +74,8 @@ describe("readRunInspection", () => {
     expect(inspection.status).toBe("running");
     expect(inspection.phase).toBe("Execution");
     expect(inspection.summary).toBe("Running");
-    expect(inspection.commandStatus).toBe("Running required check: npm run test");
+    expect(inspection.commandStatus).toBe(
+      "Running required check: npm run test",
+    );
   });
 });

@@ -305,7 +305,13 @@ function createQueuedModelClient<TStructured>(
 }
 
 function createCapturingModelClient<TStructured>(
-  outputs: readonly TStructured[],
+  outputs: readonly (
+    | TStructured
+    | {
+        rawContent: string;
+        toolCalls?: NonNullable<ModelChatResponse["toolCalls"]>;
+      }
+  )[],
 ): {
   client: {
     chat<TRequestStructured>(
@@ -331,6 +337,26 @@ function createCapturingModelClient<TStructured>(
         }
 
         requestCount += 1;
+
+        if (
+          typeof nextOutput === "object" &&
+          nextOutput !== null &&
+          ("rawContent" in nextOutput || "toolCalls" in nextOutput)
+        ) {
+          return {
+            id: `mock-${requestCount}`,
+            rawContent:
+              "rawContent" in nextOutput &&
+              typeof nextOutput.rawContent === "string"
+                ? nextOutput.rawContent
+                : "",
+            role: "assistant",
+            ...("toolCalls" in nextOutput && Array.isArray(nextOutput.toolCalls)
+              ? { toolCalls: nextOutput.toolCalls }
+              : {}),
+          };
+        }
+
         return {
           id: `mock-${requestCount}`,
           rawContent: JSON.stringify(nextOutput),
@@ -1050,9 +1076,8 @@ describe("executeEngineerTask", () => {
         type: "tool" as const,
       },
       {
-        outcome: "complete" as const,
-        summary: "The task is complete after the passing required check.",
-        type: "final" as const,
+        rawContent:
+          "COMPLETE: The task is complete after the passing required check.",
       },
     ]);
     let engineerCommandCalls = 0;
@@ -1109,6 +1134,8 @@ describe("executeEngineerTask", () => {
     expect(finalUserPrompt).toContain(
       "Do not restart broad exploration or rerun the required check from this green state.",
     );
+    expect(finalUserPrompt).toContain("The next turn is completion-only.");
+    expect(requests[3]?.tools).toBeUndefined();
     expect(
       events.some(
         (event) =>
@@ -1163,9 +1190,8 @@ describe("executeEngineerTask", () => {
         type: "tool" as const,
       },
       {
-        outcome: "complete" as const,
-        summary: "The task is complete after the passing required check.",
-        type: "final" as const,
+        rawContent:
+          "COMPLETE: The task is complete after the passing required check.",
       },
     ]);
     let engineerCommandCalls = 0;
@@ -1221,6 +1247,8 @@ describe("executeEngineerTask", () => {
     expect(finalUserPrompt).toContain(
       "Do not restart broad exploration or rerun the required check from this green state.",
     );
+    expect(finalUserPrompt).toContain("The next turn is completion-only.");
+    expect(requests[3]?.tools).toBeUndefined();
     expect(checks.checks).toHaveLength(1);
     expect(checks.checks[0]).toMatchObject({
       status: "passed",
@@ -1332,7 +1360,7 @@ describe("executeEngineerTask", () => {
     ).toBe(false);
   });
 
-  it("refuses repeated identical no-op writes after a green required check", async () => {
+  it("switches to completion-only after a no-op write from a green required-check state", async () => {
     const projectRoot = createTempProject();
     projectRoots.push(projectRoot);
     initializeGitRepository(projectRoot);
@@ -1371,18 +1399,8 @@ describe("executeEngineerTask", () => {
         type: "tool" as const,
       },
       {
-        request: {
-          content: "export const value = 2;\n",
-          path: "src/example.ts",
-          toolName: "file.write" as const,
-        },
-        summary: "Repeat the same confirmation write.",
-        type: "tool" as const,
-      },
-      {
-        outcome: "complete" as const,
-        summary: "The task is already complete after the passing required check.",
-        type: "final" as const,
+        rawContent:
+          "COMPLETE: The task is already complete after the passing required check.",
       },
     ]);
     let engineerCommandCalls = 0;
@@ -1421,7 +1439,7 @@ describe("executeEngineerTask", () => {
       task: "Update `src/example.ts` so the exported value becomes `2`.",
     });
 
-    const completionPrompt = requests[4]?.messages
+    const completionPrompt = requests[3]?.messages
       .filter((message) => message.role === "user")
       .map((message) => String(message.content))
       .join("\n");
@@ -1434,15 +1452,213 @@ describe("executeEngineerTask", () => {
     expect(engineerCommandCalls).toBe(1);
     expect(readFileSync(sourcePath, "utf8")).toBe("export const value = 2;\n");
     expect(completionPrompt).toContain(
-      "The previous write to `src/example.ts` did not change the workspace.",
+      "The single allowed post-pass follow-up step has already been used.",
     );
+    expect(completionPrompt).toContain("The next turn is completion-only.");
+    expect(requests[3]?.tools).toBeUndefined();
     expect(
       events.some(
-        (event) =>
-          event.type === "engineer-convergence-guard-triggered" &&
-          event.reason === "post-pass-no-progress",
+        (event) => event.type === "engineer-convergence-guard-triggered",
       ),
-    ).toBe(true);
+    ).toBe(false);
+  });
+
+  it("allows one normal post-pass read before forcing completion-only", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: "http://127.0.0.1:65535/v1",
+      projectRoot,
+      stopConditions: {
+        maxIterations: 8,
+      },
+    });
+    const sourcePath = path.join(projectRoot, "src", "example.ts");
+    const repeatedWrite = {
+      content: "export const value = 2;\n",
+      path: "src/example.ts",
+      toolName: "file.write" as const,
+    };
+    const { client, requests } = createCapturingModelClient([
+      {
+        request: repeatedWrite,
+        summary: "Apply the requested change.",
+        type: "tool" as const,
+      },
+      {
+        request: {
+          accessMode: "mutate",
+          command: "npm run test",
+          toolName: "command.execute" as const,
+        },
+        summary: "Run the required check once.",
+        type: "tool" as const,
+      },
+      {
+        request: {
+          path: "src/example.ts",
+          toolName: "file.read" as const,
+        },
+        summary: "Read the file one more time before deciding whether to stop.",
+        type: "tool" as const,
+      },
+      {
+        rawContent:
+          "COMPLETE: The required check is green and the task is already satisfied.",
+      },
+    ]);
+    let engineerCommandCalls = 0;
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        engineerCommandCalls += 1;
+
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 10,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: 0,
+          role: "engineer",
+          stderr: "",
+          stdout: "tests passed\n",
+          timestamp: "2026-04-15T12:06:00.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      modelClient: client,
+      projectCommandRunner: fakeCommandRunner,
+      task: "Update `src/example.ts` so the exported value becomes `2`.",
+    });
+
+    const completionPrompt = requests[3]?.messages
+      .filter((message) => message.role === "user")
+      .map((message) => String(message.content))
+      .join("\n");
+
+    expect(execution.result.status).toBe("success");
+    expect(execution.stopReason).toBe("engineer-complete");
+    expect(execution.stopReason).not.toBe("max-iterations");
+    expect(engineerCommandCalls).toBe(1);
+    expect(readFileSync(sourcePath, "utf8")).toBe("export const value = 2;\n");
+    expect(completionPrompt).toContain(
+      "The single allowed post-pass follow-up step has already been used.",
+    );
+    expect(completionPrompt).toContain("The next turn is completion-only.");
+    expect(requests[3]?.tools).toBeUndefined();
+  });
+
+  it("fails fast with a specific stop reason when completion-only mode still gets a tool call", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+
+    const loadedConfig = await createLoadedConfig({
+      engineerBaseUrl: "http://127.0.0.1:65535/v1",
+      projectRoot,
+      stopConditions: {
+        maxIterations: 8,
+      },
+    });
+    const sourcePath = path.join(projectRoot, "src", "example.ts");
+    const repeatedWrite = {
+      content: "export const value = 2;\n",
+      path: "src/example.ts",
+      toolName: "file.write" as const,
+    };
+    const { client, requests } = createCapturingModelClient([
+      {
+        request: repeatedWrite,
+        summary: "Apply the requested change.",
+        type: "tool" as const,
+      },
+      {
+        request: {
+          accessMode: "mutate",
+          command: "npm run test",
+          toolName: "command.execute" as const,
+        },
+        summary: "Run the required check once.",
+        type: "tool" as const,
+      },
+      {
+        request: repeatedWrite,
+        summary: "Confirm the file content.",
+        type: "tool" as const,
+      },
+      {
+        rawContent: "Try the same write again.",
+        toolCalls: [
+          {
+            arguments: {
+              content: "export const value = 2;\n",
+              path: "src/example.ts",
+            },
+            id: "call_repeat_write_after_completion_only",
+            name: "file.write",
+          },
+        ],
+      },
+    ]);
+    let engineerCommandCalls = 0;
+    const fakeCommandRunner = {
+      close() {},
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(request: {
+        accessMode?: "inspect" | "mutate";
+        command: string;
+      }): Promise<ContainerCommandResult> {
+        engineerCommandCalls += 1;
+
+        return {
+          accessMode: request.accessMode ?? "mutate",
+          command: request.command,
+          containerName: "app",
+          durationMs: 10,
+          environment: {},
+          executionTarget: "docker",
+          exitCode: 0,
+          role: "engineer",
+          stderr: "",
+          stdout: "tests passed\n",
+          timestamp: "2026-04-15T12:07:00.000Z",
+          workingDirectory: "/workspace",
+        };
+      },
+    };
+
+    const execution = await executeEngineerTask({
+      loadedConfig,
+      modelClient: client,
+      projectCommandRunner: fakeCommandRunner,
+      task: "Update `src/example.ts` so the exported value becomes `2`.",
+    });
+
+    expect(execution.result.status).toBe("failed");
+    expect(execution.stopReason).toBe("completion-path-failed");
+    expect(execution.stopReason).not.toBe("max-iterations");
+    expect(execution.result.summary).toContain(
+      "Engineer failed to complete from the green-check completion path",
+    );
+    expect(engineerCommandCalls).toBe(1);
+    expect(readFileSync(sourcePath, "utf8")).toBe("export const value = 2;\n");
+    expect(requests[3]?.tools).toBeUndefined();
   });
 
   it("requires a fresh required check after post-pass edits before completion", async () => {
