@@ -1,6 +1,7 @@
 import type { LoadedHarnessConfig } from "../types/config.js";
 import type { ModelConfig } from "../types/config.js";
 import type { RunDossierPaths } from "../artifacts/paths.js";
+import type { HarnessEventBus } from "../runtime/harness-events.js";
 import {
   createRunDossierModelLogger,
   type CreateRunDossierModelLoggerOptions,
@@ -22,6 +23,7 @@ export const DEFAULT_MODEL_MAX_RETRIES = 2;
 export interface CreateRoleModelClientOptions {
   dossierLoggerOptions?: Omit<CreateRunDossierModelLoggerOptions, "paths">;
   dossierPaths?: RunDossierPaths;
+  eventBus?: HarnessEventBus;
   fetch?: typeof fetch;
   loadedConfig: LoadedHarnessConfig;
   logger?: ModelRequestLogger;
@@ -45,6 +47,7 @@ export function createRoleModelClient(
 
   return new OpenAiCompatibleChatClient({
     config,
+    ...(options.eventBus === undefined ? {} : { eventBus: options.eventBus }),
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
     ...(logger === undefined ? {} : { logger }),
   });

@@ -8,6 +8,7 @@ import type {
   ResolvedModelConfig,
 } from "./types.js";
 import type { JsonValue } from "../types/run.js";
+import type { HarnessEventBus } from "../runtime/harness-events.js";
 import {
   resolveModelFamilyAdapter,
   type ModelFamilyAdapter,
@@ -158,6 +159,7 @@ export class ModelStructuredOutputError extends ModelClientError {
 
 export interface OpenAiCompatibleChatClientOptions {
   config: ResolvedModelConfig;
+  eventBus?: HarnessEventBus;
   fetch?: typeof fetch;
   logger?: ModelRequestLogger;
   retryDelayMs?: number;
@@ -201,7 +203,10 @@ export class OpenAiCompatibleChatClient {
   constructor(options: OpenAiCompatibleChatClientOptions) {
     this.config = options.config;
     this.fetchImpl = options.fetch ?? globalThis.fetch;
-    this.logger = options.logger;
+    this.logger = combineModelRequestLoggers(
+      createHarnessEventModelLogger(options.eventBus, this.config),
+      options.logger,
+    );
     this.modelFamilyAdapter = resolveModelFamilyAdapter(this.config);
     this.retryDelayMs = options.retryDelayMs ?? 100;
   }
@@ -672,6 +677,111 @@ export class OpenAiCompatibleChatClient {
   private describeTarget(): string {
     return `${this.config.role} model \`${this.config.model}\` at ${this.config.chatCompletionsUrl}`;
   }
+}
+
+function createHarnessEventModelLogger(
+  eventBus: HarnessEventBus | undefined,
+  config: ResolvedModelConfig,
+): ModelRequestLogger | undefined {
+  if (eventBus === undefined) {
+    return undefined;
+  }
+
+  const requestRunIds = new Map<number, string>();
+
+  return {
+    onRequest(event) {
+      const runId = resolveModelRunId(event.metadata);
+
+      if (runId !== undefined) {
+        requestRunIds.set(event.attempt, runId);
+      } else {
+        requestRunIds.delete(event.attempt);
+      }
+
+      eventBus.emit({
+        type: "model:request",
+        attempt: event.attempt,
+        configuredTimeoutMs: event.configuredTimeoutMs,
+        messageCount: event.messageCount,
+        metadata: event.metadata,
+        model: config.model,
+        provider: event.provider,
+        role: event.role,
+        ...(runId === undefined ? {} : { runId }),
+        timestamp: event.timestamp,
+        url: event.url,
+        usedNativeStructuredOutput: event.usedNativeStructuredOutput,
+      });
+    },
+    onRetry(event) {
+      const runId = requestRunIds.get(event.attempt);
+
+      eventBus.emit({
+        type: "model:retry",
+        attempt: event.attempt,
+        classification: event.classification,
+        message: event.message,
+        model: config.model,
+        nextAttempt: event.nextAttempt,
+        provider: event.provider,
+        retryable: event.retryable,
+        role: event.role,
+        ...(runId === undefined ? {} : { runId }),
+        statusCode: event.statusCode,
+        timestamp: event.timestamp,
+        usedNativeStructuredOutput: event.usedNativeStructuredOutput,
+      });
+
+      requestRunIds.delete(event.attempt);
+    },
+    onError(event) {
+      requestRunIds.delete(event.attempt);
+    },
+    onResponse(event) {
+      requestRunIds.delete(event.attempt);
+    },
+  };
+}
+
+function combineModelRequestLoggers(
+  primaryLogger: ModelRequestLogger | undefined,
+  secondaryLogger: ModelRequestLogger | undefined,
+): ModelRequestLogger | undefined {
+  if (primaryLogger === undefined) {
+    return secondaryLogger;
+  }
+
+  if (secondaryLogger === undefined) {
+    return primaryLogger;
+  }
+
+  return {
+    onError: async (event) => {
+      await primaryLogger.onError?.(event);
+      await secondaryLogger.onError?.(event);
+    },
+    onRequest: async (event) => {
+      await primaryLogger.onRequest?.(event);
+      await secondaryLogger.onRequest?.(event);
+    },
+    onResponse: async (event) => {
+      await primaryLogger.onResponse?.(event);
+      await secondaryLogger.onResponse?.(event);
+    },
+    onRetry: async (event) => {
+      await primaryLogger.onRetry?.(event);
+      await secondaryLogger.onRetry?.(event);
+    },
+  };
+}
+
+function resolveModelRunId(
+  metadata: { [key: string]: JsonValue | undefined } | undefined,
+): string | undefined {
+  const runId = metadata?.runId;
+
+  return typeof runId === "string" && runId.length > 0 ? runId : undefined;
 }
 
 function createHttpError(

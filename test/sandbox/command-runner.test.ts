@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   createDockerContainerSession,
+  createHarnessEventBus,
   createHostCommandSession,
   ContainerCommandCancelledError,
   ContainerCommandTimeoutError,
@@ -595,6 +596,121 @@ describe("ProjectCommandRunner", () => {
       role: "engineer",
       status: "completed",
       workingDirectory: hostWorkingDirectory,
+    });
+  });
+
+  it("emits ordered live command events while preserving buffered results", async () => {
+    const loadedConfig = await createLoadedConfigForExecutionTarget("host");
+    createdProjectRoots.push(loadedConfig.projectRoot);
+    const hostWorkingDirectory = path.join(loadedConfig.projectRoot, "scripts");
+    const events: Array<Record<string, unknown>> = [];
+    const eventBus = createHarnessEventBus({
+      now: () => FIXED_NOW,
+    });
+    const runner = createProjectCommandRunner({
+      eventBus,
+      loadedConfig,
+      now: () => FIXED_NOW,
+      runProcess: async (options) => {
+        options.onStdoutChunk?.(Buffer.from("first\n"));
+        options.onStderrChunk?.(Buffer.from("warn\n"));
+        options.onStdoutChunk?.(Buffer.from("second\n"));
+
+        return {
+          durationMs: 12,
+          exitCode: 0,
+          stderr: "warn\n",
+          stdout: "first\nsecond\n",
+        };
+      },
+    });
+
+    eventBus.subscribe((event) => {
+      events.push(event as unknown as Record<string, unknown>);
+    });
+
+    rmSync(hostWorkingDirectory, { force: true, recursive: true });
+    mkdirSync(hostWorkingDirectory, { recursive: true });
+
+    const result = await runner.executeEngineerCommand({
+      accessMode: "mutate",
+      command: "npm test",
+      workingDirectory: "scripts",
+    });
+
+    expect(result.stdout).toBe("first\nsecond\n");
+    expect(result.stderr).toBe("warn\n");
+    expect(events.map((event) => `${event.seq}:${event.type}`)).toEqual([
+      "1:command:start",
+      "2:command:stdout",
+      "3:command:stderr",
+      "4:command:stdout",
+      "5:command:end",
+    ]);
+    expect(events[0]).toMatchObject({
+      command: "npm test",
+      role: "engineer",
+      type: "command:start",
+      workingDirectory: "scripts",
+    });
+    expect(events[4]).toMatchObject({
+      command: "npm test",
+      durationMs: 12,
+      executionTarget: "host",
+      exitCode: 0,
+      status: "completed",
+      type: "command:end",
+    });
+  });
+
+  it("emits command error events for failed command execution", async () => {
+    const loadedConfig = await createLoadedConfigForExecutionTarget("host");
+    createdProjectRoots.push(loadedConfig.projectRoot);
+    const events: Array<Record<string, unknown>> = [];
+    const eventBus = createHarnessEventBus({
+      now: () => FIXED_NOW,
+    });
+    const runner = createProjectCommandRunner({
+      eventBus,
+      loadedConfig,
+      now: () => FIXED_NOW,
+      runProcess: async () => {
+        throw new ProcessTimeoutError("timed out", {
+          args: ["-lc", "npm test"],
+          file: "sh",
+          result: {
+            durationMs: 25,
+            exitCode: null,
+            stderr: "still running\n",
+            stdout: "partial\n",
+          },
+          timeoutMs: 15,
+        });
+      },
+    });
+
+    eventBus.subscribe((event) => {
+      events.push(event as unknown as Record<string, unknown>);
+    });
+
+    await expect(
+      runner.executeEngineerCommand({
+        command: "npm test",
+        timeoutMs: 15,
+      }),
+    ).rejects.toBeInstanceOf(ContainerCommandTimeoutError);
+
+    expect(events.map((event) => event.type)).toEqual([
+      "command:start",
+      "command:error",
+    ]);
+    expect(events[1]).toMatchObject({
+      command: "npm test",
+      errorName: "ContainerCommandTimeoutError",
+      exitCode: null,
+      status: "timed-out",
+      timeoutMs: 15,
+      type: "command:error",
     });
   });
 

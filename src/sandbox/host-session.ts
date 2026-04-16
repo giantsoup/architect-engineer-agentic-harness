@@ -148,6 +148,12 @@ class HostCommandSession implements ContainerSession {
           ...environment,
         },
         file: resolveHostShellFile(),
+        ...(command.onStderrChunk === undefined
+          ? {}
+          : { onStderrChunk: command.onStderrChunk }),
+        ...(command.onStdoutChunk === undefined
+          ? {}
+          : { onStdoutChunk: command.onStdoutChunk }),
         signal,
         ...(command.timeoutMs === undefined
           ? {}

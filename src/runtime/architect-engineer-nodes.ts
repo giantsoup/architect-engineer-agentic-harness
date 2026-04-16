@@ -45,6 +45,7 @@ import {
   writeRunResult,
   type RunDossier,
 } from "./run-dossier.js";
+import type { HarnessEventBus } from "./harness-events.js";
 import {
   appendFailureNote,
   createArchitectFailureNote,
@@ -90,6 +91,7 @@ export interface ArchitectRunModelClient {
 export interface ArchitectEngineerNodeContext {
   architectModelClient?: ArchitectRunModelClient;
   engineerModelClient?: EngineerTaskModelClient;
+  eventBus?: HarnessEventBus;
   loadedConfig: LoadedHarnessConfig;
   mcpClientFactory?: CreateMcpServerClient;
   now: () => Date;
@@ -143,6 +145,13 @@ export async function prepareArchitectEngineerRunNode(
     timestamp,
     type: "architect-engineer-run-started",
   });
+  emitArtifactUpdate(
+    context.eventBus,
+    dossier.paths,
+    "run",
+    "write",
+    timestamp,
+  );
 
   const preparedState = withPreparedDossier(state, dossier);
   const gitPreparation = await prepareRunGitAutomation({
@@ -227,6 +236,13 @@ export async function architectPlanningNode(
     renderArchitectPlanMarkdown(architectLoop.output, timestamp),
     timestamp,
   );
+  emitArtifactUpdate(
+    context.eventBus,
+    dossier.paths,
+    "architectPlan",
+    "write",
+    timestamp,
+  );
   await appendRunEvent(dossier.paths, {
     steps: architectLoop.output.steps,
     summary: architectLoop.output.summary,
@@ -276,6 +292,7 @@ export async function engineerExecutionNode(
       ...(context.mcpClientFactory === undefined
         ? {}
         : { mcpClientFactory: context.mcpClientFactory }),
+      ...(context.eventBus === undefined ? {} : { eventBus: context.eventBus }),
       ...(context.projectCommandRunner === undefined
         ? {}
         : { projectCommandRunner: context.projectCommandRunner }),
@@ -412,6 +429,13 @@ export async function architectReviewNode(
     renderArchitectReviewMarkdown(architectLoop.output, timestamp),
     timestamp,
   );
+  emitArtifactUpdate(
+    context.eventBus,
+    dossier.paths,
+    "architectReview",
+    "write",
+    timestamp,
+  );
   await appendRunEvent(dossier.paths, {
     decision: architectLoop.output.decision,
     nextActions: architectLoop.output.nextActions,
@@ -506,14 +530,35 @@ export async function finalizeArchitectEngineerRunNode(
       renderFailureNotesMarkdown(finalizedState.failureNotes),
       timestamp,
     );
+    emitArtifactUpdate(
+      context.eventBus,
+      dossier.paths,
+      "failureNotes",
+      "write",
+      timestamp,
+    );
   } else if (
     resolvedFinalOutcome.status === "success" &&
     finalizedState.failureNotes.length > 0
   ) {
     await writeFailureNotes(dossier.paths, "", timestamp);
+    emitArtifactUpdate(
+      context.eventBus,
+      dossier.paths,
+      "failureNotes",
+      "write",
+      timestamp,
+    );
   }
 
   await writeFinalReport(dossier.paths, finalReport, timestamp);
+  emitArtifactUpdate(
+    context.eventBus,
+    dossier.paths,
+    "finalReport",
+    "write",
+    timestamp,
+  );
 
   const resultArtifacts = [
     dossier.paths.files.run.relativePath,
@@ -556,6 +601,13 @@ export async function finalizeArchitectEngineerRunNode(
     },
     timestamp,
   );
+  emitArtifactUpdate(
+    context.eventBus,
+    dossier.paths,
+    "result",
+    "write",
+    timestamp,
+  );
 
   return finalizedState;
 }
@@ -590,6 +642,9 @@ async function runArchitectLoop<TKind extends "plan" | "review">(options: {
 > {
   const toolRouter = createToolRouter({
     dossierPaths: options.dossier.paths,
+    ...(options.context.eventBus === undefined
+      ? {}
+      : { eventBus: options.context.eventBus }),
     loadedConfig: options.context.loadedConfig,
     ...(options.context.mcpClientFactory === undefined
       ? {}
@@ -613,6 +668,9 @@ async function runArchitectLoop<TKind extends "plan" | "review">(options: {
       options.context.architectModelClient ??
       createRoleModelClient({
         dossierPaths: options.dossier.paths,
+        ...(options.context.eventBus === undefined
+          ? {}
+          : { eventBus: options.context.eventBus }),
         loadedConfig: withBoundRoleTimeout(
           options.context.loadedConfig,
           "architect",
@@ -782,6 +840,24 @@ async function runArchitectLoop<TKind extends "plan" | "review">(options: {
   } finally {
     await toolRouter.close();
   }
+}
+
+function emitArtifactUpdate(
+  eventBus: HarnessEventBus | undefined,
+  paths: RunDossier["paths"],
+  artifact: keyof RunDossier["paths"]["files"],
+  operation: "append" | "write",
+  timestamp: string,
+): void {
+  eventBus?.emit({
+    type: "artifact:update",
+    artifact,
+    artifactKind: paths.files[artifact].kind,
+    operation,
+    path: paths.files[artifact].relativePath,
+    runId: paths.runId,
+    timestamp,
+  });
 }
 
 async function executeArchitectTool(

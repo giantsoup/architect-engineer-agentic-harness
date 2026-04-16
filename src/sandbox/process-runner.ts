@@ -13,9 +13,13 @@ export interface RunProcessCommandOptions {
   env?: NodeJS.ProcessEnv;
   file: string;
   killGraceMs?: number;
+  onStderrChunk?: ProcessOutputObserver;
+  onStdoutChunk?: ProcessOutputObserver;
   signal?: AbortSignal;
   timeoutMs?: number;
 }
+
+export type ProcessOutputObserver = (chunk: Buffer) => void;
 
 export type RunProcess = (
   options: RunProcessCommandOptions,
@@ -191,10 +195,20 @@ export async function runProcessCommand(
     }
 
     child.stdout?.on("data", (chunk: string | Buffer) => {
-      stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      const normalizedChunk = Buffer.isBuffer(chunk)
+        ? chunk
+        : Buffer.from(chunk);
+
+      stdoutChunks.push(normalizedChunk);
+      safelyObserveChunk(options.onStdoutChunk, normalizedChunk);
     });
     child.stderr?.on("data", (chunk: string | Buffer) => {
-      stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      const normalizedChunk = Buffer.isBuffer(chunk)
+        ? chunk
+        : Buffer.from(chunk);
+
+      stderrChunks.push(normalizedChunk);
+      safelyObserveChunk(options.onStderrChunk, normalizedChunk);
     });
 
     child.once("error", (error) => {
@@ -252,6 +266,21 @@ export async function runProcessCommand(
       });
     });
   });
+}
+
+function safelyObserveChunk(
+  observer: ProcessOutputObserver | undefined,
+  chunk: Buffer,
+): void {
+  if (observer === undefined) {
+    return;
+  }
+
+  try {
+    observer(chunk);
+  } catch {
+    // Streaming observers are best-effort and must not break command execution.
+  }
 }
 
 function emptyProcessCommandResult(): ProcessCommandResult {

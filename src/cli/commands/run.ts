@@ -11,6 +11,7 @@ import {
   initializeRunDossier,
   loadHarnessConfig,
 } from "../../index.js";
+import { createHarnessEventBus } from "../../runtime/harness-events.js";
 import { readRunInspection } from "../../runtime/run-history.js";
 import { createLiveConsoleRenderer } from "../../ui/live-console.js";
 import { renderRunCompletionSummary } from "../../ui/summary-renderer.js";
@@ -24,6 +25,7 @@ interface RunCommandOptions {
   task?: string;
   taskFile?: string;
   timeoutMs?: number;
+  ui: "live" | "plain" | "tui";
 }
 
 export function createRunCommand(): Command {
@@ -48,6 +50,7 @@ export function createRunCommand(): Command {
       "Command timeout in milliseconds",
       parsePositiveInteger,
     )
+    .option("--ui <mode>", "UI mode", parseUiMode, "live")
     .action(async (options: RunCommandOptions) => {
       const environment = parseEnvironmentEntries(options.env);
       const runMode = await resolveRunMode(options);
@@ -64,7 +67,9 @@ export function createRunCommand(): Command {
           runId,
           runsDir: loadedConfig.config.artifacts.runsDir,
         });
-        const liveConsole = createLiveConsoleRenderer({
+        const eventBus = createHarnessEventBus();
+        const liveConsole = createRunUiController({
+          mode: options.ui,
           paths: dossierPaths,
         });
 
@@ -73,6 +78,7 @@ export function createRunCommand(): Command {
 
         try {
           execution = await executeArchitectEngineerRun({
+            eventBus,
             loadedConfig,
             runId,
             task: runMode.task,
@@ -104,8 +110,10 @@ export function createRunCommand(): Command {
       }
 
       const dossier = await initializeRunDossier(loadedConfig);
+      const eventBus = createHarnessEventBus();
       const runner = createProjectCommandRunner({
         dossierPaths: dossier.paths,
+        eventBus,
         loadedConfig,
       });
 
@@ -185,6 +193,16 @@ function parsePositiveInteger(value: string): number {
   return parsedValue;
 }
 
+function parseUiMode(value: string): "live" | "plain" | "tui" {
+  if (value === "live" || value === "plain" || value === "tui") {
+    return value;
+  }
+
+  throw new InvalidArgumentError(
+    "Expected `plain`, `live`, or `tui` for --ui.",
+  );
+}
+
 function parseRole(value: string): "architect" | "engineer" {
   if (value === "architect" || value === "engineer") {
     return value;
@@ -193,6 +211,22 @@ function parseRole(value: string): "architect" | "engineer" {
   throw new InvalidArgumentError(
     "Expected `architect` or `engineer` for --role.",
   );
+}
+
+function createRunUiController(options: {
+  mode: RunCommandOptions["ui"];
+  paths: Parameters<typeof createLiveConsoleRenderer>[0]["paths"];
+}) {
+  if (options.mode === "live") {
+    return createLiveConsoleRenderer({
+      paths: options.paths,
+    });
+  }
+
+  return {
+    start() {},
+    async stop() {},
+  };
 }
 
 async function resolveRunMode(

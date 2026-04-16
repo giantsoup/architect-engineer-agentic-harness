@@ -23,6 +23,7 @@ import type { RunProcess } from "../sandbox/process-runner.js";
 import type { EngineerTaskModelClient } from "./engineer-task.js";
 import type { RunDossier } from "./run-dossier.js";
 import type { RunResult } from "../types/run.js";
+import type { HarnessEventBus } from "./harness-events.js";
 import { createProjectCommandRunner } from "../sandbox/command-runner.js";
 import { createRunId } from "../artifacts/run-id.js";
 import type { CreateMcpServerClient } from "../tools/mcp/client.js";
@@ -34,6 +35,7 @@ export interface ExecuteArchitectEngineerRunOptions {
   architectModelClient?: ArchitectRunModelClient;
   createdAt?: Date;
   engineerModelClient?: EngineerTaskModelClient;
+  eventBus?: HarnessEventBus;
   loadedConfig: LoadedHarnessConfig;
   maxConsecutiveFailedChecks?: number;
   mcpClientFactory?: CreateMcpServerClient;
@@ -77,6 +79,7 @@ export async function executeArchitectEngineerRun(
     ...(options.engineerModelClient === undefined
       ? {}
       : { engineerModelClient: options.engineerModelClient }),
+    ...(options.eventBus === undefined ? {} : { eventBus: options.eventBus }),
     ...(options.mcpClientFactory === undefined
       ? {}
       : { mcpClientFactory: options.mcpClientFactory }),
@@ -97,10 +100,37 @@ export async function executeArchitectEngineerRun(
 
       if (stopConditionOutcome !== undefined && state.nextNode !== "prepare") {
         state = withFinalOutcome(state, stopConditionOutcome);
+        emitRunStatus(
+          options.eventBus,
+          state.metadata.runId,
+          state.nextNode,
+          stopConditionOutcome.status,
+          stopConditionOutcome.summary,
+          stopConditionOutcome.stopReason,
+          now().toISOString(),
+        );
         break;
       }
 
       const nextNode = state.nextNode;
+      const loopTimestamp = now().toISOString();
+
+      emitRunStatus(
+        options.eventBus,
+        state.metadata.runId,
+        nextNode,
+        nextNode === "prepare" ? "initialized" : "running",
+        describeNodeStatus(nextNode),
+        undefined,
+        loopTimestamp,
+      );
+      emitAgentStatus(
+        options.eventBus,
+        state,
+        nextNode,
+        "active",
+        loopTimestamp,
+      );
 
       if (
         projectCommandRunner === undefined &&
@@ -109,6 +139,9 @@ export async function executeArchitectEngineerRun(
       ) {
         projectCommandRunner = createProjectCommandRunner({
           dossierPaths: state.dossier.paths,
+          ...(options.eventBus === undefined
+            ? {}
+            : { eventBus: options.eventBus }),
           loadedConfig: options.loadedConfig,
           now,
           ...(options.runProcess === undefined
@@ -133,6 +166,14 @@ export async function executeArchitectEngineerRun(
           break;
       }
 
+      emitAgentStatus(
+        options.eventBus,
+        state,
+        nextNode,
+        "completed",
+        now().toISOString(),
+      );
+
       if (
         state.finalOutcome === undefined &&
         hasArchitectEngineerTimedOut(state, now())
@@ -142,10 +183,31 @@ export async function executeArchitectEngineerRun(
           stopReason: "timeout",
           summary: `Run timed out after ${timeoutMs}ms.`,
         });
+        const timeoutOutcome = state.finalOutcome;
+
+        emitRunStatus(
+          options.eventBus,
+          state.metadata.runId,
+          state.nextNode,
+          timeoutOutcome?.status ?? "stopped",
+          timeoutOutcome?.summary,
+          timeoutOutcome?.stopReason,
+          now().toISOString(),
+        );
       }
     }
 
     state = await finalizeArchitectEngineerRunNode(state, nodeContext);
+    emitRunStatus(
+      options.eventBus,
+      state.metadata.runId,
+      "finalize",
+      state.finalOutcome?.status ?? "stopped",
+      state.finalOutcome?.summary ??
+        `Run timed out after ${state.metadata.timeoutMs}ms.`,
+      state.finalOutcome?.stopReason,
+      now().toISOString(),
+    );
 
     return {
       dossier: state.dossier!,
@@ -183,4 +245,102 @@ export async function executeArchitectEngineerRun(
       projectCommandRunner.close();
     }
   }
+}
+
+function describeNodeStatus(
+  nextNode: ArchitectEngineerState["nextNode"],
+): string {
+  switch (nextNode) {
+    case "prepare":
+      return "Preparing run dossier.";
+    case "plan":
+      return "Architect planning in progress.";
+    case "execute":
+      return "Engineer execution in progress.";
+    case "review":
+      return "Architect review in progress.";
+    case "finalize":
+      return "Finalizing run.";
+  }
+}
+
+function emitRunStatus(
+  eventBus: HarnessEventBus | undefined,
+  runId: string,
+  phase: ArchitectEngineerState["nextNode"],
+  status: RunResult["status"] | "initialized" | "running" | "stopped",
+  summary: string | undefined,
+  stopReason: ArchitectEngineerStopReason | undefined,
+  timestamp: string,
+): void {
+  eventBus?.emit({
+    type: "run:status",
+    phase,
+    runId,
+    status,
+    ...(stopReason === undefined ? {} : { stopReason }),
+    ...(summary === undefined ? {} : { summary }),
+    timestamp,
+  });
+}
+
+function emitAgentStatus(
+  eventBus: HarnessEventBus | undefined,
+  state: ArchitectEngineerState,
+  phase: ArchitectEngineerState["nextNode"],
+  status: "active" | "completed",
+  timestamp: string,
+): void {
+  if (phase !== "plan" && phase !== "execute" && phase !== "review") {
+    return;
+  }
+
+  if (phase === "plan") {
+    eventBus?.emit({
+      type: "agent:update",
+      agent: "architect",
+      phase,
+      runId: state.metadata.runId,
+      status,
+      summary:
+        status === "completed"
+          ? (state.architectPlan?.summary ?? "Architect planning finished.")
+          : "Architect planning in progress.",
+      timestamp,
+    });
+    return;
+  }
+
+  if (phase === "execute") {
+    eventBus?.emit({
+      type: "agent:update",
+      agent: "engineer",
+      iteration:
+        state.iterations.engineerAttempts + (status === "active" ? 1 : 0),
+      phase,
+      runId: state.metadata.runId,
+      status,
+      summary:
+        status === "completed"
+          ? (state.engineerExecution?.result.summary ??
+            "Engineer execution finished.")
+          : "Engineer execution in progress.",
+      timestamp,
+    });
+    return;
+  }
+
+  eventBus?.emit({
+    type: "agent:update",
+    agent: "architect",
+    iteration: state.iterations.reviewCycles + (status === "active" ? 1 : 0),
+    phase,
+    runId: state.metadata.runId,
+    status,
+    summary:
+      status === "completed"
+        ? (state.architectReview?.summary ?? "Architect review finished.")
+        : "Architect review in progress.",
+    timestamp,
+  });
 }

@@ -12,6 +12,7 @@ import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  createHarnessEventBus,
   executeArchitectEngineerRun,
   initializeProject,
   loadHarnessConfig,
@@ -1767,6 +1768,123 @@ args = ["repo-mcp.js"]`,
     expect(failureNotes).toBe("");
     expect(execution.result.artifacts).not.toContain(
       execution.dossier.paths.files.failureNotes.relativePath,
+    );
+  });
+
+  it("emits ordered runtime status, agent, artifact, and check events", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+    commitFile(projectRoot, "src/example.ts", "export const value = 1;\n");
+
+    const loadedConfig = await createLoadedConfig(projectRoot);
+    const architect = createQueuedModelClient([
+      {
+        acceptanceCriteria: ["`npm run test` passes"],
+        steps: ["Run the required test command"],
+        summary: "Verify the change.",
+        type: "plan",
+      },
+      {
+        decision: "approve",
+        summary: "Verified and approved.",
+        type: "review",
+      },
+    ]);
+    const engineer = createQueuedModelClient([
+      {
+        request: {
+          accessMode: "mutate",
+          command: "npm run test",
+          toolName: "command.execute",
+        },
+        stopWhenSuccessful: true,
+        summary: "Run the required check.",
+        type: "tool",
+      },
+    ]);
+    const bus = createHarnessEventBus({
+      now: () => new Date("2026-04-14T12:01:00.000Z"),
+    });
+    const events: Array<Record<string, unknown>> = [];
+
+    bus.subscribe((event) => {
+      events.push(event as unknown as Record<string, unknown>);
+    });
+
+    await executeArchitectEngineerRun({
+      architectModelClient: architect.client,
+      createdAt: new Date("2026-04-14T12:01:00.000Z"),
+      engineerModelClient: engineer.client,
+      eventBus: bus,
+      loadedConfig,
+      now: () => new Date("2026-04-14T12:01:30.000Z"),
+      projectCommandRunner: {
+        close() {},
+        async executeArchitectCommand(): Promise<ContainerCommandResult> {
+          throw new Error("Architect commands should not be used.");
+        },
+        async executeEngineerCommand(request: {
+          accessMode?: "inspect" | "mutate";
+          command: string;
+        }): Promise<ContainerCommandResult> {
+          return {
+            accessMode: request.accessMode ?? "mutate",
+            command: request.command,
+            durationMs: 15,
+            environment: {},
+            executionTarget: "host",
+            exitCode: 0,
+            role: "engineer",
+            stderr: "",
+            stdout: "tests passed\n",
+            timestamp: "2026-04-14T12:01:30.000Z",
+            workingDirectory: projectRoot,
+          };
+        },
+      },
+      runId: "20260414T120100.000Z-abc129",
+      task: "Verify the required check and finish the run.",
+    });
+
+    expect(events.map((event) => event.seq)).toEqual(
+      events.map((_, index) => index + 1),
+    );
+    expect(events.map((event) => event.type)).toEqual(
+      expect.arrayContaining([
+        "run:status",
+        "agent:update",
+        "artifact:update",
+        "check:update",
+      ]),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        artifact: "engineerTask",
+        type: "artifact:update",
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        artifact: "checks",
+        type: "artifact:update",
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        check: expect.objectContaining({
+          command: "npm run test",
+          status: "passed",
+        }),
+        type: "check:update",
+      }),
+    );
+    expect(events.at(-1)).toEqual(
+      expect.objectContaining({
+        status: "success",
+        stopReason: "architect-approved",
+        type: "run:status",
+      }),
     );
   });
 

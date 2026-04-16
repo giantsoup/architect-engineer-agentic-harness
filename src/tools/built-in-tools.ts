@@ -117,6 +117,9 @@ export class BuiltInToolExecutor {
         ...(options.dossierPaths === undefined
           ? {}
           : { dossierPaths: options.dossierPaths }),
+        ...(options.eventBus === undefined
+          ? {}
+          : { eventBus: options.eventBus }),
         ...(options.now === undefined ? {} : { now: options.now }),
         ...(options.runProcess === undefined
           ? {}

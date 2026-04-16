@@ -48,6 +48,7 @@ import {
   writeRunResult,
   type RunDossier,
 } from "./run-dossier.js";
+import type { HarnessEventBus } from "./harness-events.js";
 
 const DEFAULT_RUN_TIMEOUT_MS = 60 * 60 * 1000;
 const MAX_MODEL_VISIBLE_FILE_READ_CHARS = 4000;
@@ -82,6 +83,7 @@ export interface EngineerTaskModelClient {
 export interface ExecuteEngineerTaskOptions {
   createdAt?: Date;
   dossier?: RunDossier;
+  eventBus?: HarnessEventBus;
   initialChecks?: readonly RunCheckResult[];
   initialConsecutiveFailedChecks?: number;
   loadedConfig: LoadedHarnessConfig;
@@ -186,6 +188,9 @@ export async function executeEngineerTask(
     options.projectCommandRunner === undefined
       ? createToolRouter({
           dossierPaths: dossier.paths,
+          ...(options.eventBus === undefined
+            ? {}
+            : { eventBus: options.eventBus }),
           loadedConfig: options.loadedConfig,
           ...(options.mcpClientFactory === undefined
             ? {}
@@ -197,6 +202,9 @@ export async function executeEngineerTask(
         })
       : createToolRouter({
           dossierPaths: dossier.paths,
+          ...(options.eventBus === undefined
+            ? {}
+            : { eventBus: options.eventBus }),
           loadedConfig: options.loadedConfig,
           ...(options.mcpClientFactory === undefined
             ? {}
@@ -223,6 +231,13 @@ export async function executeEngineerTask(
 
     await writeRunLifecycleStatus(dossier.paths, "running", initialTimestamp);
     await writeEngineerTask(dossier.paths, taskBrief, initialTimestamp);
+    emitArtifactUpdate(
+      options.eventBus,
+      dossier.paths,
+      "engineerTask",
+      "write",
+      initialTimestamp,
+    );
     await appendStructuredMessage(dossier.paths, {
       content: taskBrief,
       format: "markdown",
@@ -337,6 +352,9 @@ export async function executeEngineerTask(
         options.modelClient ??
         createRoleModelClient({
           dossierPaths: dossier.paths,
+          ...(options.eventBus === undefined
+            ? {}
+            : { eventBus: options.eventBus }),
           loadedConfig: withEngineerTimeout(
             options.loadedConfig,
             Math.max(1, remainingTimeMs),
@@ -693,16 +711,34 @@ export async function executeEngineerTask(
         !shouldSkipRequiredCheckRecording(convergenceGuardReason)
       ) {
         const recordedCheck = toCheckResult(toolFeedback, requiredCheckCommand);
+        const checkTimestamp = now().toISOString();
 
         checks.push(recordedCheck);
         await writeChecks(
           dossier.paths,
           {
             checks,
-            recordedAt: now().toISOString(),
+            recordedAt: checkTimestamp,
           },
-          now().toISOString(),
+          checkTimestamp,
         );
+        emitArtifactUpdate(
+          options.eventBus,
+          dossier.paths,
+          "checks",
+          "write",
+          checkTimestamp,
+        );
+        options.eventBus?.emit({
+          type: "check:update",
+          check: recordedCheck,
+          consecutiveFailedChecks:
+            recordedCheck.status === "passed" ? 0 : consecutiveFailedChecks + 1,
+          requiredCheckCommand,
+          runId: dossier.paths.runId,
+          timestamp: checkTimestamp,
+          totalChecks: checks.length,
+        });
 
         if (recordedCheck.status === "passed") {
           consecutiveFailedChecks = 0;
@@ -773,6 +809,7 @@ export async function executeEngineerTask(
       consecutiveFailedChecks,
       convergence,
       dossier,
+      ...(options.eventBus === undefined ? {} : { eventBus: options.eventBus }),
       iterationCount,
       loadedConfig: options.loadedConfig,
       now,
@@ -793,6 +830,7 @@ async function finalizeEngineerRun(options: {
   consecutiveFailedChecks: number;
   convergence: RunConvergenceMetrics;
   dossier: RunDossier;
+  eventBus?: HarnessEventBus;
   iterationCount: number;
   loadedConfig: LoadedHarnessConfig;
   now: () => Date;
@@ -816,6 +854,13 @@ async function finalizeEngineerRun(options: {
       workspaceArtifacts.diff.diff,
       finalizedAt,
     );
+    emitArtifactUpdate(
+      options.eventBus,
+      options.dossier.paths,
+      "diff",
+      "write",
+      finalizedAt,
+    );
   }
 
   if (options.outcome.status !== "success") {
@@ -827,6 +872,13 @@ async function finalizeEngineerRun(options: {
     await writeFailureNotes(
       options.dossier.paths,
       failureNotesMarkdown,
+      finalizedAt,
+    );
+    emitArtifactUpdate(
+      options.eventBus,
+      options.dossier.paths,
+      "failureNotes",
+      "write",
       finalizedAt,
     );
   }
@@ -853,6 +905,13 @@ async function finalizeEngineerRun(options: {
     });
 
     await writeFinalReport(options.dossier.paths, finalReport, finalizedAt);
+    emitArtifactUpdate(
+      options.eventBus,
+      options.dossier.paths,
+      "finalReport",
+      "write",
+      finalizedAt,
+    );
   }
 
   if (workspaceArtifacts.notes.length > 0) {
@@ -899,6 +958,13 @@ async function finalizeEngineerRun(options: {
 
   if (options.persistFinalArtifacts) {
     await writeRunResult(options.dossier.paths, result, finalizedAt);
+    emitArtifactUpdate(
+      options.eventBus,
+      options.dossier.paths,
+      "result",
+      "write",
+      finalizedAt,
+    );
   }
 
   return {
@@ -911,6 +977,24 @@ async function finalizeEngineerRun(options: {
     stopReason: options.outcome.stopReason,
     toolSummary,
   };
+}
+
+function emitArtifactUpdate(
+  eventBus: HarnessEventBus | undefined,
+  paths: RunDossier["paths"],
+  artifact: keyof RunDossier["paths"]["files"],
+  operation: "append" | "write",
+  timestamp: string,
+): void {
+  eventBus?.emit({
+    type: "artifact:update",
+    artifact,
+    artifactKind: paths.files[artifact].kind,
+    operation,
+    path: paths.files[artifact].relativePath,
+    runId: paths.runId,
+    timestamp,
+  });
 }
 
 async function executeEngineerTool(options: {

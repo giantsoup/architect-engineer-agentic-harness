@@ -221,6 +221,7 @@ export {
 } from "./runtime/acceptance-criteria.js";
 export { executeEngineerTask } from "./runtime/engineer-task.js";
 export { executeArchitectEngineerRun } from "./runtime/architect-engineer-run.js";
+export { createHarnessEventBus } from "./runtime/harness-events.js";
 export {
   ModelClientConfigError,
   ModelClientError,
@@ -316,6 +317,15 @@ export type {
   ExecuteEngineerTaskOptions,
 } from "./runtime/engineer-task.js";
 export type { ArchitectRunModelClient } from "./runtime/architect-engineer-nodes.js";
+export type {
+  CreateHarnessEventBusOptions,
+  HarnessEvent,
+  HarnessEventBus,
+  HarnessEventInput,
+  HarnessEventListener,
+  HarnessEventMap,
+  HarnessEventType,
+} from "./runtime/harness-events.js";
 export type {
   ArchitectEngineerRunExecution,
   ExecuteArchitectEngineerRunOptions,

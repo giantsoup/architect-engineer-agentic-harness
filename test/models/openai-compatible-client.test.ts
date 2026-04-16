@@ -11,6 +11,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  createHarnessEventBus,
   createArchitectStructuredOutputFormat,
   createEngineerToolDefinitions,
   createEngineerStructuredOutputFormat,
@@ -542,6 +543,91 @@ describe("OpenAiCompatibleChatClient", () => {
 
     expect(response.rawContent).toBe("Recovered on retry");
     expect(attempts).toBe(3);
+  });
+
+  it("mirrors model request and retry events into the harness event bus", async () => {
+    let attempts = 0;
+    const events: Array<Record<string, unknown>> = [];
+    const mockServer = await startMockServer((_request, response) => {
+      attempts += 1;
+
+      if (attempts === 1) {
+        response.writeHead(503, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: {
+              message: "retry later",
+            },
+          }),
+        );
+        return;
+      }
+
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                content: "Recovered",
+                role: "assistant",
+              },
+            },
+          ],
+          id: "chatcmpl-events",
+        }),
+      );
+    });
+    servers.push(mockServer);
+
+    const { loadedConfig, projectRoot } = await createLoadedConfig(
+      renderConfig({
+        architectBaseUrl: `${mockServer.url}/remote/v1`,
+        architectMaxRetries: 1,
+        engineerBaseUrl: `${mockServer.url}/local/v1`,
+      }),
+    );
+    projectRoots.push(projectRoot);
+
+    const eventBus = createHarnessEventBus();
+    eventBus.subscribe((event) => {
+      events.push(event as unknown as Record<string, unknown>);
+    });
+
+    const client = createRoleModelClient({
+      eventBus,
+      loadedConfig,
+      role: "architect",
+    });
+
+    await client.chat({
+      messages: [{ content: "Retry once.", role: "user" }],
+      metadata: {
+        runId: "20260415T120000.000Z-abc123",
+      },
+    });
+
+    expect(events.map((event) => event.type)).toEqual([
+      "model:request",
+      "model:retry",
+      "model:request",
+    ]);
+    expect(events[0]).toMatchObject({
+      attempt: 1,
+      model: "architect-model",
+      role: "architect",
+      runId: "20260415T120000.000Z-abc123",
+      type: "model:request",
+    });
+    expect(events[1]).toMatchObject({
+      attempt: 1,
+      classification: "http",
+      nextAttempt: 2,
+      retryable: true,
+      runId: "20260415T120000.000Z-abc123",
+      type: "model:retry",
+    });
   });
 
   it("stops on non-retryable failures", async () => {

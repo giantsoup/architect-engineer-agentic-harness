@@ -2,6 +2,7 @@ import type { LoadedHarnessConfig } from "../types/config.js";
 import type { CommandLogRecord } from "../types/run.js";
 import {
   ProcessCancelledError,
+  type ProcessOutputObserver,
   ProcessSpawnError,
   ProcessTimeoutError,
   runProcessCommand,
@@ -19,6 +20,8 @@ export interface ContainerCommandRequest {
   accessMode: ContainerCommandAccessMode;
   command: string;
   environment?: ContainerCommandEnvironment;
+  onStderrChunk?: ProcessOutputObserver;
+  onStdoutChunk?: ProcessOutputObserver;
   role: ContainerCommandRole;
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -286,6 +289,12 @@ class DockerContainerSession implements ContainerSession {
         }),
         cwd: this.#loadedConfig.projectRoot,
         file: "docker",
+        ...(command.onStderrChunk === undefined
+          ? {}
+          : { onStderrChunk: command.onStderrChunk }),
+        ...(command.onStdoutChunk === undefined
+          ? {}
+          : { onStdoutChunk: command.onStdoutChunk }),
         signal,
         ...(command.timeoutMs === undefined
           ? {}
