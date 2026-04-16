@@ -1,12 +1,8 @@
-import type { TuiPaneId, TuiQueueItemStatus } from "./state.js";
+import type { TuiQueueItemStatus, TuiRoleId } from "./state.js";
 
-export const TUI_PANE_LABELS: Record<TuiPaneId, string> = {
+export const TUI_ROLE_LABELS: Record<TuiRoleId, string> = {
   architect: "Architect",
-  diff: "Diff",
   engineer: "Engineer",
-  log: "Log",
-  tasks: "Tasks / Queue",
-  tests: "Tests",
 };
 
 export interface TuiTerminalCapabilities {

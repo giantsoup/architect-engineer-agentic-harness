@@ -7,8 +7,9 @@ import {
   createTuiTheme,
   detectTuiTerminalCapabilities,
 } from "../../src/tui/theme.js";
+import { renderHeaderWidget } from "../../src/tui/widgets/header.js";
 import { renderHelpModalWidget } from "../../src/tui/widgets/help-modal.js";
-import { renderPaneWidget } from "../../src/tui/widgets/pane.js";
+import { renderRolePanelWidget } from "../../src/tui/widgets/role-panel.js";
 import { renderStatusBarWidget } from "../../src/tui/widgets/status-bar.js";
 
 describe("tui accessibility fallbacks", () => {
@@ -61,9 +62,9 @@ describe("tui accessibility fallbacks", () => {
     });
   });
 
-  it("switches to a compact single-pane layout on narrow terminals", () => {
+  it("switches to a narrow one-role layout on small terminals", () => {
     const state = createInitialTuiState();
-    state.focusPane = "tests";
+    state.focusRole = "engineer";
 
     const layout = computeTuiLayout({
       height: 16,
@@ -71,9 +72,9 @@ describe("tui accessibility fallbacks", () => {
       width: 72,
     });
 
-    expect(layout.mode).toBe("compact");
-    expect(layout.panes.tests.visible).toBe(true);
-    expect(layout.panes.architect.visible).toBe(false);
+    expect(layout.mode).toBe("narrow");
+    expect(layout.roles.engineer.visible).toBe(true);
+    expect(layout.roles.architect.visible).toBe(false);
   });
 
   it("renders meaningful text labels without depending on color", () => {
@@ -81,7 +82,7 @@ describe("tui accessibility fallbacks", () => {
       demoMode: false,
       runLabel: "qa-run",
     });
-    state.focusPane = "tasks";
+    state.focusRole = "architect";
     state.queueItems = [
       {
         id: "one",
@@ -94,46 +95,66 @@ describe("tui accessibility fallbacks", () => {
         title: "Confirm Windows fallback behavior",
       },
     ];
-    const paneBox = createRecordingBox();
+    const layout = computeTuiLayout({
+      height: 24,
+      state,
+      width: 72,
+    });
+    const headerBox = createRecordingBox();
+    const roleBox = createRecordingBox();
     const statusBarBox = createRecordingBox();
     const theme = createTuiTheme({
       colorMode: "none",
       unicode: false,
     });
 
-    renderPaneWidget({
-      box: paneBox,
-      pane: "tasks",
-      rect: { height: 8, left: 0, top: 0, width: 72 },
+    renderHeaderWidget({
+      box: headerBox,
+      layout,
+      rect: layout.header,
+      state,
+      theme,
+    });
+    renderRolePanelWidget({
+      box: roleBox,
+      rect: layout.roles.architect.rect,
+      role: "architect",
       state,
       theme,
     });
     renderStatusBarWidget({
       box: statusBarBox,
-      rect: { height: 1, left: 0, top: 8, width: 120 },
+      layout,
+      rect: layout.footer,
       state,
       theme,
     });
 
-    expect(paneBox.label).toContain("[*] [3] Tasks / Queue");
-    expect(paneBox.content).toContain(
+    expect(headerBox.content).toContain("theme:mono/ascii");
+    expect(roleBox.label).toContain("[*] Architect");
+    expect(roleBox.content).toContain("Task Queue");
+    expect(roleBox.content).toContain(
       "[ACTIVE] Review terminal fallback behavior",
     );
-    expect(paneBox.content).toContain(
+    expect(roleBox.content).toContain(
       "[BLOCKED] Confirm Windows fallback behavior",
     );
-    expect(statusBarBox.content).toContain("theme:mono/ascii");
-    expect(statusBarBox.content).toContain("focus:Tasks / Queue");
+    expect(statusBarBox.content).toContain("Tab switch role (Architect)");
   });
 
-  it("renders the borderless status bar without relying on box labels", () => {
+  it("renders the footer without relying on box labels", () => {
     const state = createInitialTuiState({
       demoMode: false,
       runLabel: "qa-run",
     });
+    const layout = computeTuiLayout({
+      height: 24,
+      state,
+      width: 120,
+    });
     const statusBarBox = createRecordingBox({
       setLabel() {
-        throw new Error("status bar should not set a label");
+        throw new Error("footer should not set a label");
       },
     });
     const theme = createTuiTheme({
@@ -143,12 +164,16 @@ describe("tui accessibility fallbacks", () => {
 
     renderStatusBarWidget({
       box: statusBarBox,
-      rect: { height: 1, left: 0, top: 8, width: 120 },
+      layout,
+      rect: layout.footer,
       state,
       theme,
     });
 
-    expect(statusBarBox.content).toContain("qa-run LIVE");
+    expect(statusBarBox.content).toContain("q quit-ui");
+    expect(statusBarBox.style).toEqual({
+      fg: "white",
+    });
   });
 
   it("keeps widget styles intact in mono mode instead of clearing them", () => {
@@ -157,12 +182,17 @@ describe("tui accessibility fallbacks", () => {
       runLabel: "qa-run",
     });
     state.helpOpen = true;
+    const layout = computeTuiLayout({
+      height: 24,
+      state,
+      width: 120,
+    });
     const theme = createTuiTheme({
       colorMode: "none",
       unicode: false,
     });
     const sentinelStyle = { fg: "white" };
-    const paneBox = createRecordingBox({
+    const roleBox = createRecordingBox({
       style: sentinelStyle,
     });
     const statusBarBox = createRecordingBox({
@@ -172,29 +202,52 @@ describe("tui accessibility fallbacks", () => {
       style: sentinelStyle,
     });
 
-    renderPaneWidget({
-      box: paneBox,
-      pane: "architect",
-      rect: { height: 8, left: 0, top: 0, width: 72 },
+    renderRolePanelWidget({
+      box: roleBox,
+      rect: layout.roles.architect.rect,
+      role: "architect",
       state,
       theme,
     });
     renderStatusBarWidget({
       box: statusBarBox,
-      rect: { height: 1, left: 0, top: 8, width: 120 },
+      layout,
+      rect: layout.footer,
       state,
       theme,
     });
     renderHelpModalWidget({
       box: helpModalBox,
-      rect: { height: 12, left: 2, top: 2, width: 48 },
+      rect: layout.helpModal,
       state,
       theme,
     });
 
-    expect(paneBox.style).toBe(sentinelStyle);
+    expect(roleBox.style).toBe(sentinelStyle);
     expect(statusBarBox.style).toBe(sentinelStyle);
     expect(helpModalBox.style).toBe(sentinelStyle);
+  });
+
+  it("clips role panel content to the available body height on tiny terminals", () => {
+    const state = createInitialTuiState({
+      demoMode: false,
+      runLabel: "qa-run",
+    });
+    const theme = createTuiTheme({
+      colorMode: "none",
+      unicode: false,
+    });
+    const roleBox = createRecordingBox();
+
+    renderRolePanelWidget({
+      box: roleBox,
+      rect: { height: 4, left: 0, top: 0, width: 40 },
+      role: "architect",
+      state,
+      theme,
+    });
+
+    expect(roleBox.content.split("\n")).toHaveLength(2);
   });
 });
 

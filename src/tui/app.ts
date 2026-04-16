@@ -18,7 +18,7 @@ import {
 import {
   createInitialTuiState,
   createTuiStore,
-  TUI_PANE_ORDER,
+  TUI_ROLE_ORDER,
   type TuiStore,
 } from "./state.js";
 import {
@@ -26,8 +26,12 @@ import {
   detectTuiTerminalCapabilities,
   type TuiTheme,
 } from "./theme.js";
+import { renderHeaderWidget } from "./widgets/header.js";
 import { renderHelpModalWidget } from "./widgets/help-modal.js";
-import { hidePaneWidget, renderPaneWidget } from "./widgets/pane.js";
+import {
+  hideRolePanelWidget,
+  renderRolePanelWidget,
+} from "./widgets/role-panel.js";
 import { renderStatusBarWidget } from "./widgets/status-bar.js";
 
 export interface TuiController {
@@ -163,9 +167,9 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiController {
       task: options.task,
     });
   const dataSource: TuiDataSource = options.dataSource ?? demoFeed;
-  const paneBoxes = Object.fromEntries(
-    TUI_PANE_ORDER.map((pane) => [
-      pane,
+  const roleBoxes = Object.fromEntries(
+    TUI_ROLE_ORDER.map((role) => [
+      role,
       createBlessedBox({
         border: "line",
         hidden: true,
@@ -173,7 +177,11 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiController {
         parent: options.screen,
       }),
     ]),
-  ) as Record<(typeof TUI_PANE_ORDER)[number], BlessedBox>;
+  ) as Record<(typeof TUI_ROLE_ORDER)[number], BlessedBox>;
+  const headerBox = createBlessedBox({
+    height: 1,
+    parent: options.screen,
+  });
   const statusBarBox = createBlessedBox({
     height: 1,
     parent: options.screen,
@@ -199,25 +207,16 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiController {
       "tab",
       "S-tab",
       "backtab",
-      "left",
-      "right",
       "up",
       "down",
       "pageup",
       "pagedown",
-      "x",
       "f",
       "r",
       "?",
       "S-/",
       "q",
       "C-c",
-      "1",
-      "2",
-      "3",
-      "4",
-      "5",
-      "6",
     ],
     (_character: string, key: BlessedKey) => {
       try {
@@ -250,26 +249,34 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiController {
       width: options.screen.width,
     });
 
-    for (const pane of TUI_PANE_ORDER) {
-      const paneLayout = layout.panes[pane];
-      const paneBox = paneBoxes[pane];
+    for (const role of TUI_ROLE_ORDER) {
+      const roleLayout = layout.roles[role];
+      const roleBox = roleBoxes[role];
 
-      if (paneLayout.visible) {
-        renderPaneWidget({
-          box: paneBox,
-          pane,
-          rect: paneLayout.rect,
+      if (roleLayout.visible) {
+        renderRolePanelWidget({
+          box: roleBox,
+          rect: roleLayout.rect,
+          role,
           state,
           theme,
         });
       } else {
-        hidePaneWidget(paneBox);
+        hideRolePanelWidget(roleBox);
       }
     }
 
+    renderHeaderWidget({
+      box: headerBox,
+      layout,
+      rect: layout.header,
+      state,
+      theme,
+    });
     renderStatusBarWidget({
       box: statusBarBox,
-      rect: layout.statusBar,
+      layout,
+      rect: layout.footer,
       state,
       theme,
     });

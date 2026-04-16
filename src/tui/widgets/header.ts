@@ -1,19 +1,24 @@
 import type { BlessedBox } from "../neo-blessed.js";
 import type { TuiLayout, TuiRect } from "../layout.js";
 import type { TuiState } from "../state.js";
-import { TUI_ROLE_LABELS, type TuiTheme } from "../theme.js";
+import {
+  formatThemeModeLabel,
+  TUI_ROLE_LABELS,
+  type TuiTheme,
+} from "../theme.js";
 
-export function renderStatusBarWidget(options: {
+export function renderHeaderWidget(options: {
   box: BlessedBox;
   layout: TuiLayout;
   rect: TuiRect;
   state: TuiState;
   theme: TuiTheme;
 }): void {
-  const lead =
+  const mode = options.state.demoMode ? "DEMO" : "LIVE";
+  const narrowRole =
     options.layout.mode === "narrow"
-      ? `Tab switch role (${TUI_ROLE_LABELS[options.state.focusRole]})`
-      : `Tab switch focus (${TUI_ROLE_LABELS[options.state.focusRole]})`;
+      ? ` | showing:${TUI_ROLE_LABELS[options.state.focusRole]}`
+      : "";
 
   options.box.top = options.rect.top;
   options.box.left = options.rect.left;
@@ -26,16 +31,7 @@ export function renderStatusBarWidget(options: {
   }
   options.box.setContent(
     truncateLine(
-      [
-        lead,
-        "Up/Down scroll",
-        "PgUp/PgDn faster",
-        `f follow:${options.state.followMode ? "on" : "off"}`,
-        "r reset",
-        "? help",
-        "q quit-ui",
-        options.state.statusText,
-      ].join(" | "),
+      `${options.state.runLabel} ${mode} | ${options.layout.mode} dashboard${narrowRole} | theme:${formatThemeModeLabel(options.theme)}`,
       options.rect.width,
     ),
   );

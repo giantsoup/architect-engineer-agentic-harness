@@ -1,4 +1,4 @@
-import type { TuiPaneId, TuiState } from "./state.js";
+import type { TuiRoleId, TuiState } from "./state.js";
 
 export interface TuiRect {
   height: number;
@@ -7,210 +7,140 @@ export interface TuiRect {
   width: number;
 }
 
-export interface TuiPaneLayout {
-  pane: TuiPaneId;
+export interface TuiRoleLayout {
   rect: TuiRect;
+  role: TuiRoleId;
   visible: boolean;
 }
 
 export interface TuiLayout {
+  footer: TuiRect;
+  header: TuiRect;
   helpModal: TuiRect;
-  mode: "compact" | "maximized" | "stacked" | "wide";
-  panes: Record<TuiPaneId, TuiPaneLayout>;
-  statusBar: TuiRect;
+  mode: "narrow" | "wide";
+  roles: Record<TuiRoleId, TuiRoleLayout>;
 }
 
 export interface ComputeTuiLayoutOptions {
   height: number;
-  state: Pick<TuiState, "focusPane" | "maximizedPane">;
+  state: Pick<TuiState, "focusRole">;
   width: number;
 }
 
-const WIDE_LAYOUT_ORDER: readonly TuiPaneId[][] = [
-  ["architect", "engineer"],
-  ["tasks", "log"],
-  ["diff", "tests"],
-];
+const HEADER_HEIGHT = 1;
+const FOOTER_HEIGHT = 1;
+const MIN_WIDE_HEIGHT = 18;
+const MIN_WIDE_WIDTH = 100;
+const ARCHITECT_RATIO = 0.4;
 
 export function computeTuiLayout(options: ComputeTuiLayoutOptions): TuiLayout {
   const width = Math.max(1, options.width);
-  const height = Math.max(2, options.height);
-  const statusBar: TuiRect = {
-    height: 1,
+  const height = Math.max(3, options.height);
+  const header: TuiRect = {
+    height: HEADER_HEIGHT,
     left: 0,
-    top: height - 1,
+    top: 0,
     width,
   };
-  const paneAreaHeight = Math.max(1, height - statusBar.height);
-
-  if (options.state.maximizedPane !== null) {
-    return {
-      helpModal: createHelpModalRect(width, height),
-      mode: "maximized",
-      panes: createMaximizedPaneLayout(
-        width,
-        paneAreaHeight,
-        options.state.maximizedPane,
-      ),
-      statusBar,
-    };
-  }
-
-  if (width < 80 || height < 18) {
-    return {
-      helpModal: createHelpModalRect(width, height),
-      mode: "compact",
-      panes: createMaximizedPaneLayout(
-        width,
-        paneAreaHeight,
-        options.state.focusPane,
-      ),
-      statusBar,
-    };
-  }
-
-  if (width >= 120) {
-    return {
-      helpModal: createHelpModalRect(width, height),
-      mode: "wide",
-      panes: createWidePaneLayout(width, paneAreaHeight),
-      statusBar,
-    };
-  }
+  const footer: TuiRect = {
+    height: FOOTER_HEIGHT,
+    left: 0,
+    top: height - FOOTER_HEIGHT,
+    width,
+  };
+  const bodyTop = header.height;
+  const bodyHeight = Math.max(1, height - header.height - footer.height);
+  const mode =
+    width >= MIN_WIDE_WIDTH && height >= MIN_WIDE_HEIGHT ? "wide" : "narrow";
 
   return {
+    footer,
+    header,
     helpModal: createHelpModalRect(width, height),
-    mode: "stacked",
-    panes: createStackedPaneLayout(width, paneAreaHeight),
-    statusBar,
+    mode,
+    roles:
+      mode === "wide"
+        ? createWideRoleLayout(width, bodyTop, bodyHeight)
+        : createNarrowRoleLayout(
+            width,
+            bodyTop,
+            bodyHeight,
+            options.state.focusRole,
+          ),
   };
 }
 
-function createWidePaneLayout(
+function createWideRoleLayout(
   width: number,
-  paneAreaHeight: number,
-): Record<TuiPaneId, TuiPaneLayout> {
-  const columnWidths = splitDimension(width, 2);
-  const rowHeights = splitDimension(paneAreaHeight, 3);
-  const panes = createHiddenPaneLayouts(width, paneAreaHeight);
-  let currentTop = 0;
+  top: number,
+  height: number,
+): Record<TuiRoleId, TuiRoleLayout> {
+  const architectWidth = Math.max(1, Math.floor(width * ARCHITECT_RATIO));
+  const engineerWidth = Math.max(1, width - architectWidth);
 
-  for (let rowIndex = 0; rowIndex < WIDE_LAYOUT_ORDER.length; rowIndex += 1) {
-    const row = WIDE_LAYOUT_ORDER[rowIndex]!;
-    const rowHeight = rowHeights[rowIndex]!;
-    let currentLeft = 0;
-
-    for (let columnIndex = 0; columnIndex < row.length; columnIndex += 1) {
-      const pane = row[columnIndex]!;
-      const columnWidth = columnWidths[columnIndex]!;
-
-      panes[pane] = {
-        pane,
-        rect: {
-          height: rowHeight,
-          left: currentLeft,
-          top: currentTop,
-          width: columnWidth,
-        },
-        visible: true,
-      };
-      currentLeft += columnWidth;
-    }
-
-    currentTop += rowHeight;
-  }
-
-  return panes;
-}
-
-function createStackedPaneLayout(
-  width: number,
-  paneAreaHeight: number,
-): Record<TuiPaneId, TuiPaneLayout> {
-  const rowHeights = splitDimension(paneAreaHeight, 6);
-  const panes = createHiddenPaneLayouts(width, paneAreaHeight);
-  let currentTop = 0;
-
-  for (let index = 0; index < rowHeights.length; index += 1) {
-    const pane = WIDE_LAYOUT_ORDER.flat()[index]!;
-    const rowHeight = rowHeights[index]!;
-
-    panes[pane] = {
-      pane,
+  return {
+    architect: {
       rect: {
-        height: rowHeight,
+        height,
         left: 0,
-        top: currentTop,
-        width,
+        top,
+        width: architectWidth,
       },
+      role: "architect",
       visible: true,
-    };
-    currentTop += rowHeight;
-  }
-
-  return panes;
-}
-
-function createMaximizedPaneLayout(
-  width: number,
-  paneAreaHeight: number,
-  maximizedPane: TuiPaneId,
-): Record<TuiPaneId, TuiPaneLayout> {
-  const panes = createHiddenPaneLayouts(width, paneAreaHeight);
-
-  panes[maximizedPane] = {
-    pane: maximizedPane,
-    rect: {
-      height: paneAreaHeight,
-      left: 0,
-      top: 0,
-      width,
     },
-    visible: true,
-  };
-
-  return panes;
-}
-
-function createHiddenPaneLayouts(
-  width: number,
-  paneAreaHeight: number,
-): Record<TuiPaneId, TuiPaneLayout> {
-  return {
-    architect: createHiddenPaneLayout("architect", width, paneAreaHeight),
-    diff: createHiddenPaneLayout("diff", width, paneAreaHeight),
-    engineer: createHiddenPaneLayout("engineer", width, paneAreaHeight),
-    log: createHiddenPaneLayout("log", width, paneAreaHeight),
-    tasks: createHiddenPaneLayout("tasks", width, paneAreaHeight),
-    tests: createHiddenPaneLayout("tests", width, paneAreaHeight),
+    engineer: {
+      rect: {
+        height,
+        left: architectWidth,
+        top,
+        width: engineerWidth,
+      },
+      role: "engineer",
+      visible: true,
+    },
   };
 }
 
-function createHiddenPaneLayout(
-  pane: TuiPaneId,
+function createNarrowRoleLayout(
   width: number,
-  paneAreaHeight: number,
-): TuiPaneLayout {
+  top: number,
+  height: number,
+  focusRole: TuiRoleId,
+): Record<TuiRoleId, TuiRoleLayout> {
   return {
-    pane,
+    architect: createNarrowRole("architect", width, top, height, focusRole),
+    engineer: createNarrowRole("engineer", width, top, height, focusRole),
+  };
+}
+
+function createNarrowRole(
+  role: TuiRoleId,
+  width: number,
+  top: number,
+  height: number,
+  focusRole: TuiRoleId,
+): TuiRoleLayout {
+  return {
     rect: {
-      height: paneAreaHeight,
+      height,
       left: 0,
-      top: 0,
+      top,
       width,
     },
-    visible: false,
+    role,
+    visible: focusRole === role,
   };
 }
 
 function createHelpModalRect(width: number, height: number): TuiRect {
   const modalWidth = Math.min(
     Math.max(1, width - 4),
-    Math.max(16, Math.floor(width * 0.72)),
+    Math.max(18, Math.floor(width * 0.72)),
   );
   const modalHeight = Math.min(
     Math.max(1, height - 2),
-    Math.max(6, Math.floor(height * 0.6)),
+    Math.max(8, Math.floor(height * 0.6)),
   );
 
   return {
@@ -219,16 +149,4 @@ function createHelpModalRect(width: number, height: number): TuiRect {
     top: Math.max(0, Math.floor((height - modalHeight) / 2)),
     width: modalWidth,
   };
-}
-
-function splitDimension(total: number, parts: number): number[] {
-  const base = Math.floor(total / parts);
-  const remainder = total % parts;
-  const sizes = Array.from({ length: parts }, () => base);
-
-  for (let index = 0; index < remainder; index += 1) {
-    sizes[index] = (sizes[index] ?? 0) + 1;
-  }
-
-  return sizes;
 }

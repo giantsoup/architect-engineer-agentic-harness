@@ -1,4 +1,4 @@
-import { TUI_PANE_ORDER, type TuiAction, type TuiState } from "./state.js";
+import type { TuiAction, TuiState } from "./state.js";
 
 export interface TuiKeyboardKey {
   ctrl?: boolean | undefined;
@@ -14,7 +14,7 @@ export type TuiKeyboardCommand =
   | { type: "quit" };
 
 export function resolveTuiKeyboardCommand(
-  _state: Pick<TuiState, "focusPane">,
+  _state: Pick<TuiState, "focusRole">,
   key: TuiKeyboardKey,
 ): TuiKeyboardCommand {
   const full = key.full ?? key.sequence ?? key.name ?? "";
@@ -46,27 +46,7 @@ export function resolveTuiKeyboardCommand(
     };
   }
 
-  if (/^[1-6]$/u.test(full)) {
-    return {
-      action: {
-        pane: TUI_PANE_ORDER[Number.parseInt(full, 10) - 1]!,
-        type: "focus.set",
-      },
-      type: "dispatch",
-    };
-  }
-
   switch (key.name) {
-    case "left":
-      return {
-        action: { type: "focus.previous" },
-        type: "dispatch",
-      };
-    case "right":
-      return {
-        action: { type: "focus.next" },
-        type: "dispatch",
-      };
     case "up":
       return {
         action: { delta: -1, type: "view.adjust" },
@@ -85,11 +65,6 @@ export function resolveTuiKeyboardCommand(
     case "pagedown":
       return {
         action: { delta: 5, type: "view.adjust" },
-        type: "dispatch",
-      };
-    case "x":
-      return {
-        action: { type: "maximize.toggle" },
         type: "dispatch",
       };
     case "f":

@@ -45,10 +45,10 @@ describe("tui reconcile", () => {
     liveData.start();
     await settle();
 
-    expect(store.getState().panes.architect.lines).toContain(
+    expect(store.getState().sections.currentGoal.lines).toContain(
       "  # Architect Plan",
     );
-    expect(store.getState().panes.engineer.lines).toContain(
+    expect(store.getState().sections.activeCommand.lines).toContain(
       "Last tool: file.write",
     );
     expect(store.getState().queueItems.map((item) => item.title)).toEqual([
@@ -56,7 +56,9 @@ describe("tui reconcile", () => {
       "Run `npm test`.",
       "Summarize the result.",
     ]);
-    expect(store.getState().panes.tests.lines).toContain("Exit code: 0");
+    expect(store.getState().sections.testsChecks.lines).toContain(
+      "Exit code: 0",
+    );
     expect(
       store
         .getState()
@@ -75,10 +77,13 @@ describe("tui reconcile", () => {
 
     await liveData.forceRefresh();
 
-    expect(store.getState().panes.diff.lines[1]).toBe("+refresh from disk");
-    expect(store.getState().panes.tests.lines).toContain("State: failed");
-    expect(store.getState().panes.tests.lines).toContain("Exit code: 1");
-    expect(store.getState().panes.engineer.lines).toContain(
+    expect(store.getState().sections.testsChecks.lines).toContain(
+      "State: failed",
+    );
+    expect(store.getState().sections.testsChecks.lines).toContain(
+      "Exit code: 1",
+    );
+    expect(store.getState().sections.activeCommand.lines).toContain(
       "Last exit code: 1",
     );
     expect(store.getState().statusText).toContain(

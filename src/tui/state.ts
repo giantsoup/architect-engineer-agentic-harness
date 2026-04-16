@@ -1,13 +1,22 @@
-export const TUI_PANE_ORDER = [
-  "architect",
-  "engineer",
-  "tasks",
-  "log",
-  "diff",
-  "tests",
+export const TUI_ROLE_ORDER = ["architect", "engineer"] as const;
+
+export type TuiRoleId = (typeof TUI_ROLE_ORDER)[number];
+
+export const TUI_SECTION_ORDER = [
+  "currentGoal",
+  "reasoningHistory",
+  "taskQueue",
+  "executionLog",
+  "activeCommand",
+  "testsChecks",
 ] as const;
 
-export type TuiPaneId = (typeof TUI_PANE_ORDER)[number];
+export type TuiSectionId = (typeof TUI_SECTION_ORDER)[number];
+
+export const TUI_ROLE_SECTIONS: Record<TuiRoleId, readonly TuiSectionId[]> = {
+  architect: ["currentGoal", "reasoningHistory", "taskQueue"],
+  engineer: ["executionLog", "activeCommand", "testsChecks"],
+};
 
 export type TuiQueueItemStatus = "active" | "blocked" | "done" | "pending";
 
@@ -28,14 +37,14 @@ export interface TuiLogEntry {
   timestamp: string;
 }
 
-export interface TuiPaneSnapshot {
+export interface TuiSectionSnapshot {
   lines: readonly string[];
   updatedAt: string;
 }
 
 export interface TuiState {
   demoMode: boolean;
-  focusPane: TuiPaneId;
+  focusRole: TuiRoleId;
   followMode: boolean;
   helpOpen: boolean;
   log: {
@@ -44,24 +53,20 @@ export interface TuiState {
     limit: number;
     nextId: number;
   };
-  maximizedPane: TuiPaneId | null;
-  paneScroll: Record<TuiPaneId, number>;
-  panes: Record<TuiPaneId, TuiPaneSnapshot>;
   queueItems: readonly TuiQueueItem[];
-  queueSelection: number;
+  roleScroll: Record<TuiRoleId, number>;
   runLabel: string;
+  sections: Record<TuiSectionId, TuiSectionSnapshot>;
   statusText: string;
 }
 
 export type TuiAction =
   | { type: "focus.next" }
   | { type: "focus.previous" }
-  | { pane: TuiPaneId; type: "focus.set" }
+  | { role: TuiRoleId; type: "focus.set" }
   | { type: "follow.toggle" }
   | { open?: boolean | undefined; type: "help.toggle" }
-  | { pane?: TuiPaneId | undefined; type: "maximize.toggle" }
   | { items: readonly TuiQueueItem[]; type: "queue.replace" }
-  | { delta: number; type: "queue.move" }
   | {
       entry: Omit<TuiLogEntry, "id">;
       type: "log.append";
@@ -77,13 +82,13 @@ export type TuiAction =
     }
   | {
       delta: number;
-      pane?: TuiPaneId | undefined;
-      type: "pane.scroll";
+      role?: TuiRoleId | undefined;
+      type: "role.scroll";
     }
   | {
       lines: readonly string[];
-      pane: TuiPaneId;
-      type: "pane.replace";
+      section: TuiSectionId;
+      type: "section.replace";
       updatedAt?: string | undefined;
     }
   | { text: string; type: "status.set" }
@@ -117,13 +122,14 @@ export function createInitialTuiState(
 ): TuiState {
   const now = options.now ?? (() => new Date().toISOString());
   const task =
-    options.task ?? "Wire the TUI shell and keep runtime behavior stable.";
+    options.task ??
+    "Replace the six-pane shell with a role-oriented dashboard skeleton.";
   const timestamp = now();
   const demoMode = options.demoMode ?? true;
 
   return {
     demoMode,
-    focusPane: "architect",
+    focusRole: "architect",
     followMode: true,
     helpOpen: false,
     log: {
@@ -132,60 +138,72 @@ export function createInitialTuiState(
       limit: options.logLimit ?? DEFAULT_LOG_LIMIT,
       nextId: 1,
     },
-    maximizedPane: null,
-    paneScroll: createPaneScrollState(),
-    panes: {
-      architect: createInitialPaneSnapshot(
-        demoMode,
-        "architect",
-        task,
-        timestamp,
-      ),
-      diff: createInitialPaneSnapshot(demoMode, "diff", task, timestamp),
-      engineer: createInitialPaneSnapshot(
-        demoMode,
-        "engineer",
-        task,
-        timestamp,
-      ),
-      log: {
-        lines: [],
-        updatedAt: timestamp,
-      },
-      tasks: {
-        lines: [],
-        updatedAt: timestamp,
-      },
-      tests: createInitialPaneSnapshot(demoMode, "tests", task, timestamp),
-    },
     queueItems: demoMode
       ? [
           {
-            id: "plan-shell",
+            id: "architect-current-goal",
             status: "active",
-            title: "Scaffold neo-blessed shell",
+            title: "Replace six-pane navigation with two role surfaces",
           },
           {
-            id: "store-layout",
+            id: "layout",
             status: "pending",
-            title: "Implement reducer, layout, and keyboard model",
+            title: "Ship a 40/60 wide dashboard for 120x30 terminals",
           },
           {
-            id: "demo-plumbing",
+            id: "narrow",
             status: "pending",
-            title: "Add demo feed and CLI tui path",
+            title: "Add a narrow Architect/Engineer role switcher",
           },
           {
             id: "tests",
             status: "pending",
-            title: "Add focused test coverage",
+            title: "Update TUI tests to the phase-1 shell contract",
           },
         ]
       : [],
-    queueSelection: 0,
+    roleScroll: createRoleScrollState(),
     runLabel: options.runLabel ?? DEFAULT_RUN_LABEL,
+    sections: {
+      currentGoal: createInitialSectionSnapshot(
+        demoMode,
+        "currentGoal",
+        task,
+        timestamp,
+      ),
+      reasoningHistory: createInitialSectionSnapshot(
+        demoMode,
+        "reasoningHistory",
+        task,
+        timestamp,
+      ),
+      taskQueue: createInitialSectionSnapshot(
+        demoMode,
+        "taskQueue",
+        task,
+        timestamp,
+      ),
+      executionLog: createInitialSectionSnapshot(
+        demoMode,
+        "executionLog",
+        task,
+        timestamp,
+      ),
+      activeCommand: createInitialSectionSnapshot(
+        demoMode,
+        "activeCommand",
+        task,
+        timestamp,
+      ),
+      testsChecks: createInitialSectionSnapshot(
+        demoMode,
+        "testsChecks",
+        task,
+        timestamp,
+      ),
+    },
     statusText: demoMode
-      ? "Demo shell active. Runtime event wiring is intentionally deferred."
+      ? "Phase 1 dashboard skeleton active. Runtime section wiring remains intentionally partial."
       : `Waiting for live harness activity for ${options.runLabel ?? DEFAULT_RUN_LABEL}.`,
   };
 }
@@ -195,24 +213,24 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     case "focus.next":
       return {
         ...state,
-        focusPane:
-          TUI_PANE_ORDER[
-            (paneIndex(state.focusPane) + 1) % TUI_PANE_ORDER.length
+        focusRole:
+          TUI_ROLE_ORDER[
+            (roleIndex(state.focusRole) + 1) % TUI_ROLE_ORDER.length
           ]!,
       };
     case "focus.previous":
       return {
         ...state,
-        focusPane:
-          TUI_PANE_ORDER[
-            (paneIndex(state.focusPane) + TUI_PANE_ORDER.length - 1) %
-              TUI_PANE_ORDER.length
+        focusRole:
+          TUI_ROLE_ORDER[
+            (roleIndex(state.focusRole) + TUI_ROLE_ORDER.length - 1) %
+              TUI_ROLE_ORDER.length
           ]!,
       };
     case "focus.set":
       return {
         ...state,
-        focusPane: action.pane,
+        focusRole: action.role,
       };
     case "follow.toggle":
       return {
@@ -224,32 +242,14 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         ...state,
         helpOpen: action.open ?? !state.helpOpen,
       };
-    case "maximize.toggle": {
-      const pane = action.pane ?? state.focusPane;
-
-      return {
-        ...state,
-        maximizedPane: state.maximizedPane === pane ? null : pane,
-      };
-    }
     case "queue.replace":
       return {
         ...state,
         queueItems: [...action.items],
-        queueSelection: clampIndex(state.queueSelection, action.items.length),
-        panes: withPaneUpdated(state.panes, "tasks"),
+        sections: withSectionUpdated(state.sections, "taskQueue"),
       };
-    case "queue.move":
-      return {
-        ...state,
-        queueSelection: clampIndex(
-          state.queueSelection + action.delta,
-          state.queueItems.length,
-        ),
-      };
-    case "log.append": {
+    case "log.append":
       return reduceLogAppend(state, [action.entry]);
-    }
     case "log.appendMany":
       return reduceLogAppend(state, action.entries);
     case "log.replace": {
@@ -267,41 +267,37 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
           entries: nextEntries,
           nextId: nextEntries.length + 1,
         },
-        paneScroll: {
-          ...state.paneScroll,
-          log: state.followMode
-            ? Math.max(0, nextEntries.length - 1)
-            : state.paneScroll.log,
-        },
-        panes: withPaneUpdated(
-          state.panes,
-          "log",
-          nextEntries.at(-1)?.timestamp ?? state.panes.log.updatedAt,
+        sections: withSectionUpdated(
+          state.sections,
+          "executionLog",
+          nextEntries.at(-1)?.timestamp ??
+            state.sections.executionLog.updatedAt,
         ),
       };
     }
-    case "pane.scroll": {
-      const pane = action.pane ?? state.focusPane;
-      const nextScroll = Math.max(0, state.paneScroll[pane] + action.delta);
+    case "role.scroll": {
+      const role = action.role ?? state.focusRole;
+      const nextScroll = Math.max(0, state.roleScroll[role] + action.delta);
 
       return {
         ...state,
         followMode:
-          pane === "log" && action.delta < 0 ? false : state.followMode,
-        paneScroll: {
-          ...state.paneScroll,
-          [pane]: nextScroll,
+          role === "engineer" && action.delta < 0 ? false : state.followMode,
+        roleScroll: {
+          ...state.roleScroll,
+          [role]: nextScroll,
         },
       };
     }
-    case "pane.replace":
+    case "section.replace":
       return {
         ...state,
-        panes: {
-          ...state.panes,
-          [action.pane]: {
+        sections: {
+          ...state.sections,
+          [action.section]: {
             lines: [...action.lines],
-            updatedAt: action.updatedAt ?? state.panes[action.pane].updatedAt,
+            updatedAt:
+              action.updatedAt ?? state.sections[action.section].updatedAt,
           },
         },
       };
@@ -311,21 +307,17 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         statusText: action.text,
       };
     case "view.adjust":
-      return state.focusPane === "tasks"
-        ? tuiReducer(state, { delta: action.delta, type: "queue.move" })
-        : tuiReducer(state, {
-            delta: action.delta,
-            pane: state.focusPane,
-            type: "pane.scroll",
-          });
+      return tuiReducer(state, {
+        delta: action.delta,
+        role: state.focusRole,
+        type: "role.scroll",
+      });
     case "view.reset":
       return {
         ...state,
         followMode: true,
         helpOpen: false,
-        maximizedPane: null,
-        paneScroll: createPaneScrollState(),
-        queueSelection: 0,
+        roleScroll: createRoleScrollState(),
       };
   }
 }
@@ -357,104 +349,136 @@ export function createTuiStore(initialState: TuiState): TuiStore {
   };
 }
 
-function paneIndex(pane: TuiPaneId): number {
-  return TUI_PANE_ORDER.indexOf(pane);
+function roleIndex(role: TuiRoleId): number {
+  return TUI_ROLE_ORDER.indexOf(role);
 }
 
-function clampIndex(index: number, length: number): number {
-  if (length <= 0) {
-    return 0;
-  }
-
-  return Math.max(0, Math.min(length - 1, index));
-}
-
-function createPaneScrollState(): Record<TuiPaneId, number> {
+function createRoleScrollState(): Record<TuiRoleId, number> {
   return {
     architect: 0,
-    diff: 0,
     engineer: 0,
-    log: 0,
-    tasks: 0,
-    tests: 0,
   };
 }
 
-function withPaneUpdated(
-  panes: TuiState["panes"],
-  pane: TuiPaneId,
+function withSectionUpdated(
+  sections: TuiState["sections"],
+  section: TuiSectionId,
   updatedAt: string = new Date().toISOString(),
-): TuiState["panes"] {
+): TuiState["sections"] {
   return {
-    ...panes,
-    [pane]: {
-      ...panes[pane],
+    ...sections,
+    [section]: {
+      ...sections[section],
       updatedAt,
     },
   };
 }
 
-function createInitialPaneSnapshot(
+function createInitialSectionSnapshot(
   demoMode: boolean,
-  pane: TuiPaneId,
+  section: TuiSectionId,
   task: string,
   updatedAt: string,
-): TuiPaneSnapshot {
+): TuiSectionSnapshot {
   if (!demoMode) {
     return {
-      lines: createLivePlaceholderLines(pane, task),
+      lines: createLivePlaceholderLines(section, task),
       updatedAt,
     };
   }
 
-  switch (pane) {
-    case "architect":
+  switch (section) {
+    case "currentGoal":
       return {
         lines: [
-          "Architect Summary",
+          "Phase 1 goal",
           "",
-          "Loop is currently driven by the local demo feed.",
-          `Objective: ${task}`,
-          "Decision: Keep runtime integration for a later issue.",
+          `Replace the six-pane shell with a dashboard centered on: ${task}`,
+          "Keep startup, teardown, and terminal capability fallback behavior intact.",
         ],
         updatedAt,
       };
-    case "diff":
+    case "reasoningHistory":
       return {
         lines: [
-          "diff --git a/src/cli/commands/run.ts b/src/cli/commands/run.ts",
-          "+ launch the TUI shell for --ui tui",
-          "+ keep plain/live modes unchanged",
-        ],
-        updatedAt,
-      };
-    case "engineer":
-      return {
-        lines: [
-          "Engineer Summary",
+          "Placeholder",
           "",
-          "Synthetic events update this pane for now.",
-          "Current action: scaffold UI-local store and widgets.",
+          "Architect reasoning history stays explicit in Phase 1.",
+          "Live reasoning chronology will be wired in a later issue.",
         ],
         updatedAt,
       };
-    case "tests":
+    case "taskQueue":
       return {
         lines: [
-          "Test Queue",
+          "Placeholder",
           "",
-          "- store.test.ts",
-          "- layout.test.ts",
-          "- keyboard.test.ts",
+          "Task queue content is synthesized from queue items.",
         ],
         updatedAt,
       };
-    case "tasks":
-    case "log":
+    case "executionLog":
       return {
-        lines: [],
+        lines: [
+          "Placeholder",
+          "",
+          "Execution log content is synthesized from the bounded log buffer.",
+        ],
         updatedAt,
       };
+    case "activeCommand":
+      return {
+        lines: [
+          "Phase 1 engineer focus",
+          "",
+          "Show current command, working directory, tool activity, and check state.",
+        ],
+        updatedAt,
+      };
+    case "testsChecks":
+      return {
+        lines: [
+          "Placeholder",
+          "",
+          "Tests / Checks will show explicit command state and captured output.",
+        ],
+        updatedAt,
+      };
+  }
+}
+
+function createLivePlaceholderLines(
+  section: TuiSectionId,
+  task: string,
+): readonly string[] {
+  switch (section) {
+    case "currentGoal":
+      return ["Waiting for architect state.", `Requested task: ${task}`];
+    case "reasoningHistory":
+      return [
+        "Reasoning history placeholder.",
+        "Detailed architect chronology is not wired into Phase 1 yet.",
+      ];
+    case "taskQueue":
+      return [
+        "Task queue placeholder.",
+        "Execution-order wiring will populate this section when available.",
+      ];
+    case "executionLog":
+      return [
+        "Execution log placeholder.",
+        "Live command and runtime log lines will appear here.",
+      ];
+    case "activeCommand":
+      return [
+        "Waiting for engineer execution state.",
+        "Active command details will appear here when the run starts.",
+      ];
+    case "testsChecks":
+      return [
+        "Tests / Checks placeholder.",
+        "Required check status and output will appear here.",
+      ];
   }
 }
 
@@ -483,16 +507,10 @@ function reduceLogAppend(
       entries: boundedEntries.entries,
       nextId: state.log.nextId + entries.length,
     },
-    paneScroll: {
-      ...state.paneScroll,
-      log: state.followMode
-        ? Math.max(0, boundedEntries.entries.length - 1)
-        : state.paneScroll.log,
-    },
-    panes: withPaneUpdated(
-      state.panes,
-      "log",
-      entries.at(-1)?.timestamp ?? state.panes.log.updatedAt,
+    sections: withSectionUpdated(
+      state.sections,
+      "executionLog",
+      entries.at(-1)?.timestamp ?? state.sections.executionLog.updatedAt,
     ),
   };
 }
@@ -519,33 +537,4 @@ function boundStoredLogEntries(
     dropped: overflow,
     entries: overflow === 0 ? entries : entries.slice(overflow),
   };
-}
-
-function createLivePlaceholderLines(
-  pane: TuiPaneId,
-  task: string,
-): readonly string[] {
-  switch (pane) {
-    case "architect":
-      return [
-        "Architect Summary",
-        "",
-        `Objective: ${task}`,
-        "Waiting for live architect activity.",
-      ];
-    case "engineer":
-      return [
-        "Engineer Summary",
-        "",
-        `Task: ${task}`,
-        "Waiting for live engineer activity.",
-      ];
-    case "diff":
-      return ["Waiting for diff.patch to be written."];
-    case "tests":
-      return ["Waiting for test or check activity."];
-    case "tasks":
-    case "log":
-      return [];
-  }
 }

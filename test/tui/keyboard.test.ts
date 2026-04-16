@@ -6,7 +6,7 @@ import { createInitialTuiState } from "../../src/tui/state.js";
 describe("tui keyboard model", () => {
   const state = createInitialTuiState();
 
-  it("maps focus keys to deterministic pane actions", () => {
+  it("maps role focus keys to deterministic dashboard actions", () => {
     expect(resolveTuiKeyboardCommand(state, { name: "tab" })).toEqual({
       action: { type: "focus.next" },
       type: "dispatch",
@@ -29,13 +29,9 @@ describe("tui keyboard model", () => {
       action: { type: "focus.previous" },
       type: "dispatch",
     });
-    expect(resolveTuiKeyboardCommand(state, { full: "5", name: "5" })).toEqual({
-      action: { pane: "diff", type: "focus.set" },
-      type: "dispatch",
-    });
   });
 
-  it("maps navigation and toggle keys to reducer actions", () => {
+  it("maps scrolling and shell toggle keys to reducer actions", () => {
     expect(resolveTuiKeyboardCommand(state, { name: "down" })).toEqual({
       action: { delta: 1, type: "view.adjust" },
       type: "dispatch",
@@ -44,8 +40,8 @@ describe("tui keyboard model", () => {
       action: { delta: -5, type: "view.adjust" },
       type: "dispatch",
     });
-    expect(resolveTuiKeyboardCommand(state, { name: "x" })).toEqual({
-      action: { type: "maximize.toggle" },
+    expect(resolveTuiKeyboardCommand(state, { name: "f" })).toEqual({
+      action: { type: "follow.toggle" },
       type: "dispatch",
     });
     expect(
@@ -78,6 +74,18 @@ describe("tui keyboard model", () => {
       }),
     ).toEqual({
       type: "quit",
+    });
+  });
+
+  it("drops legacy pane jump and maximize bindings", () => {
+    expect(resolveTuiKeyboardCommand(state, { full: "1", name: "1" })).toEqual({
+      type: "none",
+    });
+    expect(resolveTuiKeyboardCommand(state, { name: "x" })).toEqual({
+      type: "none",
+    });
+    expect(resolveTuiKeyboardCommand(state, { name: "left" })).toEqual({
+      type: "none",
     });
   });
 });

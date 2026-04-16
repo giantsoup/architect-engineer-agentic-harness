@@ -3,18 +3,17 @@ import { describe, expect, it } from "vitest";
 import { createInitialTuiState, tuiReducer } from "../../src/tui/state.js";
 
 describe("tui store reducer", () => {
-  it("cycles focus deterministically across the six panes", () => {
+  it("cycles focus deterministically across the two dashboard roles", () => {
     let state = createInitialTuiState();
 
     state = tuiReducer(state, { type: "focus.next" });
-    state = tuiReducer(state, { type: "focus.next" });
-    state = tuiReducer(state, { type: "focus.next" });
+    expect(state.focusRole).toBe("engineer");
 
-    expect(state.focusPane).toBe("log");
+    state = tuiReducer(state, { type: "focus.next" });
+    expect(state.focusRole).toBe("architect");
 
     state = tuiReducer(state, { type: "focus.previous" });
-
-    expect(state.focusPane).toBe("tasks");
+    expect(state.focusRole).toBe("engineer");
   });
 
   it("bounds log entries and tracks dropped metadata", () => {
@@ -56,11 +55,11 @@ describe("tui store reducer", () => {
     expect(state.log.dropped).toBe(1);
   });
 
-  it("routes viewport movement to queue selection when the tasks pane is focused", () => {
+  it("routes viewport movement to the focused role scroll state", () => {
     let state = createInitialTuiState();
 
     state = tuiReducer(state, {
-      pane: "tasks",
+      role: "engineer",
       type: "focus.set",
     });
     state = tuiReducer(state, {
@@ -72,27 +71,31 @@ describe("tui store reducer", () => {
       type: "view.adjust",
     });
 
-    expect(state.queueSelection).toBe(state.queueItems.length - 1);
-    expect(state.paneScroll.tasks).toBe(0);
+    expect(state.roleScroll.engineer).toBe(11);
+    expect(state.roleScroll.architect).toBe(0);
   });
 
-  it("toggles maximize on the focused pane and resets view state", () => {
+  it("turns off engineer follow mode when scrolling upward and resets view state", () => {
     let state = createInitialTuiState();
 
-    state = tuiReducer(state, { type: "maximize.toggle" });
-    expect(state.maximizedPane).toBe("architect");
+    state = tuiReducer(state, {
+      delta: -1,
+      role: "engineer",
+      type: "role.scroll",
+    });
+    expect(state.followMode).toBe(false);
 
+    state = tuiReducer(state, { type: "help.toggle" });
     state = tuiReducer(state, {
       delta: 5,
-      pane: "engineer",
-      type: "pane.scroll",
+      role: "architect",
+      type: "role.scroll",
     });
-    state = tuiReducer(state, { type: "help.toggle" });
     state = tuiReducer(state, { type: "view.reset" });
 
-    expect(state.maximizedPane).toBeNull();
     expect(state.helpOpen).toBe(false);
     expect(state.followMode).toBe(true);
-    expect(state.paneScroll.engineer).toBe(0);
+    expect(state.roleScroll.architect).toBe(0);
+    expect(state.roleScroll.engineer).toBe(0);
   });
 });

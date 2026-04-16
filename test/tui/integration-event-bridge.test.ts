@@ -11,7 +11,7 @@ import type {
 import type { RunDossierPaths } from "../../src/artifacts/paths.js";
 
 describe("tui live event bridge", () => {
-  it("pushes live command output into the log, engineer pane, diff pane, and tests pane", async () => {
+  it("pushes live command output into the engineer dashboard sections and log", async () => {
     const eventBus = createHarnessEventBus({
       now: () => new Date("2026-04-16T01:00:00.000Z"),
     });
@@ -58,10 +58,10 @@ describe("tui live event bridge", () => {
     });
     await settle();
 
-    expect(store.getState().panes.engineer.lines).toContain(
+    expect(store.getState().sections.activeCommand.lines).toContain(
       "Current command: npm test",
     );
-    expect(store.getState().panes.engineer.lines).toContain(
+    expect(store.getState().sections.activeCommand.lines).toContain(
       "Working dir: packages/app",
     );
     expect(
@@ -71,7 +71,7 @@ describe("tui live event bridge", () => {
           entry.summary.includes("stdout: failing test output"),
         ),
     ).toBe(true);
-    expect(store.getState().panes.tests.lines).toContain(
+    expect(store.getState().sections.testsChecks.lines).toContain(
       "  stdout | failing test output",
     );
 
@@ -89,10 +89,6 @@ describe("tui live event bridge", () => {
       type: "artifact:update",
     });
     await settle();
-
-    expect(store.getState().panes.diff.lines[0]).toBe(
-      "diff --git a/src/tui/app.ts b/src/tui/app.ts",
-    );
 
     snapshot = {
       ...snapshot,
@@ -151,9 +147,13 @@ describe("tui live event bridge", () => {
     });
     await settle();
 
-    expect(store.getState().panes.tests.lines).toContain("State: failed");
-    expect(store.getState().panes.tests.lines).toContain("Exit code: 1");
-    expect(store.getState().panes.engineer.lines).toContain(
+    expect(store.getState().sections.testsChecks.lines).toContain(
+      "State: failed",
+    );
+    expect(store.getState().sections.testsChecks.lines).toContain(
+      "Exit code: 1",
+    );
+    expect(store.getState().sections.activeCommand.lines).toContain(
       "Check status: failed (exit 1): npm test",
     );
 

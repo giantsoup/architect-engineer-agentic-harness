@@ -19,7 +19,8 @@ export function createTuiDemoFeed(
 ): TuiDemoFeed {
   const now = options.now ?? (() => new Date());
   const intervalMs = options.intervalMs ?? 900;
-  const task = options.task ?? "Build the neo-blessed TUI shell.";
+  const task =
+    options.task ?? "Replace the six-pane shell with a two-role dashboard.";
   let timer: NodeJS.Timeout | undefined;
   let stepIndex = 0;
 
@@ -27,14 +28,24 @@ export function createTuiDemoFeed(
     (dispatch) => {
       dispatch({
         lines: [
-          "Architect Summary",
+          "Architect is framing the dashboard around only two top-level surfaces.",
           "",
-          `Objective: ${task}`,
-          "Decision: Keep the first phase UI-local.",
-          "Plan: ship shell, reducer, layout, and demo feed before runtime wiring.",
+          `Current objective: ${task}`,
+          "Wide mode should emphasize persistent Architect context alongside Engineer execution.",
         ],
-        pane: "architect",
-        type: "pane.replace",
+        section: "currentGoal",
+        type: "section.replace",
+        updatedAt: now().toISOString(),
+      });
+      dispatch({
+        lines: [
+          "Phase 1 placeholder",
+          "",
+          "Reasoning history remains explicit even before live chronology is fully wired.",
+          "The shell should never render blank sections.",
+        ],
+        section: "reasoningHistory",
+        type: "section.replace",
         updatedAt: now().toISOString(),
       });
       dispatch({
@@ -45,36 +56,28 @@ export function createTuiDemoFeed(
         entry: {
           level: "info",
           source: "architect",
-          summary: "Planning the UI-local shell around a pure reducer.",
+          summary: "Planning a role-based shell with explicit placeholders.",
           timestamp: now().toISOString(),
         },
         type: "log.append",
       });
       dispatch({
-        text: "Demo feed: architect planning shell layout and state.",
+        text: "Demo feed: architect is shaping the phase-1 dashboard skeleton.",
         type: "status.set",
       });
     },
     (dispatch) => {
       dispatch({
         lines: [
-          "Engineer Summary",
-          "",
-          "Current action: add state, keyboard, layout, and widget modules.",
-          "Guardrail: no runtime rewrites and no dossier changes.",
+          "Current command: refactor TuiState around role focus instead of pane focus",
+          "Access mode: mutate",
+          "Working dir: src/tui",
+          "Last tool: file.write",
+          "Last exit code: n/a",
+          "Check status: waiting to run",
         ],
-        pane: "engineer",
-        type: "pane.replace",
-        updatedAt: now().toISOString(),
-      });
-      dispatch({
-        lines: [
-          "diff --git a/src/tui/state.ts b/src/tui/state.ts",
-          "+ introduce pure reducer-driven TuiState store",
-          "+ clamp queue selection and bounded log metadata",
-        ],
-        pane: "diff",
-        type: "pane.replace",
+        section: "activeCommand",
+        type: "section.replace",
         updatedAt: now().toISOString(),
       });
       dispatch({
@@ -85,38 +88,31 @@ export function createTuiDemoFeed(
         entry: {
           level: "info",
           source: "engineer",
-          summary: "Reducer and layout modules are now the active workstream.",
+          summary:
+            "Replacing the layout engine with a 40/60 two-column dashboard.",
           timestamp: now().toISOString(),
         },
         type: "log.append",
       });
       dispatch({
-        text: "Demo feed: engineer updating reducer and layout modules.",
+        text: "Demo feed: engineer is landing role panels, header, and footer hints.",
         type: "status.set",
       });
     },
     (dispatch) => {
       dispatch({
         lines: [
-          "Tasks / Queue",
+          "Required command: npm test -- test/tui",
+          "Current command: npm test -- test/tui",
+          "State: running",
+          "Exit code: running",
+          "Duration: running",
           "",
-          "Synthetic selection moves here via arrows and PgUp/PgDn.",
-          "Future runtime event wiring will replace this demo data source.",
+          "Output:",
+          "  stdout | updating layout, keyboard, and app coverage",
         ],
-        pane: "tasks",
-        type: "pane.replace",
-        updatedAt: now().toISOString(),
-      });
-      dispatch({
-        lines: [
-          "Targeted tests",
-          "",
-          "PASS  test/tui/store.test.ts",
-          "PASS  test/tui/layout.test.ts",
-          "PASS  test/tui/keyboard.test.ts",
-        ],
-        pane: "tests",
-        type: "pane.replace",
+        section: "testsChecks",
+        type: "section.replace",
         updatedAt: now().toISOString(),
       });
       dispatch({
@@ -127,26 +123,44 @@ export function createTuiDemoFeed(
         entry: {
           level: "info",
           source: "demo",
-          summary: "CLI plumbing and demo feed are driving the shell.",
+          summary:
+            "Narrow mode now swaps between Architect and Engineer with Tab.",
           timestamp: now().toISOString(),
         },
         type: "log.append",
       });
       dispatch({
-        text: "Demo feed: CLI plumbing active; runtime integration remains deferred.",
+        text: "Demo feed: narrow role switching and placeholders are active.",
         type: "status.set",
       });
     },
     (dispatch) => {
       dispatch({
         lines: [
-          "Architect Review",
-          "",
-          "Focus visibility uses labels and borders, not color alone.",
-          "Render scheduling coalesces bursts before drawing the screen.",
+          "Current command: npm test -- test/tui",
+          "Access mode: inspect",
+          "Working dir: .",
+          "Last tool: command.execute",
+          "Last exit code: 0",
+          "Check status: passed (exit 0): npm test -- test/tui",
         ],
-        pane: "architect",
-        type: "pane.replace",
+        section: "activeCommand",
+        type: "section.replace",
+        updatedAt: now().toISOString(),
+      });
+      dispatch({
+        lines: [
+          "Required command: npm test -- test/tui",
+          "Current command: idle",
+          "State: passed",
+          "Exit code: 0",
+          "Duration: 1.2s",
+          "",
+          "Output:",
+          "  stdout | all focused TUI tests passed",
+        ],
+        section: "testsChecks",
+        type: "section.replace",
         updatedAt: now().toISOString(),
       });
       dispatch({
@@ -158,13 +172,13 @@ export function createTuiDemoFeed(
           level: "warn",
           source: "demo",
           summary:
-            "Shell is in demo mode until a later runtime-integration issue lands.",
+            "Reasoning history and diff integration stay intentionally partial in Phase 1.",
           timestamp: now().toISOString(),
         },
         type: "log.append",
       });
       dispatch({
-        text: "Demo feed: shell complete enough for interaction; live wiring deferred.",
+        text: "Demo feed: phase-1 shell complete enough for interaction; deeper live wiring is deferred.",
         type: "status.set",
       });
     },
@@ -199,30 +213,30 @@ export function createTuiDemoFeed(
 
 function buildQueueItems(
   shell: TuiQueueItem["status"],
-  store: TuiQueueItem["status"],
-  demo: TuiQueueItem["status"],
+  layout: TuiQueueItem["status"],
+  narrow: TuiQueueItem["status"],
   tests: TuiQueueItem["status"],
 ): readonly TuiQueueItem[] {
   return [
     {
       id: "shell",
       status: shell,
-      title: "Scaffold the neo-blessed shell",
+      title: "Replace six-pane navigation with two role surfaces",
     },
     {
-      id: "store",
-      status: store,
-      title: "Implement the pure TuiState store and keyboard model",
+      id: "layout",
+      status: layout,
+      title: "Ship the 40/60 dashboard layout for 120x30 terminals",
     },
     {
-      id: "demo",
-      status: demo,
-      title: "Hook the demo feed into the new app shell",
+      id: "narrow",
+      status: narrow,
+      title: "Add a narrow-screen Architect/Engineer switcher",
     },
     {
       id: "tests",
       status: tests,
-      title: "Add focused TUI tests and CLI plumbing coverage",
+      title: "Update TUI tests and keep startup / teardown behavior intact",
     },
   ];
 }

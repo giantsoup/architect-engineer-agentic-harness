@@ -111,20 +111,24 @@ export function createTuiLiveDataSource(
     const state = options.store.getState();
     const updatedAt = now().toISOString();
 
-    if (!sameLines(state.panes.architect.lines, projection.architectLines)) {
+    if (
+      !sameLines(state.sections.currentGoal.lines, projection.architectLines)
+    ) {
       options.store.dispatch({
         lines: projection.architectLines,
-        pane: "architect",
-        type: "pane.replace",
+        section: "currentGoal",
+        type: "section.replace",
         updatedAt,
       });
     }
 
-    if (!sameLines(state.panes.engineer.lines, projection.engineerLines)) {
+    if (
+      !sameLines(state.sections.activeCommand.lines, projection.engineerLines)
+    ) {
       options.store.dispatch({
         lines: projection.engineerLines,
-        pane: "engineer",
-        type: "pane.replace",
+        section: "activeCommand",
+        type: "section.replace",
         updatedAt,
       });
     }
@@ -136,20 +140,11 @@ export function createTuiLiveDataSource(
       });
     }
 
-    if (!sameLines(state.panes.diff.lines, projection.diffLines)) {
-      options.store.dispatch({
-        lines: projection.diffLines,
-        pane: "diff",
-        type: "pane.replace",
-        updatedAt,
-      });
-    }
-
-    if (!sameLines(state.panes.tests.lines, projection.testsLines)) {
+    if (!sameLines(state.sections.testsChecks.lines, projection.testsLines)) {
       options.store.dispatch({
         lines: projection.testsLines,
-        pane: "tests",
-        type: "pane.replace",
+        section: "testsChecks",
+        type: "section.replace",
         updatedAt,
       });
     }
