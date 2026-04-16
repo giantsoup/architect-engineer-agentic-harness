@@ -13,6 +13,7 @@ import {
 } from "../../index.js";
 import { createHarnessEventBus } from "../../runtime/harness-events.js";
 import { readRunInspection } from "../../runtime/run-history.js";
+import { createTuiRenderer } from "../../tui/app.js";
 import { createLiveConsoleRenderer } from "../../ui/live-console.js";
 import { renderRunCompletionSummary } from "../../ui/summary-renderer.js";
 
@@ -71,6 +72,7 @@ export function createRunCommand(): Command {
         const liveConsole = createRunUiController({
           mode: options.ui,
           paths: dossierPaths,
+          task: runMode.task,
         });
 
         liveConsole.start();
@@ -216,10 +218,18 @@ function parseRole(value: string): "architect" | "engineer" {
 function createRunUiController(options: {
   mode: RunCommandOptions["ui"];
   paths: Parameters<typeof createLiveConsoleRenderer>[0]["paths"];
+  task?: string | undefined;
 }) {
   if (options.mode === "live") {
     return createLiveConsoleRenderer({
       paths: options.paths,
+    });
+  }
+
+  if (options.mode === "tui") {
+    return createTuiRenderer({
+      paths: options.paths,
+      task: options.task,
     });
   }
 

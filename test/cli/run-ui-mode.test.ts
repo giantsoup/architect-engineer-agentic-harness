@@ -6,6 +6,7 @@ const mockedModules = vi.hoisted(() => ({
   createLiveConsoleRenderer: vi.fn(),
   createProjectCommandRunner: vi.fn(),
   createRunId: vi.fn(),
+  createTuiRenderer: vi.fn(),
   executeArchitectEngineerRun: vi.fn(),
   initializeRunDossier: vi.fn(),
   loadHarnessConfig: vi.fn(),
@@ -27,6 +28,10 @@ vi.mock("../../src/runtime/run-history.js", () => ({
 
 vi.mock("../../src/ui/live-console.js", () => ({
   createLiveConsoleRenderer: mockedModules.createLiveConsoleRenderer,
+}));
+
+vi.mock("../../src/tui/app.js", () => ({
+  createTuiRenderer: mockedModules.createTuiRenderer,
 }));
 
 describe("CLI run ui mode", () => {
@@ -57,11 +62,15 @@ describe("CLI run ui mode", () => {
     expect(liveConsole.stop).toHaveBeenCalledOnce();
   });
 
-  it("keeps `plain` and `tui` on the placeholder path without invoking the live renderer", async () => {
+  it("keeps `plain` on the placeholder path and launches the TUI renderer for `tui`", async () => {
     const { createRunCommand } = await import("../../src/cli/commands/run.js");
     const stderrSpy = vi
       .spyOn(process.stderr, "write")
       .mockImplementation(() => true);
+    const tuiRenderer = {
+      start: vi.fn(),
+      stop: vi.fn().mockResolvedValue(undefined),
+    };
     const dossierPaths = {
       runDirRelativePath: ".agent-harness/runs/20260415T120000.000Z-abc124",
       runId: "20260415T120000.000Z-abc124",
@@ -74,6 +83,7 @@ describe("CLI run ui mode", () => {
       },
       dossierPaths,
     );
+    mockedModules.createTuiRenderer.mockReturnValue(tuiRenderer);
 
     try {
       await parseRunCommand(createRunCommand(), [
@@ -93,6 +103,9 @@ describe("CLI run ui mode", () => {
     }
 
     expect(mockedModules.createLiveConsoleRenderer).not.toHaveBeenCalled();
+    expect(mockedModules.createTuiRenderer).toHaveBeenCalledOnce();
+    expect(tuiRenderer.start).toHaveBeenCalledOnce();
+    expect(tuiRenderer.stop).toHaveBeenCalledOnce();
     expect(mockedModules.executeArchitectEngineerRun).toHaveBeenCalledTimes(2);
   });
 });
@@ -105,6 +118,7 @@ function mockSuccessfulTaskRun(
   mockedModules.createRunId.mockReturnValue(dossierPaths.runId);
   mockedModules.buildRunDossierPaths.mockReturnValue(dossierPaths);
   mockedModules.createLiveConsoleRenderer.mockReturnValue(liveConsole);
+  mockedModules.createTuiRenderer.mockReturnValue(liveConsole);
   mockedModules.executeArchitectEngineerRun.mockResolvedValue({
     dossier: { paths: dossierPaths },
     result: {
