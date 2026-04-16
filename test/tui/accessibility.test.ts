@@ -130,7 +130,9 @@ describe("tui accessibility fallbacks", () => {
       theme,
     });
 
-    expect(headerBox.content).toContain("theme:mono/ascii");
+    expect(headerBox.content).toBe(
+      "Run qa-run | live | showing Architect | mono/ascii",
+    );
     expect(roleBox.label).toContain("[*] Architect");
     expect(roleBox.content).toContain("Task Queue");
     expect(roleBox.content).toContain(
@@ -139,7 +141,10 @@ describe("tui accessibility fallbacks", () => {
     expect(roleBox.content).toContain(
       "[BLOCKED] Confirm Windows fallback behavior",
     );
-    expect(statusBarBox.content).toContain("Tab switch role (Architect)");
+    expect(statusBarBox.content).toContain("Showing Architect");
+    expect(statusBarBox.content).toContain("Tab switch role");
+    expect(statusBarBox.content).toContain("s stop run");
+    expect(statusBarBox.content).toContain("? help");
   });
 
   it("renders the footer without relying on box labels", () => {
@@ -170,7 +175,10 @@ describe("tui accessibility fallbacks", () => {
       theme,
     });
 
-    expect(statusBarBox.content).toContain("q quit-ui");
+    expect(statusBarBox.content).toContain("Focus Architect");
+    expect(statusBarBox.content).toContain("Tab switch panel");
+    expect(statusBarBox.content).toContain("s stop run");
+    expect(statusBarBox.content).toContain("? help");
     expect(statusBarBox.style).toEqual({
       fg: "white",
     });
@@ -226,6 +234,137 @@ describe("tui accessibility fallbacks", () => {
     expect(roleBox.style).toBe(sentinelStyle);
     expect(statusBarBox.style).toBe(sentinelStyle);
     expect(helpModalBox.style).toBe(sentinelStyle);
+  });
+
+  it("renders explicit placeholders and the updated help copy in mono mode", () => {
+    const state = createInitialTuiState({
+      demoMode: false,
+      runLabel: "qa-run",
+      task: "Polish the shell",
+    });
+    state.focusRole = "engineer";
+    state.helpOpen = true;
+    state.statusText = "Idle";
+    const layout = computeTuiLayout({
+      height: 24,
+      state,
+      width: 72,
+    });
+    const roleBox = createRecordingBox();
+    const helpModalBox = createRecordingBox();
+    const statusBarBox = createRecordingBox();
+    const theme = createTuiTheme({
+      colorMode: "none",
+      unicode: false,
+    });
+
+    renderRolePanelWidget({
+      box: roleBox,
+      rect: layout.roles.engineer.rect,
+      role: "engineer",
+      state,
+      theme,
+    });
+    renderHelpModalWidget({
+      box: helpModalBox,
+      rect: layout.helpModal,
+      state,
+      theme,
+    });
+    renderStatusBarWidget({
+      box: statusBarBox,
+      layout,
+      rect: layout.footer,
+      state,
+      theme,
+    });
+
+    expect(roleBox.content).toContain("No engineer execution recorded yet.");
+    expect(roleBox.content).toContain("No required check output recorded yet.");
+    expect(helpModalBox.content).toContain(
+      "move focus in wide mode or swap roles in narrow mode",
+    );
+    expect(helpModalBox.content).toContain(
+      "gracefully stop the current run and keep the TUI open",
+    );
+    expect(helpModalBox.content).toContain(
+      "Sections stay explicit when data is not available yet",
+    );
+    expect(statusBarBox.content).toContain("f follow:on");
+    expect(statusBarBox.content).toContain("? clo");
+  });
+
+  it("prioritizes stop and help hints over status text on narrow live footers", () => {
+    const state = createInitialTuiState({
+      demoMode: false,
+      runLabel: "qa-run",
+    });
+    state.focusRole = "engineer";
+    state.helpOpen = true;
+    state.statusText =
+      "Architect is still reviewing a long summary that should not displace key controls.";
+    const layout = computeTuiLayout({
+      height: 24,
+      state,
+      width: 72,
+    });
+    const statusBarBox = createRecordingBox();
+    const theme = createTuiTheme({
+      colorMode: "none",
+      unicode: false,
+    });
+
+    renderStatusBarWidget({
+      box: statusBarBox,
+      layout,
+      rect: layout.footer,
+      state,
+      theme,
+    });
+
+    expect(statusBarBox.content).toContain("s stop run");
+    expect(statusBarBox.content).toContain("? clo");
+  });
+
+  it("removes the stop affordance after the live run has already finished", () => {
+    const state = createInitialTuiState({
+      demoMode: false,
+      runLabel: "qa-run",
+    });
+    state.runActive = false;
+    state.statusText = "stopped | Run cancelled by user request.";
+    const layout = computeTuiLayout({
+      height: 24,
+      state,
+      width: 120,
+    });
+    const statusBarBox = createRecordingBox();
+    const helpModalBox = createRecordingBox();
+    const theme = createTuiTheme({
+      colorMode: "none",
+      unicode: false,
+    });
+
+    renderStatusBarWidget({
+      box: statusBarBox,
+      layout,
+      rect: layout.footer,
+      state,
+      theme,
+    });
+    state.helpOpen = true;
+    renderHelpModalWidget({
+      box: helpModalBox,
+      rect: layout.helpModal,
+      state,
+      theme,
+    });
+
+    expect(statusBarBox.content).not.toContain("s stop run");
+    expect(statusBarBox.content).not.toContain("Stopping run");
+    expect(helpModalBox.content).not.toContain(
+      "gracefully stop the current run and keep the TUI open",
+    );
   });
 
   it("clips role panel content to the available body height on tiny terminals", () => {

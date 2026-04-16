@@ -20,7 +20,8 @@ export function createTuiDemoFeed(
   const now = options.now ?? (() => new Date());
   const intervalMs = options.intervalMs ?? 900;
   const task =
-    options.task ?? "Replace the six-pane shell with a two-role dashboard.";
+    options.task ??
+    "Polish the role-oriented dashboard for demos and keep fallbacks intact.";
   let timer: NodeJS.Timeout | undefined;
   let stepIndex = 0;
 
@@ -28,10 +29,10 @@ export function createTuiDemoFeed(
     (dispatch) => {
       dispatch({
         lines: [
-          "Architect is framing the dashboard around only two top-level surfaces.",
+          "Architect is tightening the shell around two primary panels.",
           "",
           `Current objective: ${task}`,
-          "Wide mode should emphasize persistent Architect context alongside Engineer execution.",
+          "Wide mode should keep Architect context visible beside Engineer execution without noisy chrome.",
         ],
         section: "currentGoal",
         type: "section.replace",
@@ -39,10 +40,10 @@ export function createTuiDemoFeed(
       });
       dispatch({
         lines: [
-          "Phase 1 placeholder",
+          "11:59:59 Plan created: keep the dashboard centered on two role panels.",
           "",
-          "Reasoning history remains explicit even before live chronology is fully wired.",
-          "The shell should never render blank sections.",
+          "12:00:00 Goal set: keep header restrained and footer context-sensitive.",
+          "12:00:01 Constraint: preserve mono, ASCII, and terminal recovery behavior.",
         ],
         section: "reasoningHistory",
         type: "section.replace",
@@ -56,7 +57,8 @@ export function createTuiDemoFeed(
         entry: {
           level: "info",
           source: "architect",
-          summary: "Planning a role-based shell with explicit placeholders.",
+          summary:
+            "Architect framed the polish pass around spacing, hierarchy, and fallback safety.",
           timestamp: now().toISOString(),
         },
         type: "log.append",
@@ -71,19 +73,22 @@ export function createTuiDemoFeed(
         updatedAt: now().toISOString(),
       });
       dispatch({
-        text: "Demo feed: architect is shaping the phase-1 dashboard skeleton.",
+        text: "Demo feed: architect is shaping the polish pass and preserving fallback guarantees.",
         type: "status.set",
       });
     },
     (dispatch) => {
       dispatch({
         lines: [
-          "Current command: refactor TuiState around role focus instead of pane focus",
+          "Task: polish the role dashboard shell",
+          "State: running",
+          "Current command: npm test -- test/tui/layout.test.ts test/tui/app.test.ts",
+          "Last command: rg --files src/tui test/tui",
           "Access mode: mutate",
-          "Working dir: src/tui",
+          "Working dir: .",
           "Last tool: file.write",
-          "Last exit code: n/a",
-          "Check status: waiting to run",
+          "Last exit code: 0",
+          "Check status: waiting for npm test -- test/tui",
         ],
         section: "activeCommand",
         type: "section.replace",
@@ -98,22 +103,22 @@ export function createTuiDemoFeed(
           level: "info",
           source: "engineer",
           summary:
-            "Replacing the layout engine with a 40/60 two-column dashboard.",
+            "Engineer tightened the chrome and widened the gap between the role panels.",
           timestamp: now().toISOString(),
         },
         type: "log.append",
       });
       dispatch({
         lines: [
-          "12:00:00 engineer-action-selected Replacing the layout engine with a 40/60 two-column dashboard.",
-          "12:00:01 tool-call file.write completed",
+          "12:00:02 engineer-action-selected Tighten spacing and shell copy.",
+          "12:00:03 tool-call file.write completed",
         ],
         section: "executionLog",
         type: "section.replace",
         updatedAt: now().toISOString(),
       });
       dispatch({
-        text: "Demo feed: engineer is landing role panels, header, and footer hints.",
+        text: "Demo feed: engineer is landing the shell polish and wide-layout spacing.",
         type: "status.set",
       });
     },
@@ -127,7 +132,7 @@ export function createTuiDemoFeed(
           "Duration: running",
           "",
           "Output:",
-          "  stdout | updating layout, keyboard, and app coverage",
+          "  stdout | updating layout, keyboard, fallback, and reconcile coverage",
         ],
         section: "testsChecks",
         type: "section.replace",
@@ -142,31 +147,34 @@ export function createTuiDemoFeed(
           level: "info",
           source: "demo",
           summary:
-            "Narrow mode now swaps between Architect and Engineer with Tab.",
+            "Narrow mode swaps between Architect and Engineer with Tab and keeps the footer concise.",
           timestamp: now().toISOString(),
         },
         type: "log.append",
       });
       dispatch({
         lines: [
-          "12:00:00 engineer-action-selected Replacing the layout engine with a 40/60 two-column dashboard.",
-          "12:00:01 tool-call file.write completed",
-          "12:00:02 command:start npm test -- test/tui",
-          "12:00:03 stdout updating layout, keyboard, and app coverage",
+          "12:00:02 engineer-action-selected Tighten spacing and shell copy.",
+          "12:00:03 tool-call file.write completed",
+          "12:00:04 command:start npm test -- test/tui",
+          "12:00:05 stdout updating layout, keyboard, fallback, and reconcile coverage",
         ],
         section: "executionLog",
         type: "section.replace",
         updatedAt: now().toISOString(),
       });
       dispatch({
-        text: "Demo feed: narrow role switching and placeholders are active.",
+        text: "Demo feed: narrow role switching, explicit placeholders, and tests coverage are active.",
         type: "status.set",
       });
     },
     (dispatch) => {
       dispatch({
         lines: [
-          "Current command: npm test -- test/tui",
+          "Task: polish the role dashboard shell",
+          "State: idle",
+          "Current command: idle",
+          "Last command: npm test -- test/tui",
           "Access mode: inspect",
           "Working dir: .",
           "Last tool: command.execute",
@@ -186,7 +194,7 @@ export function createTuiDemoFeed(
           "Duration: 1.2s",
           "",
           "Output:",
-          "  stdout | all focused TUI tests passed",
+          "  stdout | all focused TUI and fallback tests passed",
         ],
         section: "testsChecks",
         type: "section.replace",
@@ -198,28 +206,28 @@ export function createTuiDemoFeed(
       });
       dispatch({
         entry: {
-          level: "warn",
+          level: "info",
           source: "demo",
           summary:
-            "Reasoning history and diff integration stay intentionally partial in Phase 1.",
+            "Architect handoff, engineer-only execution history, and fallback notes all read cleanly in the polished shell.",
           timestamp: now().toISOString(),
         },
         type: "log.append",
       });
       dispatch({
         lines: [
-          "12:00:00 engineer-action-selected Replacing the layout engine with a 40/60 two-column dashboard.",
-          "12:00:01 tool-call file.write completed",
-          "12:00:02 command:start npm test -- test/tui",
-          "12:00:04 command:end npm test -- test/tui (exit 0)",
-          "12:00:04 check passed (exit 0): npm test -- test/tui",
+          "12:00:02 engineer-action-selected Tighten spacing and shell copy.",
+          "12:00:03 tool-call file.write completed",
+          "12:00:04 command:start npm test -- test/tui",
+          "12:00:06 command:end npm test -- test/tui (exit 0)",
+          "12:00:06 check passed (exit 0): npm test -- test/tui",
         ],
         section: "executionLog",
         type: "section.replace",
         updatedAt: now().toISOString(),
       });
       dispatch({
-        text: "Demo feed: phase-1 shell complete enough for interaction; deeper live wiring is deferred.",
+        text: "Demo feed: polished dashboard contract holds across wide, narrow, and fallback scenarios.",
         type: "status.set",
       });
     },
@@ -262,22 +270,22 @@ function buildQueueItems(
     {
       id: "shell",
       status: shell,
-      title: "Replace six-pane navigation with two role surfaces",
+      title: "Polish the Architect and Engineer dashboard surfaces",
     },
     {
       id: "layout",
       status: layout,
-      title: "Ship the 40/60 dashboard layout for 120x30 terminals",
+      title: "Tighten spacing, hierarchy, and restrained chrome",
     },
     {
       id: "narrow",
       status: narrow,
-      title: "Add a narrow-screen Architect/Engineer switcher",
+      title: "Keep narrow-mode role switching obvious and fast",
     },
     {
       id: "tests",
       status: tests,
-      title: "Update TUI tests and keep startup / teardown behavior intact",
+      title: "Refresh tests, fallbacks, and smoke notes",
     },
   ];
 }

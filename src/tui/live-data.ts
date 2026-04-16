@@ -110,6 +110,7 @@ export function createTuiLiveDataSource(
     });
     const state = options.store.getState();
     const updatedAt = now().toISOString();
+    const runActive = resolveRunActiveState(inspection, overlay.runStatus);
 
     if (
       !sameLines(state.sections.currentGoal.lines, projection.currentGoalLines)
@@ -186,6 +187,13 @@ export function createTuiLiveDataSource(
       options.store.dispatch({
         text: projection.statusText,
         type: "status.set",
+      });
+    }
+
+    if (runActive !== undefined && state.runActive !== runActive) {
+      options.store.dispatch({
+        active: runActive,
+        type: "run.activity.set",
       });
     }
   };
@@ -317,6 +325,21 @@ export function createTuiLiveDataSource(
       type: "status.set",
     });
   }
+}
+
+function resolveRunActiveState(
+  inspection: RunInspection | undefined,
+  runStatus: ReturnType<typeof createEmptyTuiLiveOverlay>["runStatus"],
+): boolean | undefined {
+  if (runStatus !== undefined) {
+    return runStatus.status === "initialized" || runStatus.status === "running";
+  }
+
+  if (inspection !== undefined) {
+    return inspection.status === "running";
+  }
+
+  return undefined;
 }
 
 async function readInspectionSafely(

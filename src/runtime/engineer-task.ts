@@ -21,6 +21,7 @@ import {
 import { createRoleModelClient } from "../models/provider-factory.js";
 import {
   ModelClientError,
+  ModelCancelledError,
   ModelStructuredOutputError,
 } from "../models/openai-compatible-client.js";
 import { createToolRouter, type ToolRouter } from "../tools/tool-router.js";
@@ -35,6 +36,7 @@ import { BuiltInToolError, McpToolError } from "../tools/errors.js";
 import type { ProjectCommandRunnerLike } from "../sandbox/command-runner.js";
 import type { RunProcess } from "../sandbox/process-runner.js";
 import { DEFAULT_PROMPT_VERSION } from "../versioning.js";
+import { OperationCancelledError } from "../cancellation.js";
 import {
   appendRunEvent,
   appendStructuredMessage,
@@ -66,6 +68,7 @@ const LOW_VALUE_EXPLORATION_PATH_SEGMENTS = new Set([
 
 export type EngineerTaskStopReason =
   | "blocked"
+  | "cancelled"
   | "completion-path-failed"
   | "engineer-complete"
   | "max-consecutive-failed-checks"
@@ -96,6 +99,7 @@ export interface ExecuteEngineerTaskOptions {
   projectCommandRunner?: ProjectCommandRunnerLike;
   runId?: string;
   runProcess?: RunProcess;
+  signal?: AbortSignal;
   task: string;
   taskFormat?: "brief" | "objective";
   timeoutMs?: number;
@@ -215,8 +219,12 @@ export async function executeEngineerTask(
             ? {}
             : { runProcess: options.runProcess }),
         });
+  const handleAbort = () => {
+    void toolExecutor.close("run cancelled by user request");
+  };
 
   try {
+    options.signal?.addEventListener("abort", handleAbort, { once: true });
     const toolCatalog = await toolExecutor.prepare();
     const taskBrief = renderEngineerTaskBrief({
       loadedConfig: options.loadedConfig,
@@ -328,6 +336,11 @@ export async function executeEngineerTask(
     }
 
     while (iterationCount < maxIterations) {
+      if (options.signal?.aborted === true) {
+        outcome = createCancelledOutcome();
+        break;
+      }
+
       const iterationTimestamp = now().toISOString();
       const remainingTimeMs = deadlineMs - now().getTime();
 
@@ -375,6 +388,7 @@ export async function executeEngineerTask(
             requiredCheckCommand,
             runId: dossier.paths.runId,
           },
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
           ...(completionOnlyTurn
             ? {}
             : {
@@ -407,6 +421,15 @@ export async function executeEngineerTask(
             : error instanceof ModelClientError
               ? error
               : undefined;
+
+        if (
+          error instanceof ModelCancelledError ||
+          error instanceof OperationCancelledError ||
+          options.signal?.aborted
+        ) {
+          outcome = createCancelledOutcome();
+          break;
+        }
 
         if (completionOnlyTurn && modelError?.retryable === true) {
           outcome = {
@@ -454,6 +477,11 @@ export async function executeEngineerTask(
       }
 
       consecutiveRetryableModelErrors = 0;
+
+      if (options.signal?.aborted) {
+        outcome = createCancelledOutcome();
+        break;
+      }
 
       messages.push({
         content: renderEngineerAssistantMessage(
@@ -821,8 +849,17 @@ export async function executeEngineerTask(
       toolExecutor,
     });
   } finally {
+    options.signal?.removeEventListener("abort", handleAbort);
     await toolExecutor.close();
   }
+}
+
+function createCancelledOutcome(): FinalizedOutcome {
+  return {
+    status: "stopped",
+    stopReason: "cancelled",
+    summary: "Run cancelled by user request.",
+  };
 }
 
 async function finalizeEngineerRun(options: {

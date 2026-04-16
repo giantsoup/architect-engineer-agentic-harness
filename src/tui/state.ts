@@ -56,6 +56,8 @@ export interface TuiState {
   queueItems: readonly TuiQueueItem[];
   roleScroll: Record<TuiRoleId, number>;
   runLabel: string;
+  runActive: boolean;
+  runStopRequested: boolean;
   sections: Record<TuiSectionId, TuiSectionSnapshot>;
   statusText: string;
 }
@@ -66,6 +68,8 @@ export type TuiAction =
   | { role: TuiRoleId; type: "focus.set" }
   | { type: "follow.toggle" }
   | { open?: boolean | undefined; type: "help.toggle" }
+  | { active: boolean; type: "run.activity.set" }
+  | { type: "run.stop.requested" }
   | { items: readonly TuiQueueItem[]; type: "queue.replace" }
   | {
       entry: Omit<TuiLogEntry, "id">;
@@ -123,7 +127,7 @@ export function createInitialTuiState(
   const now = options.now ?? (() => new Date().toISOString());
   const task =
     options.task ??
-    "Replace the six-pane shell with a role-oriented dashboard skeleton.";
+    "Polish the role-oriented dashboard and preserve terminal fallbacks.";
   const timestamp = now();
   const demoMode = options.demoMode ?? true;
 
@@ -141,29 +145,31 @@ export function createInitialTuiState(
     queueItems: demoMode
       ? [
           {
-            id: "architect-current-goal",
+            id: "dashboard-polish",
             status: "active",
-            title: "Replace six-pane navigation with two role surfaces",
+            title: "Polish the Architect and Engineer dashboard surfaces",
           },
           {
-            id: "layout",
+            id: "chrome",
             status: "pending",
-            title: "Ship a 40/60 wide dashboard for 120x30 terminals",
+            title: "Tighten spacing, hierarchy, and restrained chrome",
           },
           {
-            id: "narrow",
+            id: "narrow-switching",
             status: "pending",
-            title: "Add a narrow Architect/Engineer role switcher",
+            title: "Keep narrow-mode role switching obvious and fast",
           },
           {
-            id: "tests",
+            id: "coverage",
             status: "pending",
-            title: "Update TUI tests to the phase-1 shell contract",
+            title: "Refresh tests, fallbacks, and smoke notes",
           },
         ]
       : [],
     roleScroll: createRoleScrollState(),
     runLabel: options.runLabel ?? DEFAULT_RUN_LABEL,
+    runActive: !demoMode,
+    runStopRequested: false,
     sections: {
       currentGoal: createInitialSectionSnapshot(
         demoMode,
@@ -203,7 +209,7 @@ export function createInitialTuiState(
       ),
     },
     statusText: demoMode
-      ? "Phase 1 dashboard skeleton active. Runtime section wiring remains intentionally partial."
+      ? "Dashboard demo feed active. Architect context and Engineer execution stay readable without heavy chrome."
       : `Waiting for live harness activity for ${options.runLabel ?? DEFAULT_RUN_LABEL}.`,
   };
 }
@@ -241,6 +247,17 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return {
         ...state,
         helpOpen: action.open ?? !state.helpOpen,
+      };
+    case "run.activity.set":
+      return {
+        ...state,
+        runActive: action.active,
+        runStopRequested: action.active ? state.runStopRequested : false,
+      };
+    case "run.stop.requested":
+      return {
+        ...state,
+        runStopRequested: true,
       };
     case "queue.replace":
       return {
@@ -391,10 +408,10 @@ function createInitialSectionSnapshot(
     case "currentGoal":
       return {
         lines: [
-          "Phase 1 goal",
+          "Demo objective",
           "",
-          `Replace the six-pane shell with a dashboard centered on: ${task}`,
-          "Keep startup, teardown, and terminal capability fallback behavior intact.",
+          `Center the dashboard on: ${task}`,
+          "Keep the main panels prominent while startup, teardown, and terminal fallbacks remain safe.",
         ],
         updatedAt,
       };
@@ -411,9 +428,9 @@ function createInitialSectionSnapshot(
     case "taskQueue":
       return {
         lines: [
-          "Placeholder",
+          "Execution order",
           "",
-          "Task queue content is synthesized from queue items.",
+          "Queue entries are synthesized from the engineer brief or live execution order.",
         ],
         updatedAt,
       };
@@ -429,7 +446,7 @@ function createInitialSectionSnapshot(
     case "activeCommand":
       return {
         lines: [
-          "Phase 1 engineer focus",
+          "Engineer activity",
           "",
           "Show current command, working directory, tool activity, and check state.",
         ],
@@ -438,7 +455,7 @@ function createInitialSectionSnapshot(
     case "testsChecks":
       return {
         lines: [
-          "Placeholder",
+          "Checks overview",
           "",
           "Tests / Checks will show explicit command state and captured output.",
         ],
@@ -453,7 +470,10 @@ function createLivePlaceholderLines(
 ): readonly string[] {
   switch (section) {
     case "currentGoal":
-      return ["Waiting for architect state.", `Requested task: ${task}`];
+      return [
+        "Waiting for architect planning or handoff state.",
+        `Requested task: ${task}`,
+      ];
     case "reasoningHistory":
       return [
         "No architect reasoning recorded yet.",
@@ -461,8 +481,8 @@ function createLivePlaceholderLines(
       ];
     case "taskQueue":
       return [
-        "Task queue placeholder.",
-        "Execution-order wiring will populate this section when available.",
+        "Awaiting an engineer brief or live execution order.",
+        "The queue stays explicit instead of rendering as empty space.",
       ];
     case "executionLog":
       return [
@@ -471,12 +491,12 @@ function createLivePlaceholderLines(
       ];
     case "activeCommand":
       return [
-        "Waiting for engineer execution state.",
+        "Waiting for engineer activity.",
         "Active command details will appear here when the run starts.",
       ];
     case "testsChecks":
       return [
-        "Tests / Checks placeholder.",
+        "No required check output recorded yet.",
         "Required check status and output will appear here.",
       ];
   }

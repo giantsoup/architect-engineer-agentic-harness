@@ -22,13 +22,13 @@ describe("tui layout", () => {
       height: 28,
       left: 0,
       top: 1,
-      width: 48,
+      width: 47,
     });
     expect(layout.roles.engineer.rect).toEqual({
       height: 28,
-      left: 48,
+      left: 49,
       top: 1,
-      width: 72,
+      width: 71,
     });
     expect(layout.footer).toEqual({
       height: 1,

@@ -56,6 +56,12 @@ export function getEngineerStopOutcome(
   summary: string,
 ): ArchitectEngineerFinalOutcome | undefined {
   switch (stopReason) {
+    case "cancelled":
+      return {
+        status: "stopped",
+        stopReason: "cancelled",
+        summary,
+      };
     case "timeout":
       return {
         status: "stopped",

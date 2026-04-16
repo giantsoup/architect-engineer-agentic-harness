@@ -47,6 +47,7 @@ describe("CLI run ui mode", () => {
     const liveConsole = {
       start: vi.fn(),
       stop: vi.fn().mockResolvedValue(undefined),
+      waitUntilStopped: vi.fn().mockResolvedValue(undefined),
     };
     const dossierPaths = {
       runDirRelativePath: ".agent-harness/runs/20260415T120000.000Z-abc123",
@@ -60,6 +61,7 @@ describe("CLI run ui mode", () => {
     expect(mockedModules.createLiveConsoleRenderer).toHaveBeenCalledOnce();
     expect(liveConsole.start).toHaveBeenCalledOnce();
     expect(liveConsole.stop).toHaveBeenCalledOnce();
+    expect(liveConsole.waitUntilStopped).not.toHaveBeenCalled();
   });
 
   it("keeps `plain` on the placeholder path and launches the TUI renderer for `tui`", async () => {
@@ -70,6 +72,7 @@ describe("CLI run ui mode", () => {
     const tuiRenderer = {
       start: vi.fn(),
       stop: vi.fn().mockResolvedValue(undefined),
+      waitUntilStopped: vi.fn().mockResolvedValue(undefined),
     };
     const dossierPaths = {
       runDirRelativePath: ".agent-harness/runs/20260415T120000.000Z-abc124",
@@ -80,6 +83,7 @@ describe("CLI run ui mode", () => {
       {
         start: vi.fn(),
         stop: vi.fn().mockResolvedValue(undefined),
+        waitUntilStopped: vi.fn().mockResolvedValue(undefined),
       },
       dossierPaths,
     );
@@ -105,13 +109,23 @@ describe("CLI run ui mode", () => {
     expect(mockedModules.createLiveConsoleRenderer).not.toHaveBeenCalled();
     expect(mockedModules.createTuiRenderer).toHaveBeenCalledOnce();
     expect(tuiRenderer.start).toHaveBeenCalledOnce();
-    expect(tuiRenderer.stop).toHaveBeenCalledOnce();
+    expect(tuiRenderer.stop).not.toHaveBeenCalled();
+    expect(tuiRenderer.waitUntilStopped).toHaveBeenCalledOnce();
+    expect(mockedModules.createTuiRenderer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onRequestRunStop: expect.any(Function),
+      }),
+    );
     expect(mockedModules.executeArchitectEngineerRun).toHaveBeenCalledTimes(2);
   });
 });
 
 function mockSuccessfulTaskRun(
-  liveConsole: { start: () => void; stop: () => Promise<void> },
+  liveConsole: {
+    start: () => void;
+    stop: () => Promise<void>;
+    waitUntilStopped: () => Promise<void>;
+  },
   dossierPaths: { runDirRelativePath: string; runId: string },
 ): void {
   mockedModules.loadHarnessConfig.mockResolvedValue(createLoadedConfigStub());

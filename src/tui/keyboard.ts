@@ -11,10 +11,14 @@ export interface TuiKeyboardKey {
 export type TuiKeyboardCommand =
   | { action: TuiAction; type: "dispatch" }
   | { type: "none" }
-  | { type: "quit" };
+  | { type: "quit" }
+  | { type: "stop-run" };
 
 export function resolveTuiKeyboardCommand(
-  _state: Pick<TuiState, "focusRole">,
+  state: Pick<
+    TuiState,
+    "demoMode" | "focusRole" | "runActive" | "runStopRequested"
+  >,
   key: TuiKeyboardKey,
 ): TuiKeyboardCommand {
   const full = key.full ?? key.sequence ?? key.name ?? "";
@@ -77,6 +81,11 @@ export function resolveTuiKeyboardCommand(
         action: { type: "view.reset" },
         type: "dispatch",
       };
+    case "s":
+      if (!state.demoMode && state.runActive && !state.runStopRequested) {
+        return { type: "stop-run" };
+      }
+      break;
     default:
       break;
   }

@@ -43,6 +43,7 @@ export interface ExecuteArchitectEngineerRunOptions {
   projectCommandRunner?: ProjectCommandRunnerLike;
   runId?: string;
   runProcess?: RunProcess;
+  signal?: AbortSignal;
   task: string;
   timeoutMs?: number;
 }
@@ -86,16 +87,37 @@ export async function executeArchitectEngineerRun(
     ...(options.runProcess === undefined
       ? {}
       : { runProcess: options.runProcess }),
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
   };
   const ownsProjectCommandRunner = options.projectCommandRunner === undefined;
   let projectCommandRunner = options.projectCommandRunner;
+  const handleAbort = () => {
+    projectCommandRunner?.close("run cancelled by user request");
+  };
 
   if (projectCommandRunner !== undefined) {
     nodeContext.projectCommandRunner = projectCommandRunner;
   }
 
   try {
+    options.signal?.addEventListener("abort", handleAbort, { once: true });
     while (state.nextNode !== "finalize") {
+      if (options.signal?.aborted === true) {
+        const cancelledOutcome = createCancelledOutcome();
+
+        state = withFinalOutcome(state, cancelledOutcome);
+        emitRunStatus(
+          options.eventBus,
+          state.metadata.runId,
+          state.nextNode,
+          cancelledOutcome.status,
+          cancelledOutcome.summary,
+          cancelledOutcome.stopReason,
+          now().toISOString(),
+        );
+        break;
+      }
+
       const stopConditionOutcome = getStopConditionOutcome(state, now());
 
       if (stopConditionOutcome !== undefined && state.nextNode !== "prepare") {
@@ -149,6 +171,10 @@ export async function executeArchitectEngineerRun(
             : { runProcess: options.runProcess }),
         });
         nodeContext.projectCommandRunner = projectCommandRunner;
+
+        if (options.signal?.aborted) {
+          projectCommandRunner.close("run cancelled by user request");
+        }
       }
 
       switch (nextNode) {
@@ -173,6 +199,10 @@ export async function executeArchitectEngineerRun(
         "completed",
         now().toISOString(),
       );
+
+      if (options.signal?.aborted) {
+        state = withFinalOutcome(state, createCancelledOutcome());
+      }
 
       if (
         state.finalOutcome === undefined &&
@@ -241,10 +271,19 @@ export async function executeArchitectEngineerRun(
       stopReason: state.finalOutcome?.stopReason ?? "timeout",
     };
   } finally {
+    options.signal?.removeEventListener("abort", handleAbort);
     if (ownsProjectCommandRunner && projectCommandRunner !== undefined) {
       projectCommandRunner.close();
     }
   }
+}
+
+function createCancelledOutcome() {
+  return {
+    status: "stopped" as const,
+    stopReason: "cancelled" as const,
+    summary: "Run cancelled by user request.",
+  };
 }
 
 function describeNodeStatus(

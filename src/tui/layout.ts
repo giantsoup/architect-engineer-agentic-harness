@@ -32,6 +32,7 @@ const FOOTER_HEIGHT = 1;
 const MIN_WIDE_HEIGHT = 18;
 const MIN_WIDE_WIDTH = 100;
 const ARCHITECT_RATIO = 0.4;
+const WIDE_PANEL_GAP = 2;
 
 export function computeTuiLayout(options: ComputeTuiLayoutOptions): TuiLayout {
   const width = Math.max(1, options.width);
@@ -75,8 +76,12 @@ function createWideRoleLayout(
   top: number,
   height: number,
 ): Record<TuiRoleId, TuiRoleLayout> {
-  const architectWidth = Math.max(1, Math.floor(width * ARCHITECT_RATIO));
-  const engineerWidth = Math.max(1, width - architectWidth);
+  const availableWidth = Math.max(2, width - WIDE_PANEL_GAP);
+  const architectWidth = Math.max(
+    1,
+    Math.floor(availableWidth * ARCHITECT_RATIO),
+  );
+  const engineerWidth = Math.max(1, availableWidth - architectWidth);
 
   return {
     architect: {
@@ -92,7 +97,7 @@ function createWideRoleLayout(
     engineer: {
       rect: {
         height,
-        left: architectWidth,
+        left: architectWidth + WIDE_PANEL_GAP,
         top,
         width: engineerWidth,
       },

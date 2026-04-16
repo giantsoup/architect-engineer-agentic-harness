@@ -16,7 +16,10 @@ import {
   createArchitectStructuredOutputFormat,
   type ArchitectControlOutputOptions,
 } from "../models/architect-output.js";
-import { ModelClientError } from "../models/openai-compatible-client.js";
+import {
+  ModelCancelledError,
+  ModelClientError,
+} from "../models/openai-compatible-client.js";
 import { createRoleModelClient } from "../models/provider-factory.js";
 import { createBuiltInToolExecutor } from "../tools/built-in-tools.js";
 import type { BuiltInToolExecutor } from "../tools/built-in-tools.js";
@@ -33,6 +36,7 @@ import type {
   ToolResult,
 } from "../tools/types.js";
 import { BuiltInToolError, McpToolError } from "../tools/errors.js";
+import { OperationCancelledError } from "../cancellation.js";
 import {
   appendRunEvent,
   appendStructuredMessage,
@@ -97,6 +101,7 @@ export interface ArchitectEngineerNodeContext {
   now: () => Date;
   projectCommandRunner?: ProjectCommandRunnerLike;
   runProcess?: RunProcess;
+  signal?: AbortSignal;
 }
 
 interface ArchitectWorkspaceSnapshot {
@@ -216,6 +221,10 @@ export async function architectPlanningNode(
   });
 
   if (architectLoop.ok === false) {
+    if (architectLoop.cancelled === true) {
+      return withFinalOutcome(state, createCancelledFinalOutcome());
+    }
+
     return withFinalOutcome(state, {
       status: "failed",
       stopReason: "architect-model-error",
@@ -299,8 +308,17 @@ export async function engineerExecutionNode(
       ...(context.runProcess === undefined
         ? {}
         : { runProcess: context.runProcess }),
+      ...(context.signal === undefined ? {} : { signal: context.signal }),
     });
   } catch (error) {
+    if (
+      error instanceof ModelCancelledError ||
+      error instanceof OperationCancelledError ||
+      context.signal?.aborted === true
+    ) {
+      return withFinalOutcome(state, createCancelledFinalOutcome());
+    }
+
     return withFinalOutcome(state, {
       status: "failed",
       stopReason: "engineer-model-error",
@@ -409,6 +427,10 @@ export async function architectReviewNode(
   });
 
   if (architectLoop.ok === false) {
+    if (architectLoop.cancelled === true) {
+      return withFinalOutcome(state, createCancelledFinalOutcome());
+    }
+
     return withFinalOutcome(state, {
       status: "failed",
       stopReason: "architect-model-error",
@@ -628,10 +650,17 @@ async function runArchitectLoop<TKind extends "plan" | "review">(options: {
   ) => string | undefined;
 }): Promise<
   | {
+      cancelled: true;
+      message: string;
+      ok: false;
+    }
+  | {
+      cancelled?: false;
       ok: false;
       message: string;
     }
   | {
+      cancelled?: false;
       ok: true;
       output: TKind extends "plan"
         ? ArchitectPlanOutput
@@ -657,8 +686,14 @@ async function runArchitectLoop<TKind extends "plan" | "review">(options: {
       ? {}
       : { runProcess: options.context.runProcess }),
   });
+  const handleAbort = () => {
+    void toolRouter.close("run cancelled by user request");
+  };
 
   try {
+    options.context.signal?.addEventListener("abort", handleAbort, {
+      once: true,
+    });
     const toolCatalog = await toolRouter.prepare();
     const structuredOutput = await createArchitectStructuredOutputFormat(
       options.kind,
@@ -714,9 +749,24 @@ async function runArchitectLoop<TKind extends "plan" | "review">(options: {
             reviewCycles: options.state.iterations.reviewCycles,
             runId: options.state.metadata.runId,
           },
+          ...(options.context.signal === undefined
+            ? {}
+            : { signal: options.context.signal }),
           structuredOutput,
         });
       } catch (error) {
+        if (
+          error instanceof ModelCancelledError ||
+          error instanceof OperationCancelledError ||
+          options.context.signal?.aborted === true
+        ) {
+          return {
+            cancelled: true,
+            message: "Run cancelled by user request.",
+            ok: false,
+          };
+        }
+
         const repairGuidance = createArchitectRepairGuidance(
           options.kind,
           error,
@@ -838,8 +888,17 @@ async function runArchitectLoop<TKind extends "plan" | "review">(options: {
       ok: false,
     };
   } finally {
+    options.context.signal?.removeEventListener("abort", handleAbort);
     await toolRouter.close();
   }
+}
+
+function createCancelledFinalOutcome(): ArchitectEngineerFinalOutcome {
+  return {
+    status: "stopped",
+    stopReason: "cancelled",
+    summary: "Run cancelled by user request.",
+  };
 }
 
 function emitArtifactUpdate(

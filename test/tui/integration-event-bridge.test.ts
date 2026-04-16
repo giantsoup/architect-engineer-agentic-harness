@@ -39,6 +39,12 @@ describe("tui live event bridge", () => {
     liveData.start();
     await settle();
 
+    expect(
+      store
+        .getState()
+        .sections.executionLog.lines.some((line) => line.includes("file.read")),
+    ).toBe(false);
+
     eventBus.emit({
       accessMode: "mutate",
       command: "npm test",
@@ -174,6 +180,21 @@ describe("tui live event bridge", () => {
         ),
     ).toBe(true);
 
+    store.dispatch({
+      type: "run.stop.requested",
+    });
+    eventBus.emit({
+      runId: createPaths().runId,
+      status: "stopped",
+      summary: "Run cancelled by user request.",
+      timestamp: "2026-04-16T01:00:01.400Z",
+      type: "run:status",
+    });
+    await settle();
+
+    expect(store.getState().runActive).toBe(false);
+    expect(store.getState().runStopRequested).toBe(false);
+
     await liveData.stop();
   });
 });
@@ -237,6 +258,13 @@ function createArtifactSnapshot(): TuiArtifactSnapshot {
         requiredCheckCommand: "npm test",
         timestamp: "2026-04-16T01:00:00.500Z",
         type: "engineer-run-started",
+      },
+      {
+        role: "architect",
+        status: "completed",
+        timestamp: "2026-04-16T01:00:00.600Z",
+        toolName: "file.read",
+        type: "tool-call",
       },
     ],
   };

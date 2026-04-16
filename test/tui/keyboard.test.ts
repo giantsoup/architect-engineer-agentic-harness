@@ -62,6 +62,49 @@ describe("tui keyboard model", () => {
     });
   });
 
+  it("maps s to a run-stop command only for active live runs", () => {
+    expect(
+      resolveTuiKeyboardCommand(
+        createInitialTuiState({
+          demoMode: false,
+        }),
+        { name: "s" },
+      ),
+    ).toEqual({
+      type: "stop-run",
+    });
+    expect(
+      resolveTuiKeyboardCommand(
+        createInitialTuiState({
+          demoMode: true,
+        }),
+        { name: "s" },
+      ),
+    ).toEqual({
+      type: "none",
+    });
+
+    const stopRequestedState = createInitialTuiState({
+      demoMode: false,
+    });
+    stopRequestedState.runStopRequested = true;
+
+    expect(
+      resolveTuiKeyboardCommand(stopRequestedState, { name: "s" }),
+    ).toEqual({
+      type: "none",
+    });
+
+    const finishedRunState = createInitialTuiState({
+      demoMode: false,
+    });
+    finishedRunState.runActive = false;
+
+    expect(resolveTuiKeyboardCommand(finishedRunState, { name: "s" })).toEqual({
+      type: "none",
+    });
+  });
+
   it("treats q and ctrl-c as TUI-local quit commands", () => {
     expect(resolveTuiKeyboardCommand(state, { name: "q" })).toEqual({
       type: "quit",

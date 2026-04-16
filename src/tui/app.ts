@@ -37,6 +37,7 @@ import { renderStatusBarWidget } from "./widgets/status-bar.js";
 export interface TuiController {
   start(): void;
   stop(): Promise<void>;
+  waitUntilStopped(): Promise<void>;
 }
 
 export interface TuiDataSource {
@@ -48,6 +49,7 @@ export interface TuiDataSource {
 export interface CreateTuiRendererOptions {
   eventBus?: HarnessEventBus | undefined;
   input?: NodeJS.ReadStream | undefined;
+  onRequestRunStop?: (() => void | Promise<void>) | undefined;
   output?: NodeJS.WriteStream | undefined;
   paths: RunDossierPaths;
   task?: string | undefined;
@@ -57,6 +59,7 @@ export interface CreateTuiAppOptions {
   dataSource?: TuiDataSource | undefined;
   demoFeed?: TuiDemoFeed | undefined;
   errorOutput?: Pick<NodeJS.WriteStream, "write"> | undefined;
+  onRequestRunStop?: (() => void | Promise<void>) | undefined;
   runLabel: string;
   scheduler?: RenderScheduler | undefined;
   screen: BlessedScreen;
@@ -79,6 +82,7 @@ export function createTuiRenderer(
         );
       },
       async stop() {},
+      async waitUntilStopped() {},
     };
   }
 
@@ -124,6 +128,9 @@ export function createTuiRenderer(
   return createTuiApp({
     ...(dataSource === undefined ? {} : { dataSource }),
     errorOutput: process.stderr,
+    ...(options.onRequestRunStop === undefined
+      ? {}
+      : { onRequestRunStop: options.onRequestRunStop }),
     runLabel: options.paths.runId,
     screen,
     store,
@@ -195,6 +202,10 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiController {
   let started = false;
   let stopped = false;
   let fatalErrorReported = false;
+  let resolveStopped: (() => void) | undefined;
+  const stoppedPromise = new Promise<void>((resolve) => {
+    resolveStopped = resolve;
+  });
   const unsubscribe = store.subscribe(() => {
     scheduler.markDirty();
   });
@@ -212,6 +223,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiController {
       "pageup",
       "pagedown",
       "f",
+      "s",
       "r",
       "?",
       "S-/",
@@ -227,6 +239,28 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiController {
 
           if (command.action.type === "view.reset") {
             void dataSource.forceRefresh?.();
+          }
+
+          return;
+        }
+
+        if (command.type === "stop-run") {
+          if (
+            options.onRequestRunStop !== undefined &&
+            !store.getState().runStopRequested
+          ) {
+            store.dispatch({ type: "run.stop.requested" });
+            store.dispatch({
+              entry: {
+                level: "warn",
+                source: "runtime",
+                summary:
+                  "Graceful stop requested from the TUI. Waiting for the current operation to unwind.",
+                timestamp: new Date().toISOString(),
+              },
+              type: "log.append",
+            });
+            void options.onRequestRunStop();
           }
 
           return;
@@ -316,6 +350,8 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiController {
         formatTuiErrorMessage("terminal restore failed", error),
       );
     }
+
+    resolveStopped?.();
   };
 
   const reportFatalError = (context: string, error: unknown) => {
@@ -345,6 +381,9 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiController {
       }
     },
     stop,
+    waitUntilStopped() {
+      return stoppedPromise;
+    },
   };
 }
 
@@ -359,6 +398,7 @@ function createTuiUnavailableController(
       );
     },
     async stop() {},
+    async waitUntilStopped() {},
   };
 }
 

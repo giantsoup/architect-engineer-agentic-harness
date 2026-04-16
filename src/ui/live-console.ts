@@ -15,6 +15,7 @@ export interface CreateLiveConsoleOptions {
 export interface LiveConsoleRenderer {
   start(): void;
   stop(): Promise<void>;
+  waitUntilStopped(): Promise<void>;
 }
 
 export function createLiveConsoleRenderer(
@@ -108,6 +109,7 @@ export function createLiveConsoleRenderer(
 
       await refresh();
     },
+    async waitUntilStopped() {},
   };
 }
 

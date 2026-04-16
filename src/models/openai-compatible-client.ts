@@ -9,6 +9,7 @@ import type {
 } from "./types.js";
 import type { JsonValue } from "../types/run.js";
 import type { HarnessEventBus } from "../runtime/harness-events.js";
+import { OperationCancelledError } from "../cancellation.js";
 import {
   resolveModelFamilyAdapter,
   type ModelFamilyAdapter,
@@ -17,6 +18,7 @@ import {
 import { normalizeEngineerToolRequestCandidate } from "./engineer-output.js";
 
 export type ModelClientErrorClassification =
+  | "cancelled"
   | "config"
   | "http"
   | "invalid-response"
@@ -74,6 +76,15 @@ export class ModelTimeoutError extends ModelClientError {
     super("timeout", message, {
       ...options,
       retryable: true,
+    });
+  }
+}
+
+export class ModelCancelledError extends ModelClientError {
+  constructor(message: string, options: { cause?: unknown } = {}) {
+    super("cancelled", message, {
+      ...options,
+      retryable: false,
     });
   }
 }
@@ -256,7 +267,7 @@ export class OpenAiCompatibleChatClient {
       });
 
       try {
-        const response = await this.executeRequest(payload);
+        const response = await this.executeRequest(payload, request.signal);
 
         if (!response.ok) {
           const bodyText = await response.text();
@@ -480,22 +491,34 @@ export class OpenAiCompatibleChatClient {
 
   private async executeRequest(
     payload: Record<string, unknown>,
+    signal: AbortSignal | undefined,
   ): Promise<Response> {
-    const abortController = new AbortController();
+    const timeoutController = new AbortController();
     const timeoutId = setTimeout(
-      () => abortController.abort(),
+      () => timeoutController.abort(),
       this.config.timeoutMs,
     );
+    const requestSignal =
+      signal === undefined
+        ? timeoutController.signal
+        : AbortSignal.any([signal, timeoutController.signal]);
 
     try {
       return await this.fetchImpl(this.config.chatCompletionsUrl, {
         body: JSON.stringify(payload),
         headers: this.config.headers,
         method: "POST",
-        signal: abortController.signal,
+        signal: requestSignal,
       });
     } catch (error) {
-      if (abortController.signal.aborted) {
+      if (signal?.aborted === true) {
+        throw new ModelCancelledError(
+          `Cancelled request to ${this.describeTarget()}.`,
+          { cause: error },
+        );
+      }
+
+      if (timeoutController.signal.aborted) {
         throw new ModelTimeoutError(
           `Timed out after ${this.config.timeoutMs}ms calling ${this.describeTarget()}.`,
           { cause: error },
@@ -926,6 +949,13 @@ function toModelClientError(
 ): ModelClientError {
   if (error instanceof ModelClientError) {
     return error;
+  }
+
+  if (error instanceof OperationCancelledError) {
+    return new ModelCancelledError(
+      `Cancelled request to ${config.role} model \`${config.model}\`.`,
+      { cause: error },
+    );
   }
 
   return new ModelNetworkError(

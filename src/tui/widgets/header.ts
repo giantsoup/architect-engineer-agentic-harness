@@ -14,11 +14,11 @@ export function renderHeaderWidget(options: {
   state: TuiState;
   theme: TuiTheme;
 }): void {
-  const mode = options.state.demoMode ? "DEMO" : "LIVE";
-  const narrowRole =
+  const runMode = options.state.demoMode ? "demo" : "live";
+  const roleContext =
     options.layout.mode === "narrow"
-      ? ` | showing:${TUI_ROLE_LABELS[options.state.focusRole]}`
-      : "";
+      ? `showing ${TUI_ROLE_LABELS[options.state.focusRole]}`
+      : "Architect + Engineer";
 
   options.box.top = options.rect.top;
   options.box.left = options.rect.left;
@@ -31,7 +31,7 @@ export function renderHeaderWidget(options: {
   }
   options.box.setContent(
     truncateLine(
-      `${options.state.runLabel} ${mode} | ${options.layout.mode} dashboard${narrowRole} | theme:${formatThemeModeLabel(options.theme)}`,
+      `Run ${options.state.runLabel} | ${runMode} | ${roleContext} | ${formatThemeModeLabel(options.theme)}`,
       options.rect.width,
     ),
   );

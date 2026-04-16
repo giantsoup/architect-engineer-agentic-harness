@@ -48,6 +48,7 @@ export interface ModelChatRequest<TStructured = never> {
   maxOutputTokens?: number | undefined;
   messages: readonly ModelChatMessage[];
   metadata?: { [key: string]: JsonValue | undefined } | undefined;
+  signal?: AbortSignal | undefined;
   structuredOutput?: ModelStructuredOutputSpec<TStructured> | undefined;
   temperature?: number | undefined;
   toolFallbackInstruction?: string | undefined;

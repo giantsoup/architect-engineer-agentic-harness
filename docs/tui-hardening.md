@@ -10,14 +10,11 @@
 
 ## Keybindings
 
-- `Tab` / `Shift-Tab`: cycle focus
-- `1-6`: jump to a pane directly
-- `Left` / `Right`: cycle focus
-- `Up` / `Down`: scroll the focused pane or move the queue selection
+- `Tab` / `Shift-Tab`: switch the focused role in wide mode or swap roles in narrow mode
+- `Up` / `Down`: scroll the focused role panel
 - `PgUp` / `PgDn`: faster scroll
-- `x`: maximize or restore the focused pane
-- `f`: toggle log follow mode
-- `r`: reset maximize, help, and scroll state
+- `f`: toggle Engineer execution-log follow mode
+- `r`: reset help and scroll state
 - `?`: open or close help
 - `q` / `Ctrl-C`: close the TUI without cancelling the run
 
@@ -27,7 +24,7 @@
 - `16-color`: safe ANSI palette for constrained terminals
 - `mono`: disables color styling and relies on text labels like `[ACTIVE]`, `[BLOCKED]`, and explicit `theme:` status labels
 - `ascii`: disables Unicode-specific behavior when the terminal environment looks Windows-ish or non-UTF-8
-- `compact layout`: narrow or short terminals switch to a single focused-pane view instead of rendering six unreadable panes
+- `compact layout`: narrow or short terminals switch to a single-role dashboard instead of squeezing both role panels into unreadable columns
 
 ## Fallback Behavior
 
@@ -43,8 +40,8 @@
 
 ## Manual Smoke Checks
 
-- 2026-04-15, macOS Terminal PTY in this repository environment: pass
-  Scope: launched the neo-blessed renderer in an interactive terminal, verified help (`?`), maximize (`x`), follow toggle (`f`), reset (`r`), quit (`q`), and clean terminal restoration on exit.
+- 2026-04-16, macOS Terminal PTY in this repository environment: refresh before release
+  Scope: verify the wide 120x30 dashboard, narrow `Tab` role switching, restrained header/footer chrome, help modal key map, follow toggle (`f`), reset (`r`), quit (`q`), and clean terminal restoration on exit.
 - Linux terminal emulator: deferred
   Reason: no Linux terminal environment is available from this workspace.
 - Windows Terminal / PowerShell / `cmd.exe`: deferred
@@ -55,6 +52,6 @@
 - `test/cli/run-ui-mode.test.ts`: default `live`, explicit `plain`, and explicit `tui` CLI selection
 - `test/ui/live-console.test.ts`: concise non-TTY `live` output for logs and CI
 - `test/ui/tui-fallback-summary.test.ts`: `--ui tui` fallback when no interactive TTY is available
-- `test/tui/accessibility.test.ts`: color, ASCII, and compact-layout terminal fallbacks
+- `test/tui/accessibility.test.ts`: color, ASCII, compact-layout, placeholder, and chrome fallback behavior
 - `test/tui/terminal-restore.test.ts`: terminal recovery after startup, render, and teardown failures
-- `test/tui/backpressure.test.ts` and `test/tui/reconcile.test.ts`: live event burst handling and dossier rehydration
+- `test/tui/backpressure.test.ts`, `test/tui/reconcile.test.ts`, and `test/tui/integration-event-bridge.test.ts`: live event burst handling, architect handoff messaging, engineer-only execution history, and dossier rehydration

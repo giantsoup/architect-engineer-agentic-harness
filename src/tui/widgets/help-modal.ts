@@ -22,23 +22,26 @@ export function renderHelpModalWidget(options: {
   }
   options.box.setContent(
     [
-      "Dashboard MVP",
+      "Role Dashboard",
       "",
-      "Tab / Shift-Tab : switch Architect and Engineer focus",
-      "Up / Down : scroll the focused role section",
-      "PgUp / PgDn : scroll faster within the focused role section",
-      "f : toggle execution-log follow mode",
-      "r : reset help and scroll state",
+      "Tab / Shift-Tab : move focus in wide mode or swap roles in narrow mode",
+      "Up / Down : scroll the focused role panel",
+      "PgUp / PgDn : scroll faster within the focused role panel",
+      "f : toggle Engineer execution-log follow mode",
+      ...(!options.state.demoMode && options.state.runActive
+        ? ["s : gracefully stop the current run and keep the TUI open"]
+        : []),
+      "r : reset scroll state and close help",
       "? : toggle this help modal",
       "q / Ctrl-C : close the TUI shell without cancelling the run",
       "",
       "Layout",
       "",
       `Theme: ${formatThemeModeLabel(options.theme)}`,
-      "Wide terminals render two primary panels: Architect and Engineer.",
-      "Narrow terminals switch to a one-role-at-a-time dashboard with Tab to swap roles.",
-      "Execution log and task queue placeholders stay explicit until full section wiring lands.",
-      "On TUI failures the shell is torn down and the run continues with dossier writes intact.",
+      "Wide terminals keep Architect context beside Engineer execution.",
+      "Narrow terminals show one role at a time with explicit Tab switching.",
+      "Sections stay explicit when data is not available yet; they do not collapse to blank space.",
+      "If the TUI fails, the shell tears down cleanly and the run continues.",
     ].join("\n"),
   );
 

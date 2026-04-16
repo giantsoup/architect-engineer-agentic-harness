@@ -86,6 +86,9 @@ describe("tui reconcile", () => {
       updatedAt: "2026-04-16T02:00:03.000Z",
     });
     snapshot = createArtifactSnapshotTwo();
+    store.dispatch({
+      type: "run.stop.requested",
+    });
 
     await liveData.forceRefresh();
 
@@ -107,6 +110,8 @@ describe("tui reconcile", () => {
     expect(store.getState().statusText).toContain(
       "Required check failed (exit 1): npm test",
     );
+    expect(store.getState().runActive).toBe(false);
+    expect(store.getState().runStopRequested).toBe(false);
 
     await liveData.stop();
   });
@@ -159,6 +164,59 @@ describe("tui reconcile", () => {
           ),
         ),
     ).toBe(true);
+
+    await liveData.stop();
+  });
+
+  it("surfaces architect handoff state even when only inspection data shows the engineer is active", async () => {
+    const eventBus = createHarnessEventBus({
+      now: () => new Date("2026-04-16T02:45:00.000Z"),
+    });
+    const store = createTuiStore(
+      createInitialTuiState({
+        demoMode: false,
+        runLabel: "20260416T024500.000Z-handoff",
+        task: "Verify architect handoff messaging.",
+      }),
+    );
+    const artifactReader: TuiArtifactReader = {
+      read: vi.fn(async () => ({
+        ...createArtifactSnapshotOne(),
+        events: [
+          {
+            summary: "Shape the embedded architect sections.",
+            timestamp: "2026-04-16T02:45:00.400Z",
+            type: "architect-plan-created",
+          },
+        ],
+      })),
+    };
+    const liveData = createTuiLiveDataSource({
+      artifactReader,
+      eventBus,
+      inspectionReader: vi.fn(async () =>
+        createInspection({
+          currentObjective: "Handoff to the engineer for execution.",
+          latestDecision: "The shell is ready for execution.",
+          status: "running",
+          updatedAt: "2026-04-16T02:45:01.000Z",
+        }),
+      ),
+      paths: createPaths(),
+      pollIntervalMs: 10_000,
+      store,
+      task: "Verify architect handoff messaging.",
+    });
+
+    liveData.start();
+    await settle();
+
+    expect(store.getState().sections.currentGoal.lines).toContain(
+      "Architect state: Handed off to engineer.",
+    );
+    expect(store.getState().sections.reasoningHistory.lines).toContain(
+      "02:45:01 Handed off to engineer.",
+    );
 
     await liveData.stop();
   });

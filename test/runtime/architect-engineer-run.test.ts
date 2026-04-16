@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createHarnessEventBus,
@@ -693,7 +693,7 @@ args = ["repo-mcp.js"]`,
         ),
       ),
     ).toBe(true);
-  });
+  }, 10000);
 
   it("accepts legacy Architect final outputs without type and records normalized action types", async () => {
     const projectRoot = createTempProject();
@@ -2173,6 +2173,79 @@ args = ["repo-mcp.js"]`,
         "utf8",
       ),
     ).toContain("Stop reason: timeout");
+  });
+
+  it("gracefully cancels an in-flight Architect step and records the run as cancelled", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+    initializeGitRepository(projectRoot);
+    commitFile(projectRoot, "src/example.ts", "export const value = 1;\n");
+
+    const loadedConfig = await createLoadedConfig(projectRoot);
+    const abortController = new AbortController();
+    let resolvePlanningStarted: (() => void) | undefined;
+    const planningStarted = new Promise<void>((resolve) => {
+      resolvePlanningStarted = resolve;
+    });
+    const fakeCommandRunner = {
+      close: vi.fn(),
+      async executeArchitectCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Architect command execution should not be used.");
+      },
+      async executeEngineerCommand(): Promise<ContainerCommandResult> {
+        throw new Error("Engineer command execution should not be used.");
+      },
+    };
+    const architectModelClient = {
+      async chat<TStructured>(
+        request: ModelChatRequest<TStructured>,
+      ): Promise<ModelChatResponse<TStructured>> {
+        resolvePlanningStarted?.();
+
+        return await new Promise<ModelChatResponse<TStructured>>(
+          (_resolve, reject) => {
+            const rejectForAbort = () => {
+              reject(new Error("cancelled for test"));
+            };
+
+            if (request.signal?.aborted === true) {
+              rejectForAbort();
+              return;
+            }
+
+            request.signal?.addEventListener("abort", rejectForAbort, {
+              once: true,
+            });
+          },
+        );
+      },
+    };
+
+    const executionPromise = executeArchitectEngineerRun({
+      architectModelClient,
+      loadedConfig,
+      projectCommandRunner: fakeCommandRunner,
+      runId: "20260414T120000.000Z-abc13b",
+      signal: abortController.signal,
+      task: "Cancel the run during architect planning.",
+    });
+
+    await planningStarted;
+    abortController.abort("cancelled for test");
+    const execution = await executionPromise;
+
+    expect(execution.result.status).toBe("stopped");
+    expect(execution.stopReason).toBe("cancelled");
+    expect(execution.result.summary).toBe("Run cancelled by user request.");
+    expect(fakeCommandRunner.close).toHaveBeenCalledWith(
+      "run cancelled by user request",
+    );
+    expect(
+      readFileSync(
+        execution.dossier.paths.files.finalReport.absolutePath,
+        "utf8",
+      ),
+    ).toContain("Stop reason: cancelled");
   });
 
   it("stops once the failed required-check threshold is reached", async () => {

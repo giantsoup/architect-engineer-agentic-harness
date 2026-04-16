@@ -25,6 +25,7 @@ export type ArchitectEngineerStopReason =
   | "architect-approved"
   | "architect-failed"
   | "architect-model-error"
+  | "cancelled"
   | "dirty-working-tree"
   | "git-automation-error"
   | "max-consecutive-failed-checks"

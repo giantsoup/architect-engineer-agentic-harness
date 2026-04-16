@@ -164,8 +164,8 @@ function formatQueueLines(
 ): readonly string[] {
   if (queueItems.length === 0) {
     return [
-      "No queued tasks are available yet.",
-      "Phase 1 keeps this section explicit instead of leaving it blank.",
+      "Awaiting an engineer brief or live execution order.",
+      "This section stays explicit so the dashboard never degrades into blank space.",
     ];
   }
 

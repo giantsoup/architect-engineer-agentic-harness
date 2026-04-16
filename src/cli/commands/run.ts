@@ -78,28 +78,43 @@ export function createRunCommand(): Command {
           runsDir: loadedConfig.config.artifacts.runsDir,
         });
         const eventBus = createHarnessEventBus();
+        const runAbortController = new AbortController();
         const liveConsole = createRunUiController({
           eventBus,
           mode: options.ui,
+          onRequestRunStop() {
+            runAbortController.abort("run stop requested from the TUI");
+          },
           paths: dossierPaths,
           task: runMode.task,
         });
 
         liveConsole.start();
         let execution: Awaited<ReturnType<typeof executeArchitectEngineerRun>>;
+        let executionError: unknown;
 
         try {
           execution = await executeArchitectEngineerRun({
             eventBus,
             loadedConfig,
             runId,
+            signal: runAbortController.signal,
             task: runMode.task,
             ...(options.timeoutMs === undefined
               ? {}
               : { timeoutMs: options.timeoutMs }),
           });
+        } catch (error) {
+          executionError = error;
+          throw error;
         } finally {
-          await liveConsole.stop();
+          if (options.ui !== "tui" || executionError !== undefined) {
+            await liveConsole.stop();
+          }
+        }
+
+        if (options.ui === "tui") {
+          await liveConsole.waitUntilStopped();
         }
 
         const unavailableMcpServers =
@@ -228,6 +243,7 @@ function parseRole(value: string): "architect" | "engineer" {
 function createRunUiController(options: {
   eventBus?: Parameters<typeof createTuiRenderer>[0]["eventBus"];
   mode: RunCommandOptions["ui"];
+  onRequestRunStop?: (() => void | Promise<void>) | undefined;
   paths: Parameters<typeof createTuiRenderer>[0]["paths"];
   task?: string | undefined;
 }) {
@@ -240,6 +256,9 @@ function createRunUiController(options: {
   if (options.mode === "tui") {
     return createTuiRenderer({
       ...(options.eventBus === undefined ? {} : { eventBus: options.eventBus }),
+      ...(options.onRequestRunStop === undefined
+        ? {}
+        : { onRequestRunStop: options.onRequestRunStop }),
       paths: options.paths,
       task: options.task,
     });
@@ -248,6 +267,7 @@ function createRunUiController(options: {
   return {
     start() {},
     async stop() {},
+    async waitUntilStopped() {},
   };
 }
 
