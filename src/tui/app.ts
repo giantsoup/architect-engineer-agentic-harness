@@ -1,7 +1,9 @@
 import type { RunDossierPaths } from "../artifacts/paths.js";
+import type { HarnessEventBus } from "../runtime/harness-events.js";
 import { createTuiDemoFeed, type TuiDemoFeed } from "./demo.js";
 import { resolveTuiKeyboardCommand } from "./keyboard.js";
 import { computeTuiLayout } from "./layout.js";
+import { createTuiLiveDataSource } from "./live-data.js";
 import {
   createBlessedBox,
   createBlessedScreen,
@@ -19,6 +21,11 @@ import {
   TUI_PANE_ORDER,
   type TuiStore,
 } from "./state.js";
+import {
+  createTuiTheme,
+  detectTuiTerminalCapabilities,
+  type TuiTheme,
+} from "./theme.js";
 import { renderHelpModalWidget } from "./widgets/help-modal.js";
 import { hidePaneWidget, renderPaneWidget } from "./widgets/pane.js";
 import { renderStatusBarWidget } from "./widgets/status-bar.js";
@@ -28,20 +35,30 @@ export interface TuiController {
   stop(): Promise<void>;
 }
 
+export interface TuiDataSource {
+  forceRefresh?(): Promise<void> | void;
+  start(): void;
+  stop(): Promise<void> | void;
+}
+
 export interface CreateTuiRendererOptions {
+  eventBus?: HarnessEventBus | undefined;
   input?: NodeJS.ReadStream | undefined;
   output?: NodeJS.WriteStream | undefined;
-  paths: Pick<RunDossierPaths, "runDirRelativePath" | "runId">;
+  paths: RunDossierPaths;
   task?: string | undefined;
 }
 
 export interface CreateTuiAppOptions {
+  dataSource?: TuiDataSource | undefined;
   demoFeed?: TuiDemoFeed | undefined;
+  errorOutput?: Pick<NodeJS.WriteStream, "write"> | undefined;
   runLabel: string;
   scheduler?: RenderScheduler | undefined;
   screen: BlessedScreen;
   store?: TuiStore | undefined;
   task?: string | undefined;
+  theme?: TuiTheme | undefined;
 }
 
 export function createTuiRenderer(
@@ -61,23 +78,58 @@ export function createTuiRenderer(
     };
   }
 
-  const screen = createBlessedScreen({
-    autoPadding: false,
-    fullUnicode: true,
-    input,
+  const capabilities = detectTuiTerminalCapabilities({
     output,
-    smartCSR: true,
-    title: `architect-engineer-agentic-harness ${options.paths.runId}`,
   });
+  const theme = createTuiTheme(capabilities);
+  let screen: BlessedScreen;
+
+  try {
+    screen = createBlessedScreen({
+      autoPadding: false,
+      fullUnicode: capabilities.unicode,
+      input,
+      output,
+      smartCSR: true,
+      title: `architect-engineer-agentic-harness ${options.paths.runId}`,
+    });
+  } catch (error) {
+    return createTuiUnavailableController(
+      options.paths.runId,
+      formatTuiErrorMessage("screen initialization failed", error),
+    );
+  }
+
+  const store = createTuiStore(
+    createInitialTuiState({
+      demoMode: options.eventBus === undefined,
+      runLabel: options.paths.runId,
+      task: options.task,
+    }),
+  );
+  const dataSource =
+    options.eventBus === undefined
+      ? undefined
+      : createTuiLiveDataSource({
+          eventBus: options.eventBus,
+          paths: options.paths,
+          store,
+          task: options.task,
+        });
 
   return createTuiApp({
+    ...(dataSource === undefined ? {} : { dataSource }),
+    errorOutput: process.stderr,
     runLabel: options.paths.runId,
     screen,
+    store,
     task: options.task,
+    theme,
   });
 }
 
 export function createTuiApp(options: CreateTuiAppOptions): TuiController {
+  const errorOutput = options.errorOutput ?? process.stderr;
   const store =
     options.store ??
     createTuiStore(
@@ -87,9 +139,19 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiController {
         task: options.task,
       }),
     );
+  const theme =
+    options.theme ??
+    createTuiTheme(
+      detectTuiTerminalCapabilities({
+        output: process.stdout,
+      }),
+    );
   const scheduler =
     options.scheduler ??
     createRenderScheduler({
+      onError(error) {
+        reportFatalError("render failed", error);
+      },
       render: () => {
         renderScreen();
       },
@@ -100,6 +162,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiController {
       store,
       task: options.task,
     });
+  const dataSource: TuiDataSource = options.dataSource ?? demoFeed;
   const paneBoxes = Object.fromEntries(
     TUI_PANE_ORDER.map((pane) => [
       pane,
@@ -124,6 +187,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiController {
   });
   let started = false;
   let stopped = false;
+  let fatalErrorReported = false;
   const unsubscribe = store.subscribe(() => {
     scheduler.markDirty();
   });
@@ -157,15 +221,24 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiController {
       "6",
     ],
     (_character: string, key: BlessedKey) => {
-      const command = resolveTuiKeyboardCommand(store.getState(), key);
+      try {
+        const command = resolveTuiKeyboardCommand(store.getState(), key);
 
-      if (command.type === "dispatch") {
-        store.dispatch(command.action);
-        return;
-      }
+        if (command.type === "dispatch") {
+          store.dispatch(command.action);
 
-      if (command.type === "quit") {
-        void stop();
+          if (command.action.type === "view.reset") {
+            void dataSource.forceRefresh?.();
+          }
+
+          return;
+        }
+
+        if (command.type === "quit") {
+          void stop();
+        }
+      } catch (error) {
+        reportFatalError("keyboard handling failed", error);
       }
     },
   );
@@ -188,6 +261,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiController {
           pane,
           rect: paneLayout.rect,
           state,
+          theme,
         });
       } else {
         hidePaneWidget(paneBox);
@@ -198,11 +272,13 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiController {
       box: statusBarBox,
       rect: layout.statusBar,
       state,
+      theme,
     });
     renderHelpModalWidget({
       box: helpModalBox,
       rect: layout.helpModal,
       state,
+      theme,
     });
     options.screen.render();
   };
@@ -213,10 +289,37 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiController {
     }
 
     stopped = true;
-    demoFeed.stop();
+
+    try {
+      await dataSource.stop();
+    } catch (error) {
+      writeTuiDiagnostic(
+        errorOutput,
+        formatTuiErrorMessage("data source teardown failed", error),
+      );
+    }
+
     unsubscribe();
     scheduler.destroy();
-    options.screen.destroy();
+
+    try {
+      options.screen.destroy();
+    } catch (error) {
+      writeTuiDiagnostic(
+        errorOutput,
+        formatTuiErrorMessage("terminal restore failed", error),
+      );
+    }
+  };
+
+  const reportFatalError = (context: string, error: unknown) => {
+    if (fatalErrorReported) {
+      return;
+    }
+
+    fatalErrorReported = true;
+    writeTuiDiagnostic(errorOutput, formatTuiErrorMessage(context, error));
+    void stop();
   };
 
   return {
@@ -226,10 +329,41 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiController {
       }
 
       started = true;
-      demoFeed.start();
-      scheduler.markDirty();
-      scheduler.flush();
+
+      try {
+        dataSource.start();
+        scheduler.markDirty();
+        scheduler.flush();
+      } catch (error) {
+        reportFatalError("startup failed", error);
+      }
     },
     stop,
   };
+}
+
+function createTuiUnavailableController(
+  runId: string,
+  reason: string,
+): TuiController {
+  return {
+    start() {
+      process.stderr.write(
+        `TUI requested for ${runId}, but the terminal UI could not start. ${reason}\n`,
+      );
+    },
+    async stop() {},
+  };
+}
+
+function formatTuiErrorMessage(context: string, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return `TUI disabled after ${context}. Terminal state was restored. Cause: ${message}`;
+}
+
+function writeTuiDiagnostic(
+  output: Pick<NodeJS.WriteStream, "write">,
+  message: string,
+): void {
+  output.write(`${message}\n`);
 }

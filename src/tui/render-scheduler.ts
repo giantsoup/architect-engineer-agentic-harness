@@ -1,5 +1,6 @@
 export interface CreateRenderSchedulerOptions {
   delayMs?: number | undefined;
+  onError?: ((error: unknown) => void) | undefined;
   render: () => void;
 }
 
@@ -43,7 +44,11 @@ export function createRenderScheduler(
     }
 
     dirty = false;
-    options.render();
+    try {
+      options.render();
+    } catch (error) {
+      options.onError?.(error);
+    }
 
     if (dirty) {
       schedule();

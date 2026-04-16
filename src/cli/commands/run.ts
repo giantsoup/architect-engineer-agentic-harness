@@ -70,6 +70,7 @@ export function createRunCommand(): Command {
         });
         const eventBus = createHarnessEventBus();
         const liveConsole = createRunUiController({
+          eventBus,
           mode: options.ui,
           paths: dossierPaths,
           task: runMode.task,
@@ -216,8 +217,9 @@ function parseRole(value: string): "architect" | "engineer" {
 }
 
 function createRunUiController(options: {
+  eventBus?: Parameters<typeof createTuiRenderer>[0]["eventBus"];
   mode: RunCommandOptions["ui"];
-  paths: Parameters<typeof createLiveConsoleRenderer>[0]["paths"];
+  paths: Parameters<typeof createTuiRenderer>[0]["paths"];
   task?: string | undefined;
 }) {
   if (options.mode === "live") {
@@ -228,6 +230,7 @@ function createRunUiController(options: {
 
   if (options.mode === "tui") {
     return createTuiRenderer({
+      ...(options.eventBus === undefined ? {} : { eventBus: options.eventBus }),
       paths: options.paths,
       task: options.task,
     });

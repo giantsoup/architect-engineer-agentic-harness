@@ -15,14 +15,14 @@ export interface TuiPaneLayout {
 
 export interface TuiLayout {
   helpModal: TuiRect;
-  mode: "maximized" | "stacked" | "wide";
+  mode: "compact" | "maximized" | "stacked" | "wide";
   panes: Record<TuiPaneId, TuiPaneLayout>;
   statusBar: TuiRect;
 }
 
 export interface ComputeTuiLayoutOptions {
   height: number;
-  state: Pick<TuiState, "maximizedPane">;
+  state: Pick<TuiState, "focusPane" | "maximizedPane">;
   width: number;
 }
 
@@ -33,8 +33,8 @@ const WIDE_LAYOUT_ORDER: readonly TuiPaneId[][] = [
 ];
 
 export function computeTuiLayout(options: ComputeTuiLayoutOptions): TuiLayout {
-  const width = Math.max(40, options.width);
-  const height = Math.max(8, options.height);
+  const width = Math.max(1, options.width);
+  const height = Math.max(2, options.height);
   const statusBar: TuiRect = {
     height: 1,
     left: 0,
@@ -51,6 +51,19 @@ export function computeTuiLayout(options: ComputeTuiLayoutOptions): TuiLayout {
         width,
         paneAreaHeight,
         options.state.maximizedPane,
+      ),
+      statusBar,
+    };
+  }
+
+  if (width < 80 || height < 18) {
+    return {
+      helpModal: createHelpModalRect(width, height),
+      mode: "compact",
+      panes: createMaximizedPaneLayout(
+        width,
+        paneAreaHeight,
+        options.state.focusPane,
       ),
       statusBar,
     };
@@ -192,12 +205,12 @@ function createHiddenPaneLayout(
 
 function createHelpModalRect(width: number, height: number): TuiRect {
   const modalWidth = Math.min(
-    width - 4,
-    Math.max(48, Math.floor(width * 0.72)),
+    Math.max(1, width - 4),
+    Math.max(16, Math.floor(width * 0.72)),
   );
   const modalHeight = Math.min(
-    height - 2,
-    Math.max(10, Math.floor(height * 0.6)),
+    Math.max(1, height - 2),
+    Math.max(6, Math.floor(height * 0.6)),
   );
 
   return {

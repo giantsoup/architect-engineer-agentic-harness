@@ -66,4 +66,21 @@ describe("tui layout", () => {
     });
     expect(layout.panes.architect.visible).toBe(false);
   });
+
+  it("uses the actual terminal size in compact mode instead of inflating narrow terminals", () => {
+    const state = createInitialTuiState();
+    state.focusPane = "engineer";
+
+    const layout = computeTuiLayout({
+      height: 7,
+      state,
+      width: 24,
+    });
+
+    expect(layout.mode).toBe("compact");
+    expect(layout.panes.engineer.rect.width).toBe(24);
+    expect(layout.statusBar.width).toBe(24);
+    expect(layout.helpModal.width).toBeLessThanOrEqual(24);
+    expect(layout.helpModal.height).toBeLessThanOrEqual(7);
+  });
 });

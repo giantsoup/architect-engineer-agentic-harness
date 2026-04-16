@@ -67,6 +67,15 @@ export type TuiAction =
       type: "log.append";
     }
   | {
+      entries: readonly Omit<TuiLogEntry, "id">[];
+      type: "log.appendMany";
+    }
+  | {
+      dropped?: number | undefined;
+      entries: readonly Omit<TuiLogEntry, "id">[];
+      type: "log.replace";
+    }
+  | {
       delta: number;
       pane?: TuiPaneId | undefined;
       type: "pane.scroll";
@@ -110,9 +119,10 @@ export function createInitialTuiState(
   const task =
     options.task ?? "Wire the TUI shell and keep runtime behavior stable.";
   const timestamp = now();
+  const demoMode = options.demoMode ?? true;
 
   return {
-    demoMode: options.demoMode ?? true,
+    demoMode,
     focusPane: "architect",
     followMode: true,
     helpOpen: false,
@@ -125,33 +135,19 @@ export function createInitialTuiState(
     maximizedPane: null,
     paneScroll: createPaneScrollState(),
     panes: {
-      architect: {
-        lines: [
-          "Architect Summary",
-          "",
-          "Loop is currently driven by the local demo feed.",
-          `Objective: ${task}`,
-          "Decision: Keep runtime integration for a later issue.",
-        ],
-        updatedAt: timestamp,
-      },
-      diff: {
-        lines: [
-          "diff --git a/src/cli/commands/run.ts b/src/cli/commands/run.ts",
-          "+ launch the TUI shell for --ui tui",
-          "+ keep plain/live modes unchanged",
-        ],
-        updatedAt: timestamp,
-      },
-      engineer: {
-        lines: [
-          "Engineer Summary",
-          "",
-          "Synthetic events update this pane for now.",
-          "Current action: scaffold UI-local store and widgets.",
-        ],
-        updatedAt: timestamp,
-      },
+      architect: createInitialPaneSnapshot(
+        demoMode,
+        "architect",
+        task,
+        timestamp,
+      ),
+      diff: createInitialPaneSnapshot(demoMode, "diff", task, timestamp),
+      engineer: createInitialPaneSnapshot(
+        demoMode,
+        "engineer",
+        task,
+        timestamp,
+      ),
       log: {
         lines: [],
         updatedAt: timestamp,
@@ -160,43 +156,37 @@ export function createInitialTuiState(
         lines: [],
         updatedAt: timestamp,
       },
-      tests: {
-        lines: [
-          "Test Queue",
-          "",
-          "- store.test.ts",
-          "- layout.test.ts",
-          "- keyboard.test.ts",
-        ],
-        updatedAt: timestamp,
-      },
+      tests: createInitialPaneSnapshot(demoMode, "tests", task, timestamp),
     },
-    queueItems: [
-      {
-        id: "plan-shell",
-        status: "active",
-        title: "Scaffold neo-blessed shell",
-      },
-      {
-        id: "store-layout",
-        status: "pending",
-        title: "Implement reducer, layout, and keyboard model",
-      },
-      {
-        id: "demo-plumbing",
-        status: "pending",
-        title: "Add demo feed and CLI tui path",
-      },
-      {
-        id: "tests",
-        status: "pending",
-        title: "Add focused test coverage",
-      },
-    ],
+    queueItems: demoMode
+      ? [
+          {
+            id: "plan-shell",
+            status: "active",
+            title: "Scaffold neo-blessed shell",
+          },
+          {
+            id: "store-layout",
+            status: "pending",
+            title: "Implement reducer, layout, and keyboard model",
+          },
+          {
+            id: "demo-plumbing",
+            status: "pending",
+            title: "Add demo feed and CLI tui path",
+          },
+          {
+            id: "tests",
+            status: "pending",
+            title: "Add focused test coverage",
+          },
+        ]
+      : [],
     queueSelection: 0,
     runLabel: options.runLabel ?? DEFAULT_RUN_LABEL,
-    statusText:
-      "Demo shell active. Runtime event wiring is intentionally deferred.",
+    statusText: demoMode
+      ? "Demo shell active. Runtime event wiring is intentionally deferred."
+      : `Waiting for live harness activity for ${options.runLabel ?? DEFAULT_RUN_LABEL}.`,
   };
 }
 
@@ -258,21 +248,24 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         ),
       };
     case "log.append": {
-      const appendedEntry: TuiLogEntry = {
-        ...action.entry,
-        id: state.log.nextId,
-      };
-      const entries = [...state.log.entries, appendedEntry];
-      const overflow = Math.max(0, entries.length - state.log.limit);
-      const nextEntries = overflow === 0 ? entries : entries.slice(overflow);
+      return reduceLogAppend(state, [action.entry]);
+    }
+    case "log.appendMany":
+      return reduceLogAppend(state, action.entries);
+    case "log.replace": {
+      const boundedEntries = boundLogEntries(action.entries, state.log.limit);
+      const nextEntries = boundedEntries.entries.map((entry, index) => ({
+        ...entry,
+        id: index + 1,
+      }));
 
       return {
         ...state,
         log: {
           ...state.log,
-          dropped: state.log.dropped + overflow,
+          dropped: (action.dropped ?? 0) + boundedEntries.dropped,
           entries: nextEntries,
-          nextId: state.log.nextId + 1,
+          nextId: nextEntries.length + 1,
         },
         paneScroll: {
           ...state.paneScroll,
@@ -280,7 +273,11 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
             ? Math.max(0, nextEntries.length - 1)
             : state.paneScroll.log,
         },
-        panes: withPaneUpdated(state.panes, "log", action.entry.timestamp),
+        panes: withPaneUpdated(
+          state.panes,
+          "log",
+          nextEntries.at(-1)?.timestamp ?? state.panes.log.updatedAt,
+        ),
       };
     }
     case "pane.scroll": {
@@ -395,4 +392,160 @@ function withPaneUpdated(
       updatedAt,
     },
   };
+}
+
+function createInitialPaneSnapshot(
+  demoMode: boolean,
+  pane: TuiPaneId,
+  task: string,
+  updatedAt: string,
+): TuiPaneSnapshot {
+  if (!demoMode) {
+    return {
+      lines: createLivePlaceholderLines(pane, task),
+      updatedAt,
+    };
+  }
+
+  switch (pane) {
+    case "architect":
+      return {
+        lines: [
+          "Architect Summary",
+          "",
+          "Loop is currently driven by the local demo feed.",
+          `Objective: ${task}`,
+          "Decision: Keep runtime integration for a later issue.",
+        ],
+        updatedAt,
+      };
+    case "diff":
+      return {
+        lines: [
+          "diff --git a/src/cli/commands/run.ts b/src/cli/commands/run.ts",
+          "+ launch the TUI shell for --ui tui",
+          "+ keep plain/live modes unchanged",
+        ],
+        updatedAt,
+      };
+    case "engineer":
+      return {
+        lines: [
+          "Engineer Summary",
+          "",
+          "Synthetic events update this pane for now.",
+          "Current action: scaffold UI-local store and widgets.",
+        ],
+        updatedAt,
+      };
+    case "tests":
+      return {
+        lines: [
+          "Test Queue",
+          "",
+          "- store.test.ts",
+          "- layout.test.ts",
+          "- keyboard.test.ts",
+        ],
+        updatedAt,
+      };
+    case "tasks":
+    case "log":
+      return {
+        lines: [],
+        updatedAt,
+      };
+  }
+}
+
+function reduceLogAppend(
+  state: TuiState,
+  entries: readonly Omit<TuiLogEntry, "id">[],
+): TuiState {
+  if (entries.length === 0) {
+    return state;
+  }
+
+  const appendedEntries = entries.map((entry, index) => ({
+    ...entry,
+    id: state.log.nextId + index,
+  }));
+  const boundedEntries = boundStoredLogEntries(
+    [...state.log.entries, ...appendedEntries],
+    state.log.limit,
+  );
+
+  return {
+    ...state,
+    log: {
+      ...state.log,
+      dropped: state.log.dropped + boundedEntries.dropped,
+      entries: boundedEntries.entries,
+      nextId: state.log.nextId + entries.length,
+    },
+    paneScroll: {
+      ...state.paneScroll,
+      log: state.followMode
+        ? Math.max(0, boundedEntries.entries.length - 1)
+        : state.paneScroll.log,
+    },
+    panes: withPaneUpdated(
+      state.panes,
+      "log",
+      entries.at(-1)?.timestamp ?? state.panes.log.updatedAt,
+    ),
+  };
+}
+
+function boundLogEntries(
+  entries: readonly Omit<TuiLogEntry, "id">[],
+  limit: number,
+): { dropped: number; entries: readonly Omit<TuiLogEntry, "id">[] } {
+  const overflow = Math.max(0, entries.length - limit);
+
+  return {
+    dropped: overflow,
+    entries: overflow === 0 ? entries : entries.slice(overflow),
+  };
+}
+
+function boundStoredLogEntries(
+  entries: readonly TuiLogEntry[],
+  limit: number,
+): { dropped: number; entries: readonly TuiLogEntry[] } {
+  const overflow = Math.max(0, entries.length - limit);
+
+  return {
+    dropped: overflow,
+    entries: overflow === 0 ? entries : entries.slice(overflow),
+  };
+}
+
+function createLivePlaceholderLines(
+  pane: TuiPaneId,
+  task: string,
+): readonly string[] {
+  switch (pane) {
+    case "architect":
+      return [
+        "Architect Summary",
+        "",
+        `Objective: ${task}`,
+        "Waiting for live architect activity.",
+      ];
+    case "engineer":
+      return [
+        "Engineer Summary",
+        "",
+        `Task: ${task}`,
+        "Waiting for live engineer activity.",
+      ];
+    case "diff":
+      return ["Waiting for diff.patch to be written."];
+    case "tests":
+      return ["Waiting for test or check activity."];
+    case "tasks":
+    case "log":
+      return [];
+  }
 }

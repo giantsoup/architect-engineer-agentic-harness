@@ -6,13 +6,18 @@ import type {
   TuiQueueItem,
   TuiState,
 } from "../state.js";
-import { TUI_PANE_LABELS } from "../theme.js";
+import {
+  formatQueueStatusLabel,
+  TUI_PANE_LABELS,
+  type TuiTheme,
+} from "../theme.js";
 
 export function renderPaneWidget(options: {
   box: BlessedBox;
   pane: TuiPaneId;
   rect: TuiRect;
   state: TuiState;
+  theme: TuiTheme;
 }): void {
   const isFocused = options.state.focusPane === options.pane;
   const isMaximized = options.state.maximizedPane === options.pane;
@@ -33,18 +38,21 @@ export function renderPaneWidget(options: {
   options.box.width = options.rect.width;
   options.box.height = options.rect.height;
   options.box.setLabel(
-    `${isFocused ? "[*]" : "[ ]"} [${paneShortcut(options.pane)}] ${TUI_PANE_LABELS[options.pane]}${isMaximized ? " [MAX]" : ""}`,
+    `${isFocused ? `[${options.theme.focusMarker}]` : "[ ]"} [${paneShortcut(options.pane)}] ${TUI_PANE_LABELS[options.pane]}${isMaximized ? " [MAX]" : ""}`,
   );
   options.box.setContent(content.join("\n"));
-  options.box.style = isFocused
-    ? {
-        border: { fg: "cyan" },
-        fg: "white",
-      }
-    : {
-        border: { fg: "white" },
-        fg: "white",
-      };
+  options.box.style =
+    options.theme.capabilities.colorMode === "none"
+      ? undefined
+      : isFocused
+        ? {
+            border: { fg: options.theme.accentColor },
+            fg: options.theme.mutedColor,
+          }
+        : {
+            border: { fg: options.theme.mutedColor },
+            fg: options.theme.mutedColor,
+          };
   options.box.show();
 }
 
@@ -71,7 +79,7 @@ function formatQueueLines(
     const selected = index === queueSelection ? ">" : " ";
     const detail = item.detail === undefined ? "" : ` - ${item.detail}`;
 
-    return `${selected} ${statusGlyph(item.status)} ${item.title}${detail}`;
+    return `${selected} [${formatQueueStatusLabel(item.status)}] ${item.title}${detail}`;
   });
 }
 
@@ -141,19 +149,6 @@ function paneShortcut(pane: TuiPaneId): number {
       return 5;
     case "tests":
       return 6;
-  }
-}
-
-function statusGlyph(status: TuiQueueItem["status"]): string {
-  switch (status) {
-    case "active":
-      return "~";
-    case "blocked":
-      return "!";
-    case "done":
-      return "x";
-    case "pending":
-      return ".";
   }
 }
 
