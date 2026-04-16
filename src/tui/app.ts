@@ -182,6 +182,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiController {
         hidden: true,
         label: "",
         parent: options.screen,
+        tags: true,
       }),
     ]),
   ) as Record<(typeof TUI_ROLE_ORDER)[number], BlessedBox>;

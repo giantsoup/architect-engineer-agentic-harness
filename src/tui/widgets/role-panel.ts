@@ -42,8 +42,10 @@ export function renderRolePanelWidget(options: {
   const contentHeight = Math.max(1, options.rect.height - 2);
   const content = buildRolePanelLines({
     contentHeight,
+    contentWidth: Math.max(1, options.rect.width - 2),
     role: options.role,
     state: options.state,
+    theme: options.theme,
   });
 
   options.box.top = options.rect.top;
@@ -74,19 +76,23 @@ export function hideRolePanelWidget(box: BlessedBox): void {
 
 function buildRolePanelLines(options: {
   contentHeight: number;
+  contentWidth: number;
   role: TuiRoleId;
   state: TuiState;
+  theme: TuiTheme;
 }): readonly string[] {
   const sections = ROLE_SECTION_ORDER[options.role];
   const weights = ROLE_SECTION_WEIGHTS[options.role];
   const contentBudgets = allocateSectionBudgets(options.contentHeight, weights);
   const blocks = sections.map((section, index) =>
     buildSectionBlock({
+      contentWidth: options.contentWidth,
       lines: getSectionLines(options.state, section),
       maxLines: contentBudgets[index] ?? 1,
       role: options.role,
       section,
       state: options.state,
+      theme: options.theme,
     }),
   );
 
@@ -98,17 +104,22 @@ function buildRolePanelLines(options: {
 }
 
 function buildSectionBlock(options: {
+  contentWidth: number;
   lines: readonly string[];
   maxLines: number;
   role: TuiRoleId;
   section: TuiSectionId;
   state: TuiState;
+  theme: TuiTheme;
 }): readonly string[] {
   const excerpt = excerptSectionLines(options);
+  const wrappedExcerpt = excerpt.flatMap((line) =>
+    wrapPanelLine(line, Math.max(1, options.contentWidth - 2)),
+  );
 
   return [
-    SECTION_LABELS[options.section],
-    ...excerpt.map((line) => `  ${line}`),
+    formatSectionHeading(SECTION_LABELS[options.section], options.theme),
+    ...wrappedExcerpt.map((line) => `  ${escapeTagText(line)}`),
   ];
 }
 
@@ -118,6 +129,8 @@ function excerptSectionLines(options: {
   role: TuiRoleId;
   section: TuiSectionId;
   state: TuiState;
+  contentWidth: number;
+  theme: TuiTheme;
 }): readonly string[] {
   const lines =
     options.lines.length > 0
@@ -235,4 +248,85 @@ function sliceHeadWithOverflowNotice(
   return hiddenCount === 0
     ? visibleLines
     : [...visibleLines, `(${hiddenCount} more lines hidden)`];
+}
+
+function formatSectionHeading(label: string, theme: TuiTheme): string {
+  const heading = label.toUpperCase();
+
+  if (
+    theme.capabilities.colorMode === "none" ||
+    theme.accentColor === undefined
+  ) {
+    return heading;
+  }
+
+  return `{bold}{${theme.accentColor}-fg}${heading}{/${theme.accentColor}-fg}{/bold}`;
+}
+
+function wrapPanelLine(line: string, maxWidth: number): string[] {
+  if (line.length === 0 || line.length <= maxWidth || maxWidth <= 1) {
+    return [line];
+  }
+
+  const prefixEnd = resolveWrapPrefixEnd(line, maxWidth);
+  const prefix = line.slice(0, prefixEnd);
+  const continuationPrefix = " ".repeat(prefixEnd);
+  const content = line.slice(prefixEnd).trimStart();
+
+  if (content.length === 0) {
+    return [line];
+  }
+
+  const words = content.split(/\s+/u);
+  const wrapped: string[] = [];
+  let currentPrefix = prefix;
+  let currentLine = currentPrefix;
+
+  for (const word of words) {
+    const separator = currentLine.length === currentPrefix.length ? "" : " ";
+    const candidate = `${currentLine}${separator}${word}`;
+
+    if (candidate.length <= maxWidth) {
+      currentLine = candidate;
+      continue;
+    }
+
+    if (currentLine.length > currentPrefix.length) {
+      wrapped.push(currentLine);
+      currentPrefix = continuationPrefix;
+      currentLine = `${currentPrefix}${word}`;
+      continue;
+    }
+
+    wrapped.push(candidate.slice(0, maxWidth));
+    currentPrefix = continuationPrefix;
+    currentLine = `${currentPrefix}${candidate.slice(maxWidth).trimStart()}`;
+  }
+
+  if (currentLine.length > 0) {
+    wrapped.push(currentLine);
+  }
+
+  return wrapped;
+}
+
+function resolveWrapPrefixEnd(line: string, maxWidth: number): number {
+  const leadingWhitespace = line.match(/^\s*/u)?.[0].length ?? 0;
+  const separatorMatches = [...line.matchAll(/ {2,}/gu)];
+  const lastSeparator = separatorMatches.at(-1);
+
+  if (lastSeparator?.index === undefined) {
+    return leadingWhitespace;
+  }
+
+  return Math.min(
+    maxWidth - 1,
+    Math.max(leadingWhitespace, lastSeparator.index + lastSeparator[0].length),
+  );
+}
+
+function escapeTagText(value: string): string {
+  return value.replace(/[{}]/gu, (character) =>
+    character === "{" ? "{open}" : "{close}",
+  );
 }

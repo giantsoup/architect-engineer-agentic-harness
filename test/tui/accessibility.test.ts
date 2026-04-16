@@ -134,7 +134,7 @@ describe("tui accessibility fallbacks", () => {
       "Run qa-run | live | showing Architect | mono/ascii",
     );
     expect(roleBox.label).toContain("[*] Architect");
-    expect(roleBox.content).toContain("Task Queue");
+    expect(roleBox.content).toContain("TASK QUEUE");
     expect(roleBox.content).toContain(
       "[ACTIVE] Review terminal fallback behavior",
     );
@@ -145,6 +145,37 @@ describe("tui accessibility fallbacks", () => {
     expect(statusBarBox.content).toContain("Tab switch role");
     expect(statusBarBox.content).toContain("s stop run");
     expect(statusBarBox.content).toContain("? help");
+  });
+
+  it("preserves literal braces in panel content when color tags are enabled", () => {
+    const state = createInitialTuiState({
+      demoMode: false,
+      runLabel: "qa-run",
+    });
+    state.sections.currentGoal = {
+      lines: ['Summary   Keep "{literal}" braces visible in the panel.'],
+      updatedAt: "2026-04-16T20:00:00.000Z",
+    };
+    const layout = computeTuiLayout({
+      height: 24,
+      state,
+      width: 120,
+    });
+    const roleBox = createRecordingBox();
+    const theme = createTuiTheme({
+      colorMode: "full",
+      unicode: true,
+    });
+
+    renderRolePanelWidget({
+      box: roleBox,
+      rect: layout.roles.architect.rect,
+      role: "architect",
+      state,
+      theme,
+    });
+
+    expect(roleBox.content).toContain("{open}literal{close}");
   });
 
   it("renders the footer without relying on box labels", () => {

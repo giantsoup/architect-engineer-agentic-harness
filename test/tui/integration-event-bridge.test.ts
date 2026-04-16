@@ -64,20 +64,33 @@ describe("tui live event bridge", () => {
     });
     await settle();
 
-    expect(store.getState().sections.activeCommand.lines).toContain(
-      "Current command: npm test",
-    );
-    expect(store.getState().sections.activeCommand.lines).toContain(
-      "Working dir: packages/app",
-    );
-    expect(store.getState().sections.executionLog.lines).toContain(
-      "01:00:01 command:start npm test",
-    );
     expect(
       store
         .getState()
-        .sections.executionLog.lines.some((line) =>
-          line.includes("stdout failing test output"),
+        .sections.activeCommand.lines.some(
+          (line) => line.includes("Current") && line.includes("npm test"),
+        ),
+    ).toBe(true);
+    expect(
+      store
+        .getState()
+        .sections.activeCommand.lines.some((line) =>
+          line.includes("packages/app"),
+        ),
+    ).toBe(true);
+    expect(
+      store
+        .getState()
+        .sections.executionLog.lines.some(
+          (line) => line.includes("RUN") && line.includes("npm test"),
+        ),
+    ).toBe(true);
+    expect(
+      store
+        .getState()
+        .sections.executionLog.lines.some(
+          (line) =>
+            line.includes("STDOUT") && line.includes("failing test output"),
         ),
     ).toBe(true);
     expect(
@@ -87,9 +100,14 @@ describe("tui live event bridge", () => {
           entry.summary.includes("stdout: failing test output"),
         ),
     ).toBe(true);
-    expect(store.getState().sections.testsChecks.lines).toContain(
-      "  stdout | failing test output",
-    );
+    expect(
+      store
+        .getState()
+        .sections.testsChecks.lines.some(
+          (line) =>
+            line.includes("stdout") && line.includes("failing test output"),
+        ),
+    ).toBe(true);
 
     snapshot = {
       ...snapshot,
@@ -163,20 +181,34 @@ describe("tui live event bridge", () => {
     });
     await settle();
 
-    expect(store.getState().sections.testsChecks.lines).toContain(
-      "State: failed",
-    );
-    expect(store.getState().sections.testsChecks.lines).toContain(
-      "Exit code: 1",
-    );
-    expect(store.getState().sections.activeCommand.lines).toContain(
-      "Check status: failed (exit 1): npm test",
-    );
     expect(
       store
         .getState()
-        .sections.executionLog.lines.some((line) =>
-          line.includes("command:end npm test (exit 1)"),
+        .sections.testsChecks.lines.some(
+          (line) => line.includes("State") && line.includes("failed"),
+        ),
+    ).toBe(true);
+    expect(
+      store
+        .getState()
+        .sections.testsChecks.lines.some(
+          (line) => line.includes("Exit") && line.includes("1"),
+        ),
+    ).toBe(true);
+    expect(
+      store
+        .getState()
+        .sections.activeCommand.lines.some(
+          (line) =>
+            line.includes("Check") &&
+            line.includes("failed (exit 1): npm test"),
+        ),
+    ).toBe(true);
+    expect(
+      store
+        .getState()
+        .sections.executionLog.lines.some(
+          (line) => line.includes("CMD") && line.includes("npm test (exit 1)"),
         ),
     ).toBe(true);
 

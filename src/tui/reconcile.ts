@@ -431,17 +431,22 @@ function buildCurrentGoalSection(
     "Waiting for architect state.";
   const handoffLine = resolveArchitectHandoffLine(context);
 
-  return [
-    objective,
-    "",
-    `Phase: ${inspection?.phase ?? "Preparing"}`,
-    `Active role: ${inspection?.activeRole ?? "system"}`,
-    `Latest decision: ${inspection?.latestDecision ?? "No architect decision recorded yet."}`,
-    `Status: ${inspection?.status ?? "starting"}`,
-    `Command status: ${inspection?.commandStatus ?? fallbackCommandStatus(requiredCheckCommand)}`,
-    `Elapsed: ${formatElapsedMs(inspection?.elapsedMs)}`,
-    `Architect state: ${handoffLine ?? "Awaiting architect planning activity."}`,
-  ];
+  return formatDetailRows([
+    ["Summary", objective],
+    ["Phase", inspection?.phase ?? "Preparing"],
+    ["Role", inspection?.activeRole ?? "system"],
+    [
+      "Decision",
+      inspection?.latestDecision ?? "No architect decision recorded yet.",
+    ],
+    ["Status", inspection?.status ?? "starting"],
+    [
+      "Checks",
+      inspection?.commandStatus ?? fallbackCommandStatus(requiredCheckCommand),
+    ],
+    ["Elapsed", formatElapsedMs(inspection?.elapsedMs)],
+    ["Architect", handoffLine ?? "Awaiting architect planning activity."],
+  ]);
 }
 
 function buildReasoningHistorySection(
@@ -483,18 +488,28 @@ function buildActiveCommandSection(
     context.overlay.latestCheck?.check ??
     context.artifacts.checks?.checks.at(-1);
 
-  return [
-    `Task: ${inspection?.task ?? resolveTaskSummary(context)}`,
-    `State: ${runningCommand === undefined ? "idle" : "running"}`,
-    `Current command: ${runningCommand?.command ?? "idle"}`,
-    `Last command: ${lastCommand?.command ?? "No command recorded yet."}`,
-    `Access mode: ${runningCommand?.accessMode ?? lastCommand?.accessMode ?? "n/a"}`,
-    `Working dir: ${runningCommand?.workingDirectory ?? lastCommand?.workingDirectory ?? "."}`,
-    `Last tool: ${lastTool ?? "No tool recorded yet."}`,
-    `Last exit code: ${lastCommand?.exitCode ?? "n/a"}`,
-    `Check status: ${formatCheckLine(latestCheck, requiredCheckCommand)}`,
-    `Command status: ${inspection?.commandStatus ?? fallbackCommandStatus(requiredCheckCommand)}`,
-  ];
+  return formatDetailRows([
+    ["Task", inspection?.task ?? resolveTaskSummary(context)],
+    ["State", runningCommand === undefined ? "idle" : "running"],
+    ["Current", runningCommand?.command ?? "idle"],
+    ["Last", lastCommand?.command ?? "No command recorded yet."],
+    [
+      "Context",
+      [
+        runningCommand?.accessMode ?? lastCommand?.accessMode ?? "n/a",
+        runningCommand?.workingDirectory ??
+          lastCommand?.workingDirectory ??
+          ".",
+      ].join(" | "),
+    ],
+    ["Tool", lastTool ?? "No tool recorded yet."],
+    ["Result", summarizeCommandResult(lastCommand)],
+    ["Check", formatCheckLine(latestCheck, requiredCheckCommand)],
+    [
+      "Status",
+      inspection?.commandStatus ?? fallbackCommandStatus(requiredCheckCommand),
+    ],
+  ]);
 }
 
 function buildEngineerExecutionLogSection(
@@ -545,24 +560,33 @@ function buildTestsPane(
       : formatCommandOutput(latestCommand?.stdout, latestCommand?.stderr);
 
   return [
-    "Check Status",
+    ...formatDetailRows([
+      ["Required", requiredCheckCommand ?? "not recorded yet"],
+      ["Current", runningCheck?.command ?? latestCommand?.command ?? "idle"],
+      [
+        "State",
+        runningCheck !== undefined
+          ? "running"
+          : (latestCheck?.status ??
+            (latestCommand === undefined ? "not run" : latestCommand.status)),
+      ],
+      [
+        "Exit",
+        runningCheck === undefined
+          ? `${latestCommand?.exitCode ?? latestCheck?.exitCode ?? "n/a"}`
+          : "running",
+      ],
+      [
+        "Duration",
+        runningCheck === undefined
+          ? formatDurationMs(
+              latestCommand?.durationMs ?? latestCheck?.durationMs,
+            )
+          : "running",
+      ],
+    ]),
     "",
-    `Required command: ${requiredCheckCommand ?? "not recorded yet"}`,
-    `Current command: ${runningCheck?.command ?? latestCommand?.command ?? "idle"}`,
-    `State: ${
-      runningCheck !== undefined
-        ? "running"
-        : (latestCheck?.status ??
-          (latestCommand === undefined ? "not run" : latestCommand.status))
-    }`,
-    `Exit code: ${runningCheck === undefined ? (latestCommand?.exitCode ?? latestCheck?.exitCode ?? "n/a") : "running"}`,
-    `Duration: ${
-      runningCheck === undefined
-        ? formatDurationMs(latestCommand?.durationMs ?? latestCheck?.durationMs)
-        : "running"
-    }`,
-    "",
-    "Output:",
+    "Recent output",
     ...(outputLines.length > 0
       ? outputLines
       : ["  No check output recorded yet."]),
@@ -588,7 +612,8 @@ function buildArchitectReasoningTimeline(
   context: TuiReconcileContext,
   requiredCheckCommand: string | undefined,
 ): string[] {
-  const entries: Array<{ summary: string; timestamp: string }> = [];
+  const entries: Array<{ kind: string; summary: string; timestamp: string }> =
+    [];
   let sawPlanEvent = false;
   let sawReviewEvent = false;
   let sawHandoff = false;
@@ -632,12 +657,26 @@ function buildArchitectReasoningTimeline(
     }
 
     if (summary !== undefined) {
-      entries.push({ summary, timestamp });
+      entries.push({
+        kind:
+          type === "architect-engineer-run-started"
+            ? "START"
+            : type === "architect-action-selected"
+              ? "PLAN"
+              : type === "architect-plan-created"
+                ? "PLAN"
+                : type === "architect-review-created"
+                  ? "REVIEW"
+                  : "HANDOFF",
+        summary,
+        timestamp,
+      });
     }
   }
 
   if (!sawPlanEvent && context.artifacts.architectPlan.trim().length > 0) {
     entries.push({
+      kind: "PLAN",
       summary: `Plan available: ${summarizeMarkdownArtifact(context.artifacts.architectPlan, "Architect plan recorded.")}`,
       timestamp: context.inspection?.updatedAt ?? new Date().toISOString(),
     });
@@ -645,6 +684,7 @@ function buildArchitectReasoningTimeline(
 
   if (!sawReviewEvent && context.artifacts.architectReview.trim().length > 0) {
     entries.push({
+      kind: "REVIEW",
       summary: `Review available: ${summarizeMarkdownArtifact(context.artifacts.architectReview, "Architect review recorded.")}`,
       timestamp: context.inspection?.updatedAt ?? new Date().toISOString(),
     });
@@ -656,6 +696,7 @@ function buildArchitectReasoningTimeline(
     context.inspection.status === "running"
   ) {
     entries.push({
+      kind: "HANDOFF",
       summary: "Handed off to engineer.",
       timestamp: context.inspection.updatedAt,
     });
@@ -663,7 +704,8 @@ function buildArchitectReasoningTimeline(
 
   if (context.inspection?.latestDecision !== undefined) {
     entries.push({
-      summary: `Latest decision: ${context.inspection.latestDecision}`,
+      kind: "NOTE",
+      summary: context.inspection.latestDecision,
       timestamp: context.inspection.updatedAt,
     });
   }
@@ -672,14 +714,16 @@ function buildArchitectReasoningTimeline(
 
   if (architectAgent !== undefined) {
     entries.push({
-      summary: `Architect ${architectAgent.phase} ${architectAgent.status}: ${architectAgent.summary}`,
+      kind: architectAgent.status === "completed" ? "DONE" : "ACTIVE",
+      summary: `Architect ${architectAgent.phase}: ${architectAgent.summary}`,
       timestamp: architectAgent.timestamp,
     });
   }
 
   if (context.inspection !== undefined) {
     entries.push({
-      summary: `State: ${context.inspection.phase} / ${context.inspection.activeRole} / ${context.inspection.status}`,
+      kind: "STATE",
+      summary: `${context.inspection.phase} / ${context.inspection.activeRole} / ${context.inspection.status}`,
       timestamp: context.inspection.updatedAt,
     });
   }
@@ -690,7 +734,9 @@ function buildArchitectReasoningTimeline(
         (left, right) =>
           Date.parse(left.timestamp) - Date.parse(right.timestamp),
       )
-      .map((entry) => formatTimelineLine(entry.timestamp, entry.summary)),
+      .map((entry) =>
+        formatTimelineEntry(entry.timestamp, entry.kind, entry.summary),
+      ),
   );
 }
 
@@ -698,7 +744,8 @@ function buildEngineerExecutionTimeline(
   context: TuiReconcileContext,
   requiredCheckCommand: string | undefined,
 ): string[] {
-  const entries: Array<{ summary: string; timestamp: string }> = [];
+  const entries: Array<{ kind: string; summary: string; timestamp: string }> =
+    [];
 
   for (const event of context.artifacts.events) {
     const entry = toEngineerExecutionTimelineEntry(event);
@@ -714,7 +761,8 @@ function buildEngineerExecutionTimeline(
     }
 
     entries.push({
-      summary: `command:end ${command.command} (${formatExitSuffix(command.exitCode, command.status)})`,
+      kind: "CMD",
+      summary: `${command.command} (${formatExitSuffix(command.exitCode, command.status)})`,
       timestamp: command.timestamp,
     });
   }
@@ -727,7 +775,8 @@ function buildEngineerExecutionTimeline(
 
   if (latestCheck !== undefined && checkTimestamp !== undefined) {
     entries.push({
-      summary: `check ${latestCheck.status}${latestCheck.exitCode === undefined ? "" : ` (exit ${latestCheck.exitCode})`}: ${latestCheck.command ?? requiredCheckCommand ?? latestCheck.name}`,
+      kind: "CHECK",
+      summary: `${latestCheck.status}${latestCheck.exitCode === undefined ? "" : ` (exit ${latestCheck.exitCode})`}: ${latestCheck.command ?? requiredCheckCommand ?? latestCheck.name}`,
       timestamp: checkTimestamp,
     });
   }
@@ -739,13 +788,15 @@ function buildEngineerExecutionTimeline(
 
   if (runningCommand !== undefined) {
     entries.push({
-      summary: `command:start ${runningCommand.command}`,
+      kind: "RUN",
+      summary: runningCommand.command,
       timestamp: runningCommand.startedAt,
     });
 
     for (const line of runningCommand.output) {
       entries.push({
-        summary: `${line.stream} ${line.text}`,
+        kind: line.stream === "stderr" ? "STDERR" : "STDOUT",
+        summary: line.text,
         timestamp: line.timestamp,
       });
     }
@@ -753,7 +804,8 @@ function buildEngineerExecutionTimeline(
 
   if (lastCommand !== undefined) {
     entries.push({
-      summary: `command:end ${lastCommand.command} (${formatExitSuffix(lastCommand.exitCode, lastCommand.status)})`,
+      kind: "CMD",
+      summary: `${lastCommand.command} (${formatExitSuffix(lastCommand.exitCode, lastCommand.status)})`,
       timestamp: lastCommand.timestamp,
     });
   }
@@ -764,7 +816,9 @@ function buildEngineerExecutionTimeline(
         (left, right) =>
           Date.parse(left.timestamp) - Date.parse(right.timestamp),
       )
-      .map((entry) => formatTimelineLine(entry.timestamp, entry.summary)),
+      .map((entry) =>
+        formatTimelineEntry(entry.timestamp, entry.kind, entry.summary),
+      ),
   );
 }
 
@@ -1014,13 +1068,17 @@ function dedupeTimelineLines(lines: readonly string[]): string[] {
   return deduped;
 }
 
-function formatTimelineLine(timestamp: string, summary: string): string {
-  return `${formatClock(timestamp)} ${summary}`;
+function formatTimelineEntry(
+  timestamp: string,
+  kind: string,
+  summary: string,
+): string {
+  return `${formatClock(timestamp)}  ${kind.padEnd(6)}  ${summary}`;
 }
 
 function toEngineerExecutionTimelineEntry(
   event: JsonRecord,
-): { summary: string; timestamp: string } | undefined {
+): { kind: string; summary: string; timestamp: string } | undefined {
   const timestamp = getOptionalString(event, "timestamp");
   const type = getOptionalString(event, "type");
 
@@ -1031,20 +1089,22 @@ function toEngineerExecutionTimelineEntry(
   switch (type) {
     case "engineer-run-started":
       return {
-        summary: "engineer-run-started Engineer task started.",
+        kind: "START",
+        summary: "Engineer task started.",
         timestamp,
       };
     case "engineer-action-selected":
       return {
+        kind: "ACTION",
         summary:
-          getOptionalString(event, "summary") ??
-          "engineer-action-selected Engineer action recorded.",
+          getOptionalString(event, "summary") ?? "Engineer action recorded.",
         timestamp,
       };
     case "tool-call":
       return getOptionalString(event, "role") === "engineer"
         ? {
-            summary: `tool-call ${getOptionalString(event, "toolName") ?? "tool"} ${getOptionalString(event, "status") ?? "completed"}`,
+            kind: "TOOL",
+            summary: `${getOptionalString(event, "toolName") ?? "tool"} ${getOptionalString(event, "status") ?? "completed"}`,
             timestamp,
           }
         : undefined;
@@ -1089,6 +1149,20 @@ function formatCheckLine(
   }
 
   return `${check.status}${check.exitCode === undefined ? "" : ` (exit ${check.exitCode})`}: ${check.command ?? requiredCheckCommand ?? check.name}`;
+}
+
+function summarizeCommandResult(
+  command: TuiCompletedCommandState | undefined,
+): string {
+  if (command === undefined) {
+    return "n/a";
+  }
+
+  return command.status === "completed"
+    ? command.exitCode === null
+      ? "completed"
+      : `exit ${command.exitCode}`
+    : formatExitSuffix(command.exitCode, command.status);
 }
 
 function getLatestCommandForRole(
@@ -1211,7 +1285,8 @@ function formatRunningCommandOutput(
   const boundedOutput = boundLines(output, TEST_OUTPUT_LINE_LIMIT);
   const hiddenLineCount = droppedOutputLineCount + boundedOutput.dropped;
   const lines = boundedOutput.lines.map(
-    (line) => `  ${line.stream} | ${line.text}`,
+    (line) =>
+      `${line.stream === "stderr" ? "stderr".padEnd(8) : "stdout".padEnd(8)}  ${line.text}`,
   );
 
   return hiddenLineCount > 0
@@ -1227,8 +1302,8 @@ function formatCommandOutput(
   stderr: string | undefined,
 ): string[] {
   const lines = [
-    ...splitLines(stdout).map((line) => `  stdout | ${line}`),
-    ...splitLines(stderr).map((line) => `  stderr | ${line}`),
+    ...splitLines(stdout).map((line) => `${"stdout".padEnd(8)}  ${line}`),
+    ...splitLines(stderr).map((line) => `${"stderr".padEnd(8)}  ${line}`),
   ];
   const boundedLines = boundLines(lines, TEST_OUTPUT_LINE_LIMIT);
 
@@ -1398,6 +1473,22 @@ function formatElapsedMs(elapsedMs: number | undefined): string {
   }
 
   return `${(elapsedMs / 1_000).toFixed(elapsedMs >= 10_000 ? 0 : 1)}s`;
+}
+
+function formatDetailRows(
+  rows: ReadonlyArray<readonly [label: string, value: string]>,
+): string[] {
+  const labelWidth = Math.max(
+    6,
+    Math.min(
+      10,
+      rows.reduce((width, [label]) => Math.max(width, label.length), 0),
+    ),
+  );
+
+  return rows.map(
+    ([label, value]) => `${label.padEnd(labelWidth)}  ${value.trim()}`,
+  );
 }
 
 function formatClock(value: string): string {
