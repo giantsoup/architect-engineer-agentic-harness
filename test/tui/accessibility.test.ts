@@ -7,6 +7,7 @@ import {
   createTuiTheme,
   detectTuiTerminalCapabilities,
 } from "../../src/tui/theme.js";
+import { renderHelpModalWidget } from "../../src/tui/widgets/help-modal.js";
 import { renderPaneWidget } from "../../src/tui/widgets/pane.js";
 import { renderStatusBarWidget } from "../../src/tui/widgets/status-bar.js";
 
@@ -124,9 +125,82 @@ describe("tui accessibility fallbacks", () => {
     expect(statusBarBox.content).toContain("theme:mono/ascii");
     expect(statusBarBox.content).toContain("focus:Tasks / Queue");
   });
+
+  it("renders the borderless status bar without relying on box labels", () => {
+    const state = createInitialTuiState({
+      demoMode: false,
+      runLabel: "qa-run",
+    });
+    const statusBarBox = createRecordingBox({
+      setLabel() {
+        throw new Error("status bar should not set a label");
+      },
+    });
+    const theme = createTuiTheme({
+      colorMode: "full",
+      unicode: true,
+    });
+
+    renderStatusBarWidget({
+      box: statusBarBox,
+      rect: { height: 1, left: 0, top: 8, width: 120 },
+      state,
+      theme,
+    });
+
+    expect(statusBarBox.content).toContain("qa-run LIVE");
+  });
+
+  it("keeps widget styles intact in mono mode instead of clearing them", () => {
+    const state = createInitialTuiState({
+      demoMode: false,
+      runLabel: "qa-run",
+    });
+    state.helpOpen = true;
+    const theme = createTuiTheme({
+      colorMode: "none",
+      unicode: false,
+    });
+    const sentinelStyle = { fg: "white" };
+    const paneBox = createRecordingBox({
+      style: sentinelStyle,
+    });
+    const statusBarBox = createRecordingBox({
+      style: sentinelStyle,
+    });
+    const helpModalBox = createRecordingBox({
+      style: sentinelStyle,
+    });
+
+    renderPaneWidget({
+      box: paneBox,
+      pane: "architect",
+      rect: { height: 8, left: 0, top: 0, width: 72 },
+      state,
+      theme,
+    });
+    renderStatusBarWidget({
+      box: statusBarBox,
+      rect: { height: 1, left: 0, top: 8, width: 120 },
+      state,
+      theme,
+    });
+    renderHelpModalWidget({
+      box: helpModalBox,
+      rect: { height: 12, left: 2, top: 2, width: 48 },
+      state,
+      theme,
+    });
+
+    expect(paneBox.style).toBe(sentinelStyle);
+    expect(statusBarBox.style).toBe(sentinelStyle);
+    expect(helpModalBox.style).toBe(sentinelStyle);
+  });
 });
 
-function createRecordingBox(): BlessedBox & { content: string; label: string } {
+function createRecordingBox(
+  overrides: Partial<BlessedBox> = {},
+): BlessedBox & { content: string; label: string } {
   return {
     content: "",
     height: 0,
@@ -142,5 +216,6 @@ function createRecordingBox(): BlessedBox & { content: string; label: string } {
     show() {},
     top: 0,
     width: 0,
+    ...overrides,
   };
 }

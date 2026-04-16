@@ -207,6 +207,12 @@ Run the full loop from a file:
 blueprint run --task-file task.md
 ```
 
+Open the interactive dashboard explicitly for a TTY task run:
+
+```bash
+blueprint run --task "Implement Milestone 12 and keep all tests green." --ui tui
+```
+
 Check the latest run:
 
 ```bash
@@ -217,6 +223,16 @@ blueprint inspect
 Live sanity prompts for post-change validation:
 
 - see [docs/live-sanity-suite.md](docs/live-sanity-suite.md)
+
+## Run UI Modes
+
+`--ui` applies to Architect-Engineer task runs (`--task` / `--task-file`). It does not change single-command mode, which still streams the command's own stdout and stderr.
+
+- `live` is the default. On an interactive TTY it keeps a concise manager-level status block refreshed on `stderr`. On a non-TTY it emits compact snapshot lines only when the run state changes, which keeps CI logs readable.
+- `plain` disables the live renderer and leaves only the normal command output plus the final completion summary.
+- `tui` opens the interactive neo-blessed dashboard for TTY runs. If `stdin` or `stdout` is not a TTY, or the dashboard cannot initialize, the run continues without the TUI shell and still writes the normal dossier plus the final completion summary.
+
+Keybindings, terminal fallbacks, and the current smoke matrix live in [docs/tui-hardening.md](docs/tui-hardening.md).
 
 ## Commands
 
@@ -236,6 +252,7 @@ Live sanity prompts for post-change validation:
 - `run --task <markdown>` runs the Architect-Engineer loop against the current repo by default
 - `run --task-file <path>` reads the task brief from disk
 - `--project-root <directory>` selects the repo root for task mode
+- `--ui plain|live|tui` selects the task-run UI mode; default is `live`
 - `--role architect|engineer` applies to single-command mode
 - `--cwd` applies to single-command mode only
 - `--env` and `--timeout-ms` are supported

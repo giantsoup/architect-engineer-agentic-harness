@@ -41,18 +41,17 @@ export function renderPaneWidget(options: {
     `${isFocused ? `[${options.theme.focusMarker}]` : "[ ]"} [${paneShortcut(options.pane)}] ${TUI_PANE_LABELS[options.pane]}${isMaximized ? " [MAX]" : ""}`,
   );
   options.box.setContent(content.join("\n"));
-  options.box.style =
-    options.theme.capabilities.colorMode === "none"
-      ? undefined
-      : isFocused
-        ? {
-            border: { fg: options.theme.accentColor },
-            fg: options.theme.mutedColor,
-          }
-        : {
-            border: { fg: options.theme.mutedColor },
-            fg: options.theme.mutedColor,
-          };
+  if (options.theme.capabilities.colorMode !== "none") {
+    options.box.style = isFocused
+      ? {
+          border: { fg: options.theme.accentColor },
+          fg: options.theme.mutedColor,
+        }
+      : {
+          border: { fg: options.theme.mutedColor },
+          fg: options.theme.mutedColor,
+        };
+  }
   options.box.show();
 }
 

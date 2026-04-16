@@ -14,13 +14,12 @@ export function renderHelpModalWidget(options: {
   options.box.width = options.rect.width;
   options.box.height = options.rect.height;
   options.box.setLabel("Help");
-  options.box.style =
-    options.theme.capabilities.colorMode === "none"
-      ? undefined
-      : {
-          border: { fg: options.theme.helpBorderColor },
-          fg: options.theme.mutedColor,
-        };
+  if (options.theme.capabilities.colorMode !== "none") {
+    options.box.style = {
+      border: { fg: options.theme.helpBorderColor },
+      fg: options.theme.mutedColor,
+    };
+  }
   options.box.setContent(
     [
       "Keyboard",
@@ -34,7 +33,7 @@ export function renderHelpModalWidget(options: {
       "f : toggle log follow mode",
       "r : reset maximize/help/scroll state",
       "? : toggle this help modal",
-      "q : close the TUI shell without cancelling the run",
+      "q / Ctrl-C : close the TUI shell without cancelling the run",
       "",
       "Fallback modes",
       "",

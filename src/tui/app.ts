@@ -176,7 +176,6 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiController {
   ) as Record<(typeof TUI_PANE_ORDER)[number], BlessedBox>;
   const statusBarBox = createBlessedBox({
     height: 1,
-    label: "",
     parent: options.screen,
   });
   const helpModalBox = createBlessedBox({

@@ -82,6 +82,10 @@ describe("CLI help", () => {
     expect(helpResult.stdout).toContain("--task-file <path>");
     expect(helpResult.stdout).toContain("--project-root <directory>");
     expect(helpResult.stdout).toContain("--role <role>");
+    expect(helpResult.stdout).toContain("--ui <mode>");
+    expect(helpResult.stdout).toContain(
+      "Task-run UI mode: live (default), plain, or tui",
+    );
 
     const result = runCli(["run"]);
 

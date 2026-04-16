@@ -23,14 +23,12 @@ export function renderStatusBarWidget(options: {
   options.box.left = options.rect.left;
   options.box.width = options.rect.width;
   options.box.height = options.rect.height;
-  options.box.style =
-    options.theme.capabilities.colorMode === "none"
-      ? undefined
-      : {
-          bg: options.theme.chromeBackground,
-          fg: options.theme.chromeForeground,
-        };
-  options.box.setLabel("");
+  if (options.theme.capabilities.colorMode !== "none") {
+    options.box.style = {
+      bg: options.theme.chromeBackground,
+      fg: options.theme.chromeForeground,
+    };
+  }
   options.box.setContent(
     truncateForStatusBar(
       buildStatusBarText(options, mode, maximized),

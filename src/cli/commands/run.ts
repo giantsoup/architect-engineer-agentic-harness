@@ -29,6 +29,10 @@ interface RunCommandOptions {
   ui: "live" | "plain" | "tui";
 }
 
+const DEFAULT_TASK_UI_MODE = "live";
+const RUN_UI_OPTION_DESCRIPTION =
+  "Task-run UI mode: live (default), plain, or tui";
+
 export function createRunCommand(): Command {
   return new Command("run")
     .description(
@@ -51,7 +55,12 @@ export function createRunCommand(): Command {
       "Command timeout in milliseconds",
       parsePositiveInteger,
     )
-    .option("--ui <mode>", "UI mode", parseUiMode, "live")
+    .option(
+      "--ui <mode>",
+      RUN_UI_OPTION_DESCRIPTION,
+      parseUiMode,
+      DEFAULT_TASK_UI_MODE,
+    )
     .action(async (options: RunCommandOptions) => {
       const environment = parseEnvironmentEntries(options.env);
       const runMode = await resolveRunMode(options);
