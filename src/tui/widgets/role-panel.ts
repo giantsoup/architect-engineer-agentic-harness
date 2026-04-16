@@ -1,7 +1,6 @@
 import type { BlessedBox } from "../neo-blessed.js";
 import type { TuiRect } from "../layout.js";
 import type {
-  TuiLogEntry,
   TuiQueueItem,
   TuiRoleId,
   TuiSectionId,
@@ -155,8 +154,6 @@ function getSectionLines(
   switch (section) {
     case "taskQueue":
       return formatQueueLines(state.queueItems);
-    case "executionLog":
-      return formatLogLines(state.log.entries, state.log.dropped);
     default:
       return state.sections[section].lines;
   }
@@ -177,32 +174,6 @@ function formatQueueLines(
 
     return `[${formatQueueStatusLabel(item.status)}] ${item.title}${detail}`;
   });
-}
-
-function formatLogLines(
-  entries: readonly TuiLogEntry[],
-  dropped: number,
-): readonly string[] {
-  const lines =
-    dropped > 0
-      ? [`(${dropped} older log entries dropped to keep the buffer bounded)`]
-      : [];
-
-  if (entries.length === 0) {
-    return [
-      ...lines,
-      "No execution log lines yet.",
-      "Command and runtime output will accumulate here.",
-    ];
-  }
-
-  return [
-    ...lines,
-    ...entries.map(
-      (entry) =>
-        `${formatClock(entry.timestamp)} ${entry.source.padEnd(9, " ")} ${entry.level.toUpperCase()} ${entry.summary}`,
-    ),
-  ];
 }
 
 function allocateSectionBudgets(
@@ -264,14 +235,4 @@ function sliceHeadWithOverflowNotice(
   return hiddenCount === 0
     ? visibleLines
     : [...visibleLines, `(${hiddenCount} more lines hidden)`];
-}
-
-function formatClock(value: string): string {
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
-  return date.toISOString().slice(11, 19);
 }

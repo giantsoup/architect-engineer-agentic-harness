@@ -62,6 +62,15 @@ export function createTuiDemoFeed(
         type: "log.append",
       });
       dispatch({
+        lines: [
+          "No engineer execution recorded yet.",
+          "Live commands, tool calls, and required-check activity will appear here.",
+        ],
+        section: "executionLog",
+        type: "section.replace",
+        updatedAt: now().toISOString(),
+      });
+      dispatch({
         text: "Demo feed: architect is shaping the phase-1 dashboard skeleton.",
         type: "status.set",
       });
@@ -93,6 +102,15 @@ export function createTuiDemoFeed(
           timestamp: now().toISOString(),
         },
         type: "log.append",
+      });
+      dispatch({
+        lines: [
+          "12:00:00 engineer-action-selected Replacing the layout engine with a 40/60 two-column dashboard.",
+          "12:00:01 tool-call file.write completed",
+        ],
+        section: "executionLog",
+        type: "section.replace",
+        updatedAt: now().toISOString(),
       });
       dispatch({
         text: "Demo feed: engineer is landing role panels, header, and footer hints.",
@@ -128,6 +146,17 @@ export function createTuiDemoFeed(
           timestamp: now().toISOString(),
         },
         type: "log.append",
+      });
+      dispatch({
+        lines: [
+          "12:00:00 engineer-action-selected Replacing the layout engine with a 40/60 two-column dashboard.",
+          "12:00:01 tool-call file.write completed",
+          "12:00:02 command:start npm test -- test/tui",
+          "12:00:03 stdout updating layout, keyboard, and app coverage",
+        ],
+        section: "executionLog",
+        type: "section.replace",
+        updatedAt: now().toISOString(),
       });
       dispatch({
         text: "Demo feed: narrow role switching and placeholders are active.",
@@ -176,6 +205,18 @@ export function createTuiDemoFeed(
           timestamp: now().toISOString(),
         },
         type: "log.append",
+      });
+      dispatch({
+        lines: [
+          "12:00:00 engineer-action-selected Replacing the layout engine with a 40/60 two-column dashboard.",
+          "12:00:01 tool-call file.write completed",
+          "12:00:02 command:start npm test -- test/tui",
+          "12:00:04 command:end npm test -- test/tui (exit 0)",
+          "12:00:04 check passed (exit 0): npm test -- test/tui",
+        ],
+        section: "executionLog",
+        type: "section.replace",
+        updatedAt: now().toISOString(),
       });
       dispatch({
         text: "Demo feed: phase-1 shell complete enough for interaction; deeper live wiring is deferred.",

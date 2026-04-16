@@ -112,10 +112,10 @@ export function createTuiLiveDataSource(
     const updatedAt = now().toISOString();
 
     if (
-      !sameLines(state.sections.currentGoal.lines, projection.architectLines)
+      !sameLines(state.sections.currentGoal.lines, projection.currentGoalLines)
     ) {
       options.store.dispatch({
-        lines: projection.architectLines,
+        lines: projection.currentGoalLines,
         section: "currentGoal",
         type: "section.replace",
         updatedAt,
@@ -123,11 +123,14 @@ export function createTuiLiveDataSource(
     }
 
     if (
-      !sameLines(state.sections.activeCommand.lines, projection.engineerLines)
+      !sameLines(
+        state.sections.reasoningHistory.lines,
+        projection.reasoningHistoryLines,
+      )
     ) {
       options.store.dispatch({
-        lines: projection.engineerLines,
-        section: "activeCommand",
+        lines: projection.reasoningHistoryLines,
+        section: "reasoningHistory",
         type: "section.replace",
         updatedAt,
       });
@@ -140,9 +143,39 @@ export function createTuiLiveDataSource(
       });
     }
 
-    if (!sameLines(state.sections.testsChecks.lines, projection.testsLines)) {
+    if (
+      !sameLines(
+        state.sections.executionLog.lines,
+        projection.executionLogLines,
+      )
+    ) {
       options.store.dispatch({
-        lines: projection.testsLines,
+        lines: projection.executionLogLines,
+        section: "executionLog",
+        type: "section.replace",
+        updatedAt,
+      });
+    }
+
+    if (
+      !sameLines(
+        state.sections.activeCommand.lines,
+        projection.activeCommandLines,
+      )
+    ) {
+      options.store.dispatch({
+        lines: projection.activeCommandLines,
+        section: "activeCommand",
+        type: "section.replace",
+        updatedAt,
+      });
+    }
+
+    if (
+      !sameLines(state.sections.testsChecks.lines, projection.testsChecksLines)
+    ) {
+      options.store.dispatch({
+        lines: projection.testsChecksLines,
         section: "testsChecks",
         type: "section.replace",
         updatedAt,

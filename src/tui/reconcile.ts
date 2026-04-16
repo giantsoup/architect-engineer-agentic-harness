@@ -49,12 +49,13 @@ export interface TuiLiveOverlay {
 }
 
 export interface TuiProjection {
-  architectLines: readonly string[];
-  diffLines: readonly string[];
-  engineerLines: readonly string[];
+  activeCommandLines: readonly string[];
+  currentGoalLines: readonly string[];
+  executionLogLines: readonly string[];
   queueItems: readonly TuiQueueItem[];
+  reasoningHistoryLines: readonly string[];
   statusText: string;
-  testsLines: readonly string[];
+  testsChecksLines: readonly string[];
 }
 
 export interface TuiReconcileContext {
@@ -64,11 +65,11 @@ export interface TuiReconcileContext {
   task?: string | undefined;
 }
 
-const DIFF_PANE_LINE_LIMIT = 160;
+const ARCHITECT_HISTORY_LINE_LIMIT = 10;
+const ENGINEER_EXECUTION_LOG_LINE_LIMIT = 18;
 const HYDRATED_LOG_ENTRY_LIMIT = 600;
 const LIVE_COMMAND_CHUNK_LINE_LIMIT = 12;
 const LIVE_COMMAND_OUTPUT_LINE_LIMIT = 120;
-const PANE_EXCERPT_LINE_LIMIT = 6;
 const TEST_OUTPUT_LINE_LIMIT = 18;
 
 export function createEmptyTuiLiveOverlay(): TuiLiveOverlay {
@@ -323,12 +324,22 @@ export function buildTuiProjection(
   }
 
   return {
-    architectLines: buildArchitectPane(context),
-    diffLines: buildDiffPane(context.artifacts.diff),
-    engineerLines: buildEngineerPane(context, requiredCheckCommand),
+    activeCommandLines: buildActiveCommandSection(
+      context,
+      requiredCheckCommand,
+    ),
+    currentGoalLines: buildCurrentGoalSection(context, requiredCheckCommand),
+    executionLogLines: buildEngineerExecutionLogSection(
+      context,
+      requiredCheckCommand,
+    ),
     queueItems: synthesizeQueueItems(context, requiredCheckCommand),
+    reasoningHistoryLines: buildReasoningHistorySection(
+      context,
+      requiredCheckCommand,
+    ),
     statusText: buildStatusText(context),
-    testsLines: buildTestsPane(context, requiredCheckCommand),
+    testsChecksLines: buildTestsPane(context, requiredCheckCommand),
   };
 }
 
@@ -409,40 +420,54 @@ export function buildHydratedLogEntries(context: TuiReconcileContext): {
   };
 }
 
-function buildArchitectPane(context: TuiReconcileContext): readonly string[] {
+function buildCurrentGoalSection(
+  context: TuiReconcileContext,
+  requiredCheckCommand: string | undefined,
+): readonly string[] {
   const inspection = context.inspection;
-  const latestArchitectActivity = findLatestRoleSummary(
-    context.artifacts.events,
-    "architect",
-  );
-  const currentArchitectModel = context.overlay.modelRequests.architect;
-  const latestRetry = context.overlay.latestRetryByRole.architect;
+  const objective =
+    inspection?.currentObjective ??
+    context.task ??
+    "Waiting for architect state.";
+  const handoffLine = resolveArchitectHandoffLine(context);
 
   return [
-    "Architect Summary",
+    objective,
     "",
-    `Status: ${inspection?.status ?? "starting"}`,
     `Phase: ${inspection?.phase ?? "Preparing"}`,
-    `Objective: ${inspection?.currentObjective ?? context.task ?? "Waiting for run activity."}`,
+    `Active role: ${inspection?.activeRole ?? "system"}`,
     `Latest decision: ${inspection?.latestDecision ?? "No architect decision recorded yet."}`,
-    `Agent: ${formatAgentStatus(context.overlay.agentStatus.architect, latestArchitectActivity)}`,
-    `Model: ${formatModelStatus(currentArchitectModel, latestRetry)}`,
-    "",
-    "Architect plan:",
-    ...indentExcerpt(
-      context.artifacts.architectPlan,
-      "No architect plan recorded yet.",
-    ),
-    "",
-    "Architect review:",
-    ...indentExcerpt(
-      context.artifacts.architectReview,
-      "No architect review recorded yet.",
-    ),
+    `Status: ${inspection?.status ?? "starting"}`,
+    `Command status: ${inspection?.commandStatus ?? fallbackCommandStatus(requiredCheckCommand)}`,
+    `Elapsed: ${formatElapsedMs(inspection?.elapsedMs)}`,
+    `Architect state: ${handoffLine ?? "Awaiting architect planning activity."}`,
   ];
 }
 
-function buildEngineerPane(
+function buildReasoningHistorySection(
+  context: TuiReconcileContext,
+  requiredCheckCommand: string | undefined,
+): readonly string[] {
+  const lines = buildArchitectReasoningTimeline(context, requiredCheckCommand);
+
+  if (lines.length === 0) {
+    return [
+      "No architect reasoning recorded yet.",
+      "Observable milestones such as plan, review, and handoff will appear here.",
+    ];
+  }
+
+  const boundedLines = boundLines(lines, ARCHITECT_HISTORY_LINE_LIMIT);
+
+  return boundedLines.dropped > 0
+    ? [
+        `(${boundedLines.dropped} earlier architect updates hidden)`,
+        ...boundedLines.lines,
+      ]
+    : boundedLines.lines;
+}
+
+function buildActiveCommandSection(
   context: TuiReconcileContext,
   requiredCheckCommand: string | undefined,
 ): readonly string[] {
@@ -459,31 +484,40 @@ function buildEngineerPane(
     context.artifacts.checks?.checks.at(-1);
 
   return [
-    "Engineer Summary",
-    "",
     `Task: ${inspection?.task ?? resolveTaskSummary(context)}`,
-    `Status: ${inspection?.status ?? "starting"}`,
+    `State: ${runningCommand === undefined ? "idle" : "running"}`,
     `Current command: ${runningCommand?.command ?? "idle"}`,
+    `Last command: ${lastCommand?.command ?? "No command recorded yet."}`,
     `Access mode: ${runningCommand?.accessMode ?? lastCommand?.accessMode ?? "n/a"}`,
     `Working dir: ${runningCommand?.workingDirectory ?? lastCommand?.workingDirectory ?? "."}`,
     `Last tool: ${lastTool ?? "No tool recorded yet."}`,
     `Last exit code: ${lastCommand?.exitCode ?? "n/a"}`,
     `Check status: ${formatCheckLine(latestCheck, requiredCheckCommand)}`,
+    `Command status: ${inspection?.commandStatus ?? fallbackCommandStatus(requiredCheckCommand)}`,
   ];
 }
 
-function buildDiffPane(diff: string): readonly string[] {
-  const normalized = splitLines(diff);
-  const boundedDiff = boundLines(normalized, DIFF_PANE_LINE_LIMIT, "head");
+function buildEngineerExecutionLogSection(
+  context: TuiReconcileContext,
+  requiredCheckCommand: string | undefined,
+): readonly string[] {
+  const entries = buildEngineerExecutionTimeline(context, requiredCheckCommand);
 
-  return boundedDiff.lines.length > 0
-    ? boundedDiff.dropped > 0
-      ? [
-          `(${boundedDiff.dropped} additional diff lines hidden to keep the pane responsive)`,
-          ...boundedDiff.lines,
-        ]
-      : boundedDiff.lines
-    : ["No diff artifact recorded yet."];
+  if (entries.length === 0) {
+    return [
+      "No engineer execution recorded yet.",
+      "Engineer commands, tool calls, and check activity will appear here.",
+    ];
+  }
+
+  const boundedEntries = boundLines(entries, ENGINEER_EXECUTION_LOG_LINE_LIMIT);
+
+  return boundedEntries.dropped > 0
+    ? [
+        `(${boundedEntries.dropped} earlier engineer log lines hidden)`,
+        ...boundedEntries.lines,
+      ]
+    : boundedEntries.lines;
 }
 
 function buildTestsPane(
@@ -548,6 +582,190 @@ function buildStatusText(context: TuiReconcileContext): string {
   }
 
   return "Waiting for live harness activity.";
+}
+
+function buildArchitectReasoningTimeline(
+  context: TuiReconcileContext,
+  requiredCheckCommand: string | undefined,
+): string[] {
+  const entries: Array<{ summary: string; timestamp: string }> = [];
+  let sawPlanEvent = false;
+  let sawReviewEvent = false;
+  let sawHandoff = false;
+
+  for (const event of context.artifacts.events) {
+    const timestamp = getOptionalString(event, "timestamp");
+    const type = getOptionalString(event, "type");
+
+    if (timestamp === undefined || type === undefined) {
+      continue;
+    }
+
+    let summary: string | undefined;
+
+    switch (type) {
+      case "architect-engineer-run-started":
+        summary =
+          requiredCheckCommand === undefined
+            ? "Run started."
+            : `Run started. Required check: ${requiredCheckCommand}.`;
+        break;
+      case "architect-action-selected":
+        summary =
+          getOptionalString(event, "summary") ?? "Architect action recorded.";
+        break;
+      case "architect-plan-created":
+        sawPlanEvent = true;
+        summary = `Plan created: ${getOptionalString(event, "summary") ?? summarizeMarkdownArtifact(context.artifacts.architectPlan, "Plan artifact updated.")}`;
+        break;
+      case "architect-review-created":
+        sawReviewEvent = true;
+        summary = `Review recorded: ${getOptionalString(event, "summary") ?? summarizeMarkdownArtifact(context.artifacts.architectReview, "Review artifact updated.")}`;
+        break;
+      case "engineer-run-started":
+        sawHandoff = true;
+        summary = "Handed off to engineer.";
+        break;
+      default:
+        summary = undefined;
+        break;
+    }
+
+    if (summary !== undefined) {
+      entries.push({ summary, timestamp });
+    }
+  }
+
+  if (!sawPlanEvent && context.artifacts.architectPlan.trim().length > 0) {
+    entries.push({
+      summary: `Plan available: ${summarizeMarkdownArtifact(context.artifacts.architectPlan, "Architect plan recorded.")}`,
+      timestamp: context.inspection?.updatedAt ?? new Date().toISOString(),
+    });
+  }
+
+  if (!sawReviewEvent && context.artifacts.architectReview.trim().length > 0) {
+    entries.push({
+      summary: `Review available: ${summarizeMarkdownArtifact(context.artifacts.architectReview, "Architect review recorded.")}`,
+      timestamp: context.inspection?.updatedAt ?? new Date().toISOString(),
+    });
+  }
+
+  if (
+    !sawHandoff &&
+    context.inspection?.activeRole === "engineer" &&
+    context.inspection.status === "running"
+  ) {
+    entries.push({
+      summary: "Handed off to engineer.",
+      timestamp: context.inspection.updatedAt,
+    });
+  }
+
+  if (context.inspection?.latestDecision !== undefined) {
+    entries.push({
+      summary: `Latest decision: ${context.inspection.latestDecision}`,
+      timestamp: context.inspection.updatedAt,
+    });
+  }
+
+  const architectAgent = context.overlay.agentStatus.architect;
+
+  if (architectAgent !== undefined) {
+    entries.push({
+      summary: `Architect ${architectAgent.phase} ${architectAgent.status}: ${architectAgent.summary}`,
+      timestamp: architectAgent.timestamp,
+    });
+  }
+
+  if (context.inspection !== undefined) {
+    entries.push({
+      summary: `State: ${context.inspection.phase} / ${context.inspection.activeRole} / ${context.inspection.status}`,
+      timestamp: context.inspection.updatedAt,
+    });
+  }
+
+  return dedupeTimelineLines(
+    entries
+      .sort(
+        (left, right) =>
+          Date.parse(left.timestamp) - Date.parse(right.timestamp),
+      )
+      .map((entry) => formatTimelineLine(entry.timestamp, entry.summary)),
+  );
+}
+
+function buildEngineerExecutionTimeline(
+  context: TuiReconcileContext,
+  requiredCheckCommand: string | undefined,
+): string[] {
+  const entries: Array<{ summary: string; timestamp: string }> = [];
+
+  for (const event of context.artifacts.events) {
+    const entry = toEngineerExecutionTimelineEntry(event);
+
+    if (entry !== undefined) {
+      entries.push(entry);
+    }
+  }
+
+  for (const command of context.artifacts.commandLog) {
+    if (command.role !== "engineer") {
+      continue;
+    }
+
+    entries.push({
+      summary: `command:end ${command.command} (${formatExitSuffix(command.exitCode, command.status)})`,
+      timestamp: command.timestamp,
+    });
+  }
+
+  const latestCheck =
+    context.overlay.latestCheck?.check ??
+    context.artifacts.checks?.checks.at(-1);
+  const checkTimestamp =
+    context.overlay.latestCheck?.timestamp ?? context.inspection?.updatedAt;
+
+  if (latestCheck !== undefined && checkTimestamp !== undefined) {
+    entries.push({
+      summary: `check ${latestCheck.status}${latestCheck.exitCode === undefined ? "" : ` (exit ${latestCheck.exitCode})`}: ${latestCheck.command ?? requiredCheckCommand ?? latestCheck.name}`,
+      timestamp: checkTimestamp,
+    });
+  }
+
+  const runningCommand = context.overlay.currentCommands.engineer;
+  const lastCommand =
+    context.overlay.lastCommands.engineer ??
+    getLatestCommandForRole(context.artifacts.commandLog, "engineer");
+
+  if (runningCommand !== undefined) {
+    entries.push({
+      summary: `command:start ${runningCommand.command}`,
+      timestamp: runningCommand.startedAt,
+    });
+
+    for (const line of runningCommand.output) {
+      entries.push({
+        summary: `${line.stream} ${line.text}`,
+        timestamp: line.timestamp,
+      });
+    }
+  }
+
+  if (lastCommand !== undefined) {
+    entries.push({
+      summary: `command:end ${lastCommand.command} (${formatExitSuffix(lastCommand.exitCode, lastCommand.status)})`,
+      timestamp: lastCommand.timestamp,
+    });
+  }
+
+  return dedupeTimelineLines(
+    entries
+      .sort(
+        (left, right) =>
+          Date.parse(left.timestamp) - Date.parse(right.timestamp),
+      )
+      .map((entry) => formatTimelineLine(entry.timestamp, entry.summary)),
+  );
 }
 
 function synthesizeQueueItems(
@@ -742,58 +960,116 @@ function findLatestToolName(
   return undefined;
 }
 
-function findLatestRoleSummary(
-  events: readonly JsonRecord[],
-  role: HarnessRole,
+function fallbackCommandStatus(
+  requiredCheckCommand: string | undefined,
+): string {
+  return requiredCheckCommand === undefined
+    ? "Waiting for run activity."
+    : `Waiting for ${requiredCheckCommand}`;
+}
+
+function resolveArchitectHandoffLine(
+  context: TuiReconcileContext,
 ): string | undefined {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
+  if (context.inspection?.activeRole === "engineer") {
+    return "Handed off to engineer.";
+  }
 
-    if (event === undefined) {
-      continue;
-    }
+  if (context.overlay.agentStatus.engineer?.status === "active") {
+    return "Handed off to engineer.";
+  }
 
-    const type = getOptionalString(event, "type");
-
-    if (
-      role === "architect" &&
-      (type === "architect-action-selected" ||
-        type === "architect-plan-created" ||
-        type === "architect-review-created")
-    ) {
-      return getOptionalString(event, "summary");
-    }
-
-    if (role === "engineer" && type === "engineer-action-selected") {
-      return getOptionalString(event, "summary");
-    }
+  if (context.overlay.agentStatus.architect?.status === "active") {
+    return "Architect is active.";
   }
 
   return undefined;
 }
 
-function formatAgentStatus(
-  agentStatus: HarnessEvent<"agent:update"> | undefined,
-  latestSummary: string | undefined,
-): string {
-  if (agentStatus === undefined) {
-    return latestSummary ?? "Waiting for architect activity.";
-  }
+function summarizeMarkdownArtifact(markdown: string, fallback: string): string {
+  const summaryLine = splitLines(markdown).find(
+    (line) => !/^(#|[-*]\s*$)/u.test(line.trim()),
+  );
 
-  return `${agentStatus.phase} ${agentStatus.status}${latestSummary === undefined ? "" : ` | ${latestSummary}`}`;
+  return summaryLine ?? fallback;
 }
 
-function formatModelStatus(
-  request: HarnessEvent<"model:request"> | undefined,
-  retry: HarnessEvent<"model:retry"> | undefined,
-): string {
-  if (request === undefined) {
-    return retry === undefined
-      ? "No in-flight model request."
-      : `Retry scheduled: ${retry.message}`;
+function appendUniqueLine(lines: string[], line: string): void {
+  if (
+    !lines.some(
+      (existingLine) => normalizeText(existingLine) === normalizeText(line),
+    )
+  ) {
+    lines.push(line);
+  }
+}
+
+function dedupeTimelineLines(lines: readonly string[]): string[] {
+  const deduped: string[] = [];
+
+  for (const line of lines) {
+    appendUniqueLine(deduped, line);
   }
 
-  return `${request.provider}/${request.model} attempt ${request.attempt}`;
+  return deduped;
+}
+
+function formatTimelineLine(timestamp: string, summary: string): string {
+  return `${formatClock(timestamp)} ${summary}`;
+}
+
+function toEngineerExecutionTimelineEntry(
+  event: JsonRecord,
+): { summary: string; timestamp: string } | undefined {
+  const timestamp = getOptionalString(event, "timestamp");
+  const type = getOptionalString(event, "type");
+
+  if (timestamp === undefined || type === undefined) {
+    return undefined;
+  }
+
+  switch (type) {
+    case "engineer-run-started":
+      return {
+        summary: "engineer-run-started Engineer task started.",
+        timestamp,
+      };
+    case "engineer-action-selected":
+      return {
+        summary:
+          getOptionalString(event, "summary") ??
+          "engineer-action-selected Engineer action recorded.",
+        timestamp,
+      };
+    case "tool-call":
+      return getOptionalString(event, "role") === "engineer"
+        ? {
+            summary: `tool-call ${getOptionalString(event, "toolName") ?? "tool"} ${getOptionalString(event, "status") ?? "completed"}`,
+            timestamp,
+          }
+        : undefined;
+    default:
+      return undefined;
+  }
+}
+
+function formatExitSuffix(
+  exitCode: number | null,
+  status: CommandLogRecord["status"] | undefined,
+): string {
+  if (status === "timed-out") {
+    return "timed out";
+  }
+
+  if (status === "cancelled") {
+    return "cancelled";
+  }
+
+  if (status === "failed-to-start") {
+    return "failed to start";
+  }
+
+  return exitCode === null ? "failed" : `exit ${exitCode}`;
 }
 
 function resolveTaskSummary(context: TuiReconcileContext): string {
@@ -1067,26 +1343,6 @@ function splitLines(value: string | undefined): string[] {
     .filter((line) => line.length > 0);
 }
 
-function indentExcerpt(markdown: string, fallback: string): string[] {
-  const excerptLines = splitLines(markdown).slice(0, PANE_EXCERPT_LINE_LIMIT);
-
-  if (excerptLines.length === 0) {
-    return [`  ${fallback}`];
-  }
-
-  const hiddenLineCount = Math.max(
-    0,
-    splitLines(markdown).length - excerptLines.length,
-  );
-
-  return hiddenLineCount > 0
-    ? [
-        ...excerptLines.map((line) => `  ${line}`),
-        `  ... (${hiddenLineCount} additional lines omitted)`,
-      ]
-    : excerptLines.map((line) => `  ${line}`);
-}
-
 function toLogEntry(
   timestamp: string,
   source: string,
@@ -1130,6 +1386,28 @@ function formatDurationMs(durationMs: number | undefined): string {
   }
 
   return `${durationMs}ms`;
+}
+
+function formatElapsedMs(elapsedMs: number | undefined): string {
+  if (elapsedMs === undefined) {
+    return "n/a";
+  }
+
+  if (elapsedMs < 1_000) {
+    return `${elapsedMs}ms`;
+  }
+
+  return `${(elapsedMs / 1_000).toFixed(elapsedMs >= 10_000 ? 0 : 1)}s`;
+}
+
+function formatClock(value: string): string {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toISOString().slice(11, 19);
 }
 
 function includesNormalized(left: string, right: string): boolean {

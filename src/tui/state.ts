@@ -401,10 +401,10 @@ function createInitialSectionSnapshot(
     case "reasoningHistory":
       return {
         lines: [
-          "Placeholder",
+          "Architect timeline",
           "",
-          "Architect reasoning history stays explicit in Phase 1.",
-          "Live reasoning chronology will be wired in a later issue.",
+          "Observable planning, review, and handoff milestones appear here.",
+          "The TUI stays observational and does not expose hidden chain of thought.",
         ],
         updatedAt,
       };
@@ -420,9 +420,9 @@ function createInitialSectionSnapshot(
     case "executionLog":
       return {
         lines: [
-          "Placeholder",
+          "Engineer log",
           "",
-          "Execution log content is synthesized from the bounded log buffer.",
+          "Engineer commands, tool calls, and required checks appear here.",
         ],
         updatedAt,
       };
@@ -456,8 +456,8 @@ function createLivePlaceholderLines(
       return ["Waiting for architect state.", `Requested task: ${task}`];
     case "reasoningHistory":
       return [
-        "Reasoning history placeholder.",
-        "Detailed architect chronology is not wired into Phase 1 yet.",
+        "No architect reasoning recorded yet.",
+        "Observable planning, review, and handoff milestones will appear here.",
       ];
     case "taskQueue":
       return [
@@ -466,8 +466,8 @@ function createLivePlaceholderLines(
       ];
     case "executionLog":
       return [
-        "Execution log placeholder.",
-        "Live command and runtime log lines will appear here.",
+        "No engineer execution recorded yet.",
+        "Engineer commands, tool calls, and check activity will appear here.",
       ];
     case "activeCommand":
       return [

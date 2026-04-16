@@ -46,10 +46,22 @@ describe("tui reconcile", () => {
     await settle();
 
     expect(store.getState().sections.currentGoal.lines).toContain(
-      "  # Architect Plan",
+      "Implement the live reconcile path.",
+    );
+    expect(store.getState().sections.currentGoal.lines).toContain(
+      "Architect state: Handed off to engineer.",
+    );
+    expect(store.getState().sections.reasoningHistory.lines).toContain(
+      "02:00:00 Plan created: Shape the embedded architect sections.",
+    );
+    expect(store.getState().sections.reasoningHistory.lines).toContain(
+      "02:00:01 State: Execution / engineer / running",
     );
     expect(store.getState().sections.activeCommand.lines).toContain(
       "Last tool: file.write",
+    );
+    expect(store.getState().sections.executionLog.lines).toContain(
+      "02:00:01 tool-call file.write completed",
     );
     expect(store.getState().queueItems.map((item) => item.title)).toEqual([
       "Update the TUI bridge.",
@@ -85,6 +97,12 @@ describe("tui reconcile", () => {
     );
     expect(store.getState().sections.activeCommand.lines).toContain(
       "Last exit code: 1",
+    );
+    expect(store.getState().sections.reasoningHistory.lines).toContain(
+      "02:00:03 Review available: - Force refresh should rehydrate from disk.",
+    );
+    expect(store.getState().sections.reasoningHistory.lines).toContain(
+      "02:00:03 State: Failed / system / failed",
     );
     expect(store.getState().statusText).toContain(
       "Required check failed (exit 1): npm test",
@@ -235,6 +253,11 @@ function createArtifactSnapshotOne(): TuiArtifactSnapshot {
     ].join("\n"),
     events: [
       {
+        summary: "Shape the embedded architect sections.",
+        timestamp: "2026-04-16T02:00:00.400Z",
+        type: "architect-plan-created",
+      },
+      {
         requiredCheckCommand: "npm test",
         timestamp: "2026-04-16T02:00:00.500Z",
         type: "engineer-run-started",
@@ -299,6 +322,11 @@ function createArtifactSnapshotTwo(): TuiArtifactSnapshot {
       "3. Summarize the result.",
     ].join("\n"),
     events: [
+      {
+        summary: "Shape the embedded architect sections.",
+        timestamp: "2026-04-16T02:00:00.400Z",
+        type: "architect-plan-created",
+      },
       {
         requiredCheckCommand: "npm test",
         timestamp: "2026-04-16T02:00:00.500Z",

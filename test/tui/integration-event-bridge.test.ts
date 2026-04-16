@@ -64,6 +64,16 @@ describe("tui live event bridge", () => {
     expect(store.getState().sections.activeCommand.lines).toContain(
       "Working dir: packages/app",
     );
+    expect(store.getState().sections.executionLog.lines).toContain(
+      "01:00:01 command:start npm test",
+    );
+    expect(
+      store
+        .getState()
+        .sections.executionLog.lines.some((line) =>
+          line.includes("stdout failing test output"),
+        ),
+    ).toBe(true);
     expect(
       store
         .getState()
@@ -156,6 +166,13 @@ describe("tui live event bridge", () => {
     expect(store.getState().sections.activeCommand.lines).toContain(
       "Check status: failed (exit 1): npm test",
     );
+    expect(
+      store
+        .getState()
+        .sections.executionLog.lines.some((line) =>
+          line.includes("command:end npm test (exit 1)"),
+        ),
+    ).toBe(true);
 
     await liveData.stop();
   });
