@@ -42,7 +42,9 @@ describe("tui live event bridge", () => {
     expect(
       store
         .getState()
-        .sections.executionLog.lines.some((line) => line.includes("file.read")),
+        .cards.engineer.lines.some((line: string) =>
+          line.includes("file.read"),
+        ),
     ).toBe(false);
 
     eventBus.emit({
@@ -67,30 +69,29 @@ describe("tui live event bridge", () => {
     expect(
       store
         .getState()
-        .sections.activeCommand.lines.some(
-          (line) => line.includes("Current") && line.includes("npm test"),
+        .cards.engineer.lines.some(
+          (line: string) => line.includes("State") && line.includes("running"),
         ),
     ).toBe(true);
     expect(
       store
         .getState()
-        .sections.activeCommand.lines.some((line) =>
+        .cards.engineer.lines.some(
+          (line: string) => line.includes("Tool") && line.includes("npm test"),
+        ),
+    ).toBe(true);
+    expect(
+      store
+        .getState()
+        .cards.engineer.lines.some((line: string) =>
           line.includes("packages/app"),
         ),
     ).toBe(true);
     expect(
       store
         .getState()
-        .sections.executionLog.lines.some(
-          (line) => line.includes("RUN") && line.includes("npm test"),
-        ),
-    ).toBe(true);
-    expect(
-      store
-        .getState()
-        .sections.executionLog.lines.some(
-          (line) =>
-            line.includes("STDOUT") && line.includes("failing test output"),
+        .cards.engineer.lines.some((line: string) =>
+          line.includes("failing test output"),
         ),
     ).toBe(true);
     expect(
@@ -100,15 +101,6 @@ describe("tui live event bridge", () => {
           entry.summary.includes("stdout: failing test output"),
         ),
     ).toBe(true);
-    expect(
-      store
-        .getState()
-        .sections.testsChecks.lines.some(
-          (line) =>
-            line.includes("stdout") && line.includes("failing test output"),
-        ),
-    ).toBe(true);
-
     snapshot = {
       ...snapshot,
       diff: "diff --git a/src/tui/app.ts b/src/tui/app.ts\n+live bridge\n",
@@ -184,31 +176,26 @@ describe("tui live event bridge", () => {
     expect(
       store
         .getState()
-        .sections.testsChecks.lines.some(
-          (line) => line.includes("State") && line.includes("failed"),
+        .cards.engineer.lines.some(
+          (line: string) => line.includes("State") && line.includes("failed"),
         ),
     ).toBe(true);
     expect(
       store
         .getState()
-        .sections.testsChecks.lines.some(
-          (line) => line.includes("Exit") && line.includes("1"),
-        ),
-    ).toBe(true);
-    expect(
-      store
-        .getState()
-        .sections.activeCommand.lines.some(
-          (line) =>
-            line.includes("Check") &&
+        .cards.engineer.lines.some(
+          (line: string) =>
+            line.includes("Result") &&
             line.includes("failed (exit 1): npm test"),
         ),
     ).toBe(true);
     expect(
       store
         .getState()
-        .sections.executionLog.lines.some(
-          (line) => line.includes("CMD") && line.includes("npm test (exit 1)"),
+        .cards.engineer.lines.some(
+          (line: string) =>
+            line.includes("Tool") &&
+            (line.includes("command.execute") || line.includes("npm test")),
         ),
     ).toBe(true);
 
@@ -226,6 +213,9 @@ describe("tui live event bridge", () => {
 
     expect(store.getState().runActive).toBe(false);
     expect(store.getState().runStopRequested).toBe(false);
+    expect(store.getState().statusText).toContain(
+      "stopped | Run cancelled by user request.",
+    );
 
     await liveData.stop();
   });

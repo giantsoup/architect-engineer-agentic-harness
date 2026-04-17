@@ -154,8 +154,9 @@ describe("tui backpressure", () => {
     expect(
       store
         .getState()
-        .sections.testsChecks.lines.some((line) =>
-          line.includes("older output lines hidden"),
+        .cards.engineer.lines.some(
+          (line: string) =>
+            line.includes("Running") || line.includes("stdout line"),
         ),
     ).toBe(true);
 

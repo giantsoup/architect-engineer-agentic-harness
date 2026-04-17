@@ -1,7 +1,7 @@
 import type { BlessedBox } from "../neo-blessed.js";
 import type { TuiRect } from "../layout.js";
 import type { TuiState } from "../state.js";
-import { formatThemeModeLabel, type TuiTheme } from "../theme.js";
+import type { TuiTheme } from "../theme.js";
 
 export function renderHelpModalWidget(options: {
   box: BlessedBox;
@@ -22,25 +22,22 @@ export function renderHelpModalWidget(options: {
   }
   options.box.setContent(
     [
-      "Role Dashboard",
+      "Current-State Dashboard",
       "",
-      "Tab / Shift-Tab : move focus in wide mode or swap roles in narrow mode",
-      "Up / Down : scroll the focused role panel",
-      "PgUp / PgDn : scroll faster within the focused role panel",
-      "f : toggle Engineer execution-log follow mode",
+      "The TUI shows the current task, state, latest activity, and current or last execution result for each role.",
       ...(!options.state.demoMode && options.state.runActive
         ? ["s : gracefully stop the current run and keep the TUI open"]
         : []),
-      "r : reset scroll state and close help",
+      "Tab / Shift-Tab : move focus in wide mode or swap roles in narrow mode",
       "? : toggle this help modal",
       "q / Ctrl-C : close the TUI shell without cancelling the run",
       "",
       "Layout",
       "",
-      `Theme: ${formatThemeModeLabel(options.theme)}`,
-      "Wide terminals keep Architect context beside Engineer execution.",
+      "Wide terminals keep Architect beside Engineer with compact cards.",
       "Narrow terminals show one role at a time with explicit Tab switching.",
-      "Sections stay explicit when data is not available yet; they do not collapse to blank space.",
+      "Empty states stay explicit instead of collapsing to blank space.",
+      "History stays in the dossier; the TUI only surfaces current state.",
       "If the TUI fails, the shell tears down cleanly and the run continues.",
     ].join("\n"),
   );

@@ -45,71 +45,47 @@ describe("tui reconcile", () => {
     liveData.start();
     await settle();
 
+    const initialState = store.getState();
+
     expect(
-      store
-        .getState()
-        .sections.currentGoal.lines.some((line) =>
-          line.includes("Implement the live reconcile path."),
-        ),
+      initialState.cards.architect.lines.some((line: string) =>
+        line.includes("Keep the change additive."),
+      ),
     ).toBe(true);
     expect(
-      store
-        .getState()
-        .sections.currentGoal.lines.some((line) =>
-          line.includes("Handed off to engineer."),
-        ),
+      initialState.cards.architect.lines.some((line: string) =>
+        line.includes("handoff / waiting"),
+      ),
     ).toBe(true);
     expect(
-      store
-        .getState()
-        .sections.reasoningHistory.lines.some(
-          (line) =>
-            line.includes("PLAN") &&
-            line.includes("Shape the embedded architect sections."),
-        ),
+      initialState.cards.architect.lines.some((line: string) =>
+        line.includes("Hydrate from inspection and artifacts."),
+      ),
     ).toBe(true);
     expect(
-      store
-        .getState()
-        .sections.reasoningHistory.lines.some(
-          (line) =>
-            line.includes("STATE") &&
-            line.includes("Execution / engineer / running"),
-        ),
+      initialState.cards.engineer.lines.some((line: string) =>
+        line.includes("Implement the live reconcile path."),
+      ),
     ).toBe(true);
     expect(
-      store
-        .getState()
-        .sections.activeCommand.lines.some((line) =>
-          line.includes("file.write"),
-        ),
+      initialState.cards.engineer.lines.some((line: string) =>
+        line.includes("passed"),
+      ),
     ).toBe(true);
     expect(
-      store
-        .getState()
-        .sections.executionLog.lines.some(
-          (line) =>
-            line.includes("TOOL") && line.includes("file.write completed"),
-        ),
-    ).toBe(true);
-    expect(store.getState().queueItems.map((item) => item.title)).toEqual([
-      "Update the TUI bridge.",
-      "Run `npm test`.",
-      "Summarize the result.",
-    ]);
-    expect(
-      store
-        .getState()
-        .sections.testsChecks.lines.some(
-          (line) => line.includes("Exit") && line.includes("0"),
-        ),
+      initialState.cards.engineer.lines.some((line: string) =>
+        line.includes("npm test"),
+      ),
     ).toBe(true);
     expect(
-      store
-        .getState()
-        .log.entries.some((entry) =>
-          entry.summary.includes("file.write completed"),
-        ),
+      initialState.cards.engineer.lines.some((line: string) =>
+        line.includes("passed (exit 0): npm test"),
+      ),
+    ).toBe(true);
+    expect(
+      initialState.log.entries.some((entry) =>
+        entry.summary.includes("file.write completed"),
+      ),
     ).toBe(true);
 
     inspection = createInspection({
@@ -125,49 +101,28 @@ describe("tui reconcile", () => {
 
     await liveData.forceRefresh();
 
+    const refreshedState = store.getState();
+
     expect(
-      store
-        .getState()
-        .sections.testsChecks.lines.some(
-          (line) => line.includes("State") && line.includes("failed"),
-        ),
+      refreshedState.cards.architect.lines.some((line: string) =>
+        line.includes("Force refresh after the diff and checks changed."),
+      ),
     ).toBe(true);
     expect(
-      store
-        .getState()
-        .sections.testsChecks.lines.some(
-          (line) => line.includes("Exit") && line.includes("1"),
-        ),
+      refreshedState.cards.engineer.lines.some((line: string) =>
+        line.includes("failed"),
+      ),
     ).toBe(true);
     expect(
-      store
-        .getState()
-        .sections.activeCommand.lines.some(
-          (line) => line.includes("Result") && line.includes("exit 1"),
-        ),
+      refreshedState.cards.engineer.lines.some((line: string) =>
+        line.includes("exit 1"),
+      ),
     ).toBe(true);
-    expect(
-      store
-        .getState()
-        .sections.reasoningHistory.lines.some(
-          (line) =>
-            line.includes("REVIEW") &&
-            line.includes("Force refresh should rehydrate from disk."),
-        ),
-    ).toBe(true);
-    expect(
-      store
-        .getState()
-        .sections.reasoningHistory.lines.some(
-          (line) =>
-            line.includes("STATE") && line.includes("Failed / system / failed"),
-        ),
-    ).toBe(true);
-    expect(store.getState().statusText).toContain(
+    expect(refreshedState.statusText).toContain(
       "Required check failed (exit 1): npm test",
     );
-    expect(store.getState().runActive).toBe(false);
-    expect(store.getState().runStopRequested).toBe(false);
+    expect(refreshedState.runActive).toBe(false);
+    expect(refreshedState.runStopRequested).toBe(false);
 
     await liveData.stop();
   });
@@ -270,17 +225,15 @@ describe("tui reconcile", () => {
     expect(
       store
         .getState()
-        .sections.currentGoal.lines.some((line) =>
-          line.includes("Handed off to engineer."),
+        .cards.architect.lines.some((line: string) =>
+          line.includes("handoff / waiting"),
         ),
     ).toBe(true);
     expect(
       store
         .getState()
-        .sections.reasoningHistory.lines.some(
-          (line) =>
-            line.includes("HANDOFF") &&
-            line.includes("Handed off to engineer."),
+        .cards.architect.lines.some((line: string) =>
+          line.includes("The shell is ready for execution."),
         ),
     ).toBe(true);
 

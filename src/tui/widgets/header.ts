@@ -1,24 +1,19 @@
 import type { BlessedBox } from "../neo-blessed.js";
-import type { TuiLayout, TuiRect } from "../layout.js";
+import type { TuiRect } from "../layout.js";
 import type { TuiState } from "../state.js";
-import {
-  formatThemeModeLabel,
-  TUI_ROLE_LABELS,
-  type TuiTheme,
-} from "../theme.js";
+import { TUI_ROLE_LABELS, type TuiTheme } from "../theme.js";
 
 export function renderHeaderWidget(options: {
   box: BlessedBox;
-  layout: TuiLayout;
   rect: TuiRect;
   state: TuiState;
   theme: TuiTheme;
 }): void {
   const runMode = options.state.demoMode ? "demo" : "live";
-  const roleContext =
-    options.layout.mode === "narrow"
-      ? `showing ${TUI_ROLE_LABELS[options.state.focusRole]}`
-      : "Architect + Engineer";
+  const activeRole =
+    options.state.activeRole === "system"
+      ? "System"
+      : TUI_ROLE_LABELS[options.state.activeRole];
 
   options.box.top = options.rect.top;
   options.box.left = options.rect.left;
@@ -31,7 +26,7 @@ export function renderHeaderWidget(options: {
   }
   options.box.setContent(
     truncateLine(
-      `Run ${options.state.runLabel} | ${runMode} | ${roleContext} | ${formatThemeModeLabel(options.theme)}`,
+      `Run ${options.state.runLabel} | ${runMode} | ${options.state.phaseText} | ${activeRole}`,
       options.rect.width,
     ),
   );

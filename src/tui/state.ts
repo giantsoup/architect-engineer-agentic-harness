@@ -1,22 +1,7 @@
 export const TUI_ROLE_ORDER = ["architect", "engineer"] as const;
 
 export type TuiRoleId = (typeof TUI_ROLE_ORDER)[number];
-
-export const TUI_SECTION_ORDER = [
-  "currentGoal",
-  "reasoningHistory",
-  "taskQueue",
-  "executionLog",
-  "activeCommand",
-  "testsChecks",
-] as const;
-
-export type TuiSectionId = (typeof TUI_SECTION_ORDER)[number];
-
-export const TUI_ROLE_SECTIONS: Record<TuiRoleId, readonly TuiSectionId[]> = {
-  architect: ["currentGoal", "reasoningHistory", "taskQueue"],
-  engineer: ["executionLog", "activeCommand", "testsChecks"],
-};
+export type TuiActiveRole = TuiRoleId | "system";
 
 export type TuiQueueItemStatus = "active" | "blocked" | "done" | "pending";
 
@@ -37,15 +22,16 @@ export interface TuiLogEntry {
   timestamp: string;
 }
 
-export interface TuiSectionSnapshot {
+export interface TuiRoleCardSnapshot {
   lines: readonly string[];
   updatedAt: string;
 }
 
 export interface TuiState {
+  activeRole: TuiActiveRole;
+  cards: Record<TuiRoleId, TuiRoleCardSnapshot>;
   demoMode: boolean;
   focusRole: TuiRoleId;
-  followMode: boolean;
   helpOpen: boolean;
   log: {
     dropped: number;
@@ -53,12 +39,10 @@ export interface TuiState {
     limit: number;
     nextId: number;
   };
-  queueItems: readonly TuiQueueItem[];
-  roleScroll: Record<TuiRoleId, number>;
+  phaseText: string;
   runLabel: string;
   runActive: boolean;
   runStopRequested: boolean;
-  sections: Record<TuiSectionId, TuiSectionSnapshot>;
   statusText: string;
 }
 
@@ -66,11 +50,17 @@ export type TuiAction =
   | { type: "focus.next" }
   | { type: "focus.previous" }
   | { role: TuiRoleId; type: "focus.set" }
-  | { type: "follow.toggle" }
   | { open?: boolean | undefined; type: "help.toggle" }
   | { active: boolean; type: "run.activity.set" }
+  | {
+      activeRole: TuiActiveRole;
+      cards: Record<TuiRoleId, { lines: readonly string[] }>;
+      phaseText: string;
+      statusText: string;
+      type: "projection.replace";
+      updatedAt?: string | undefined;
+    }
   | { type: "run.stop.requested" }
-  | { items: readonly TuiQueueItem[]; type: "queue.replace" }
   | {
       entry: Omit<TuiLogEntry, "id">;
       type: "log.append";
@@ -84,20 +74,7 @@ export type TuiAction =
       entries: readonly Omit<TuiLogEntry, "id">[];
       type: "log.replace";
     }
-  | {
-      delta: number;
-      role?: TuiRoleId | undefined;
-      type: "role.scroll";
-    }
-  | {
-      lines: readonly string[];
-      section: TuiSectionId;
-      type: "section.replace";
-      updatedAt?: string | undefined;
-    }
-  | { text: string; type: "status.set" }
-  | { delta: number; type: "view.adjust" }
-  | { type: "view.reset" };
+  | { text: string; type: "status.set" };
 
 export interface CreateInitialTuiStateOptions {
   demoMode?: boolean | undefined;
@@ -132,9 +109,23 @@ export function createInitialTuiState(
   const demoMode = options.demoMode ?? true;
 
   return {
+    activeRole: demoMode ? "architect" : "system",
+    cards: {
+      architect: createInitialCardSnapshot(
+        demoMode,
+        "architect",
+        task,
+        timestamp,
+      ),
+      engineer: createInitialCardSnapshot(
+        demoMode,
+        "engineer",
+        task,
+        timestamp,
+      ),
+    },
     demoMode,
     focusRole: "architect",
-    followMode: true,
     helpOpen: false,
     log: {
       dropped: 0,
@@ -142,74 +133,12 @@ export function createInitialTuiState(
       limit: options.logLimit ?? DEFAULT_LOG_LIMIT,
       nextId: 1,
     },
-    queueItems: demoMode
-      ? [
-          {
-            id: "dashboard-polish",
-            status: "active",
-            title: "Polish the Architect and Engineer dashboard surfaces",
-          },
-          {
-            id: "chrome",
-            status: "pending",
-            title: "Tighten spacing, hierarchy, and restrained chrome",
-          },
-          {
-            id: "narrow-switching",
-            status: "pending",
-            title: "Keep narrow-mode role switching obvious and fast",
-          },
-          {
-            id: "coverage",
-            status: "pending",
-            title: "Refresh tests, fallbacks, and smoke notes",
-          },
-        ]
-      : [],
-    roleScroll: createRoleScrollState(),
+    phaseText: demoMode ? "Demo" : "Waiting",
     runLabel: options.runLabel ?? DEFAULT_RUN_LABEL,
     runActive: !demoMode,
     runStopRequested: false,
-    sections: {
-      currentGoal: createInitialSectionSnapshot(
-        demoMode,
-        "currentGoal",
-        task,
-        timestamp,
-      ),
-      reasoningHistory: createInitialSectionSnapshot(
-        demoMode,
-        "reasoningHistory",
-        task,
-        timestamp,
-      ),
-      taskQueue: createInitialSectionSnapshot(
-        demoMode,
-        "taskQueue",
-        task,
-        timestamp,
-      ),
-      executionLog: createInitialSectionSnapshot(
-        demoMode,
-        "executionLog",
-        task,
-        timestamp,
-      ),
-      activeCommand: createInitialSectionSnapshot(
-        demoMode,
-        "activeCommand",
-        task,
-        timestamp,
-      ),
-      testsChecks: createInitialSectionSnapshot(
-        demoMode,
-        "testsChecks",
-        task,
-        timestamp,
-      ),
-    },
     statusText: demoMode
-      ? "Dashboard demo feed active. Architect context and Engineer execution stay readable without heavy chrome."
+      ? "Compact demo feed active."
       : `Waiting for live harness activity for ${options.runLabel ?? DEFAULT_RUN_LABEL}.`,
   };
 }
@@ -238,11 +167,6 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         ...state,
         focusRole: action.role,
       };
-    case "follow.toggle":
-      return {
-        ...state,
-        followMode: !state.followMode,
-      };
     case "help.toggle":
       return {
         ...state,
@@ -254,16 +178,30 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         runActive: action.active,
         runStopRequested: action.active ? state.runStopRequested : false,
       };
+    case "projection.replace": {
+      const updatedAt = action.updatedAt ?? new Date().toISOString();
+
+      return {
+        ...state,
+        activeRole: action.activeRole,
+        cards: {
+          architect: {
+            lines: [...action.cards.architect.lines],
+            updatedAt,
+          },
+          engineer: {
+            lines: [...action.cards.engineer.lines],
+            updatedAt,
+          },
+        },
+        phaseText: action.phaseText,
+        statusText: action.statusText,
+      };
+    }
     case "run.stop.requested":
       return {
         ...state,
         runStopRequested: true,
-      };
-    case "queue.replace":
-      return {
-        ...state,
-        queueItems: [...action.items],
-        sections: withSectionUpdated(state.sections, "taskQueue"),
       };
     case "log.append":
       return reduceLogAppend(state, [action.entry]);
@@ -284,57 +222,12 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
           entries: nextEntries,
           nextId: nextEntries.length + 1,
         },
-        sections: withSectionUpdated(
-          state.sections,
-          "executionLog",
-          nextEntries.at(-1)?.timestamp ??
-            state.sections.executionLog.updatedAt,
-        ),
       };
     }
-    case "role.scroll": {
-      const role = action.role ?? state.focusRole;
-      const nextScroll = Math.max(0, state.roleScroll[role] + action.delta);
-
-      return {
-        ...state,
-        followMode:
-          role === "engineer" && action.delta < 0 ? false : state.followMode,
-        roleScroll: {
-          ...state.roleScroll,
-          [role]: nextScroll,
-        },
-      };
-    }
-    case "section.replace":
-      return {
-        ...state,
-        sections: {
-          ...state.sections,
-          [action.section]: {
-            lines: [...action.lines],
-            updatedAt:
-              action.updatedAt ?? state.sections[action.section].updatedAt,
-          },
-        },
-      };
     case "status.set":
       return {
         ...state,
         statusText: action.text,
-      };
-    case "view.adjust":
-      return tuiReducer(state, {
-        delta: action.delta,
-        role: state.focusRole,
-        type: "role.scroll",
-      });
-    case "view.reset":
-      return {
-        ...state,
-        followMode: true,
-        helpOpen: false,
-        roleScroll: createRoleScrollState(),
       };
   }
 }
@@ -370,136 +263,53 @@ function roleIndex(role: TuiRoleId): number {
   return TUI_ROLE_ORDER.indexOf(role);
 }
 
-function createRoleScrollState(): Record<TuiRoleId, number> {
-  return {
-    architect: 0,
-    engineer: 0,
-  };
-}
-
-function withSectionUpdated(
-  sections: TuiState["sections"],
-  section: TuiSectionId,
-  updatedAt: string = new Date().toISOString(),
-): TuiState["sections"] {
-  return {
-    ...sections,
-    [section]: {
-      ...sections[section],
-      updatedAt,
-    },
-  };
-}
-
-function createInitialSectionSnapshot(
+function createInitialCardSnapshot(
   demoMode: boolean,
-  section: TuiSectionId,
+  role: TuiRoleId,
   task: string,
   updatedAt: string,
-): TuiSectionSnapshot {
-  if (!demoMode) {
-    return {
-      lines: createLivePlaceholderLines(section, task),
-      updatedAt,
-    };
-  }
-
-  switch (section) {
-    case "currentGoal":
-      return {
-        lines: [
-          "Demo objective",
-          "",
-          `Center the dashboard on: ${task}`,
-          "Keep the main panels prominent while startup, teardown, and terminal fallbacks remain safe.",
-        ],
-        updatedAt,
-      };
-    case "reasoningHistory":
-      return {
-        lines: [
-          "Architect timeline",
-          "",
-          "Observable planning, review, and handoff milestones appear here.",
-          "The TUI stays observational and does not expose hidden chain of thought.",
-        ],
-        updatedAt,
-      };
-    case "taskQueue":
-      return {
-        lines: [
-          "Execution order",
-          "",
-          "Queue entries are synthesized from the engineer brief or live execution order.",
-        ],
-        updatedAt,
-      };
-    case "executionLog":
-      return {
-        lines: [
-          "Engineer log",
-          "",
-          "Engineer commands, tool calls, and required checks appear here.",
-        ],
-        updatedAt,
-      };
-    case "activeCommand":
-      return {
-        lines: [
-          "Engineer activity",
-          "",
-          "Show current command, working directory, tool activity, and check state.",
-        ],
-        updatedAt,
-      };
-    case "testsChecks":
-      return {
-        lines: [
-          "Checks overview",
-          "",
-          "Tests / Checks will show explicit command state and captured output.",
-        ],
-        updatedAt,
-      };
-  }
+): TuiRoleCardSnapshot {
+  return {
+    lines: demoMode
+      ? createDemoCardLines(role, task)
+      : createLivePlaceholderCardLines(role, task),
+    updatedAt,
+  };
 }
 
-function createLivePlaceholderLines(
-  section: TuiSectionId,
+function createDemoCardLines(role: TuiRoleId, task: string): readonly string[] {
+  return role === "architect"
+    ? [
+        `Task      ${task}`,
+        "State     demo / planning",
+        "Latest    Keeping the shell compact and readable.",
+        "Decision  Hand off a minimal execution surface to Engineer.",
+      ]
+    : [
+        `Task      ${task}`,
+        "State     demo / idle",
+        "Tool      No tool running yet.",
+        "Result    Waiting for the first command or check.",
+      ];
+}
+
+function createLivePlaceholderCardLines(
+  role: TuiRoleId,
   task: string,
 ): readonly string[] {
-  switch (section) {
-    case "currentGoal":
-      return [
-        "Waiting for architect planning or handoff state.",
-        `Requested task: ${task}`,
+  return role === "architect"
+    ? [
+        `Task      ${task}`,
+        "State     waiting",
+        "Latest    No architect activity recorded yet.",
+        "Decision  No planning or handoff summary recorded yet.",
+      ]
+    : [
+        `Task      ${task}`,
+        "State     idle",
+        "Tool      No tool or command recorded yet.",
+        "Result    No command or check result recorded yet.",
       ];
-    case "reasoningHistory":
-      return [
-        "No architect reasoning recorded yet.",
-        "Observable planning, review, and handoff milestones will appear here.",
-      ];
-    case "taskQueue":
-      return [
-        "Awaiting an engineer brief or live execution order.",
-        "The queue stays explicit instead of rendering as empty space.",
-      ];
-    case "executionLog":
-      return [
-        "No engineer execution recorded yet.",
-        "Engineer commands, tool calls, and check activity will appear here.",
-      ];
-    case "activeCommand":
-      return [
-        "Waiting for engineer activity.",
-        "Active command details will appear here when the run starts.",
-      ];
-    case "testsChecks":
-      return [
-        "No required check output recorded yet.",
-        "Required check status and output will appear here.",
-      ];
-  }
 }
 
 function reduceLogAppend(
@@ -527,11 +337,6 @@ function reduceLogAppend(
       entries: boundedEntries.entries,
       nextId: state.log.nextId + entries.length,
     },
-    sections: withSectionUpdated(
-      state.sections,
-      "executionLog",
-      entries.at(-1)?.timestamp ?? state.sections.executionLog.updatedAt,
-    ),
   };
 }
 

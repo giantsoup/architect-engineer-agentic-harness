@@ -1,7 +1,7 @@
 import type { BlessedBox } from "../neo-blessed.js";
 import type { TuiLayout, TuiRect } from "../layout.js";
 import type { TuiState } from "../state.js";
-import { TUI_ROLE_LABELS, type TuiTheme } from "../theme.js";
+import type { TuiTheme } from "../theme.js";
 
 export function renderStatusBarWidget(options: {
   box: BlessedBox;
@@ -10,21 +10,15 @@ export function renderStatusBarWidget(options: {
   state: TuiState;
   theme: TuiTheme;
 }): void {
-  const lead =
-    options.layout.mode === "narrow"
-      ? `Showing ${TUI_ROLE_LABELS[options.state.focusRole]}`
-      : `Focus ${TUI_ROLE_LABELS[options.state.focusRole]}`;
   const parts = [
-    lead,
-    options.layout.mode === "narrow" ? "Tab switch role" : "Tab switch panel",
-    "Scroll",
-    ...(options.state.focusRole === "engineer"
-      ? [`f follow:${options.state.followMode ? "on" : "off"}`]
-      : []),
+    options.layout.mode === "narrow"
+      ? "Tab switch role"
+      : "Tab switch role/panel",
     ...(!options.state.demoMode && options.state.runActive
       ? [options.state.runStopRequested ? "Stopping run" : "s stop run"]
       : []),
     options.state.helpOpen ? "? close help" : "? help",
+    "q quit",
   ];
 
   options.box.top = options.rect.top;
@@ -49,10 +43,9 @@ function formatFooterContent(
 ): string {
   const trimmedStatus = statusText.trim();
   const base = parts.join(" | ");
-  const compactBase = parts.filter((part) => part !== "Scroll").join(" | ");
 
   if (trimmedStatus.length === 0) {
-    return fitBaseLine(base, compactBase, width);
+    return truncateLine(base, width);
   }
 
   const fullLine = `${base} | ${trimmedStatus}`;
@@ -67,29 +60,7 @@ function formatFooterContent(
     return `${base} | ${truncateLine(trimmedStatus, statusWidth)}`;
   }
 
-  const compactStatusWidth = width - compactBase.length - 3;
-
-  if (
-    compactBase !== base &&
-    compactStatusWidth >= 8 &&
-    compactBase.length + 3 < width
-  ) {
-    return `${compactBase} | ${truncateLine(trimmedStatus, compactStatusWidth)}`;
-  }
-
-  return fitBaseLine(base, compactBase, width);
-}
-
-function fitBaseLine(base: string, compactBase: string, width: number): string {
-  if (base.length <= width) {
-    return base;
-  }
-
-  if (compactBase.length <= width) {
-    return compactBase;
-  }
-
-  return truncateLine(compactBase, width);
+  return truncateLine(base, width);
 }
 
 function truncateLine(value: string, width: number): string {

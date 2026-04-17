@@ -8,6 +8,7 @@ import { createInitCommand } from "./commands/init.js";
 import { createInspectCommand } from "./commands/inspect.js";
 import { createRunCommand } from "./commands/run.js";
 import { createStatusCommand } from "./commands/status.js";
+import { createTuiDemoCommand } from "./commands/tui-demo.js";
 
 const CLI_NAME = "architect-engineer-agentic-harness";
 const CLI_DESCRIPTION =
@@ -30,6 +31,7 @@ export function createProgram(options: CreateProgramOptions = {}): Command {
   program.addCommand(createRunCommand());
   program.addCommand(createStatusCommand());
   program.addCommand(createInspectCommand());
+  program.addCommand(createTuiDemoCommand());
 
   return program;
 }

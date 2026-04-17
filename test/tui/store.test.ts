@@ -55,47 +55,49 @@ describe("tui store reducer", () => {
     expect(state.log.dropped).toBe(1);
   });
 
-  it("routes viewport movement to the focused role scroll state", () => {
+  it("replaces the compact projection in one reducer step", () => {
     let state = createInitialTuiState();
 
     state = tuiReducer(state, {
-      role: "engineer",
-      type: "focus.set",
-    });
-    state = tuiReducer(state, {
-      delta: 1,
-      type: "view.adjust",
-    });
-    state = tuiReducer(state, {
-      delta: 10,
-      type: "view.adjust",
+      activeRole: "engineer",
+      cards: {
+        architect: {
+          lines: [
+            "Task      Plan the run.",
+            "State     handoff / waiting",
+            "Latest    Engineer is active.",
+            "Decision  Keep the shell compact.",
+          ],
+        },
+        engineer: {
+          lines: [
+            "Task      Run npm test.",
+            "State     running",
+            "Tool      npm test",
+            "Result    Running from .",
+          ],
+        },
+      },
+      phaseText: "Execution",
+      statusText: "Execution | engineer | Running required check: npm test",
+      type: "projection.replace",
+      updatedAt: "2026-04-16T00:00:10.000Z",
     });
 
-    expect(state.roleScroll.engineer).toBe(11);
-    expect(state.roleScroll.architect).toBe(0);
+    expect(state.activeRole).toBe("engineer");
+    expect(state.phaseText).toBe("Execution");
+    expect(state.cards.engineer.lines[2]).toContain("npm test");
+    expect(state.cards.architect.updatedAt).toBe("2026-04-16T00:00:10.000Z");
   });
 
-  it("turns off engineer follow mode when scrolling upward and resets view state", () => {
+  it("toggles help without resetting unrelated shell state", () => {
     let state = createInitialTuiState();
 
-    state = tuiReducer(state, {
-      delta: -1,
-      role: "engineer",
-      type: "role.scroll",
-    });
-    expect(state.followMode).toBe(false);
+    state = tuiReducer(state, { type: "help.toggle" });
+    expect(state.helpOpen).toBe(true);
 
     state = tuiReducer(state, { type: "help.toggle" });
-    state = tuiReducer(state, {
-      delta: 5,
-      role: "architect",
-      type: "role.scroll",
-    });
-    state = tuiReducer(state, { type: "view.reset" });
-
     expect(state.helpOpen).toBe(false);
-    expect(state.followMode).toBe(true);
-    expect(state.roleScroll.architect).toBe(0);
-    expect(state.roleScroll.engineer).toBe(0);
+    expect(state.focusRole).toBe("architect");
   });
 });

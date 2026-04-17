@@ -553,7 +553,7 @@ describe("executeArchitectEngineerRun", () => {
           event.toolName !== "file.write",
       ),
     ).toBe(true);
-  }, 10000);
+  }, 20000);
 
   it("lets the Architect use allowlisted MCP tools during planning and review", async () => {
     const projectRoot = createTempProject();

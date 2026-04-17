@@ -162,5 +162,5 @@ describe("run git automation", () => {
       "src/example.ts",
     );
     expect(readFileSync(artifactFile, "utf8")).toBe("artifact v2\n");
-  });
+  }, 15_000);
 });

@@ -11,10 +11,7 @@
 ## Keybindings
 
 - `Tab` / `Shift-Tab`: switch the focused role in wide mode or swap roles in narrow mode
-- `Up` / `Down`: scroll the focused role panel
-- `PgUp` / `PgDn`: faster scroll
-- `f`: toggle Engineer execution-log follow mode
-- `r`: reset help and scroll state
+- `s`: gracefully stop the active live run and keep the TUI shell open
 - `?`: open or close help
 - `q` / `Ctrl-C`: close the TUI without cancelling the run
 
@@ -34,14 +31,15 @@
 
 ## Known Limits
 
-- Log history, running command output, and diff panes use bounded UI-only buffers and show when older lines were hidden.
+- The TUI is intentionally current-state only. History, timelines, queues, and verbose logs stay in the dossier instead of the on-screen shell.
+- Live overlays still keep bounded internal buffers so the cards can summarize the latest architect activity, running command, or latest check result.
 - The TUI is observational only. If rendering fails, the TUI tears down and the run continues so dossier writes are not affected.
 - Plain and live console modes remain the fallback paths for non-interactive or incompatible terminals.
 
 ## Manual Smoke Checks
 
 - 2026-04-16, macOS Terminal PTY in this repository environment: refresh before release
-  Scope: verify the wide 120x30 dashboard, narrow `Tab` role switching, restrained header/footer chrome, help modal key map, follow toggle (`f`), reset (`r`), quit (`q`), and clean terminal restoration on exit.
+  Scope: verify the wide 120x30 compact cards, narrow `Tab` role switching, concise header/footer chrome, help modal key map, stop-run (`s`), quit (`q`), and clean terminal restoration on exit.
 - Linux terminal emulator: deferred
   Reason: no Linux terminal environment is available from this workspace.
 - Windows Terminal / PowerShell / `cmd.exe`: deferred
@@ -52,6 +50,6 @@
 - `test/cli/run-ui-mode.test.ts`: default `live`, explicit `plain`, and explicit `tui` CLI selection
 - `test/ui/live-console.test.ts`: concise non-TTY `live` output for logs and CI
 - `test/ui/tui-fallback-summary.test.ts`: `--ui tui` fallback when no interactive TTY is available
-- `test/tui/accessibility.test.ts`: color, ASCII, compact-layout, placeholder, and chrome fallback behavior
+- `test/tui/accessibility.test.ts`: color, ASCII, compact-layout, placeholder, and compact chrome fallback behavior
 - `test/tui/terminal-restore.test.ts`: terminal recovery after startup, render, and teardown failures
-- `test/tui/backpressure.test.ts`, `test/tui/reconcile.test.ts`, and `test/tui/integration-event-bridge.test.ts`: live event burst handling, architect handoff messaging, engineer-only execution history, and dossier rehydration
+- `test/tui/backpressure.test.ts`, `test/tui/reconcile.test.ts`, and `test/tui/integration-event-bridge.test.ts`: live event burst handling, compact card projection, architect handoff messaging, engineer run-state precedence, and dossier rehydration

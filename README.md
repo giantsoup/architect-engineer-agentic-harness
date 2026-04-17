@@ -213,6 +213,12 @@ Open the interactive dashboard explicitly for a TTY task run:
 blueprint run --task "Implement Milestone 12 and keep all tests green." --ui tui
 ```
 
+Open the standalone TUI demo feed without starting a real Architect-Engineer run:
+
+```bash
+blueprint tui-demo
+```
+
 Check the latest run:
 
 ```bash

@@ -4,7 +4,7 @@ import {
   readRunInspection,
   type RunInspection,
 } from "../runtime/run-history.js";
-import type { TuiLogEntry, TuiQueueItem, TuiStore } from "./state.js";
+import type { TuiLogEntry, TuiStore } from "./state.js";
 import {
   createTuiArtifactReader,
   type TuiArtifactSnapshot,
@@ -113,80 +113,22 @@ export function createTuiLiveDataSource(
     const runActive = resolveRunActiveState(inspection, overlay.runStatus);
 
     if (
-      !sameLines(state.sections.currentGoal.lines, projection.currentGoalLines)
-    ) {
-      options.store.dispatch({
-        lines: projection.currentGoalLines,
-        section: "currentGoal",
-        type: "section.replace",
-        updatedAt,
-      });
-    }
-
-    if (
       !sameLines(
-        state.sections.reasoningHistory.lines,
-        projection.reasoningHistoryLines,
-      )
+        state.cards.architect.lines,
+        projection.cards.architect.lines,
+      ) ||
+      !sameLines(state.cards.engineer.lines, projection.cards.engineer.lines) ||
+      state.statusText !== projection.statusText ||
+      state.phaseText !== projection.phaseText ||
+      state.activeRole !== projection.activeRole
     ) {
       options.store.dispatch({
-        lines: projection.reasoningHistoryLines,
-        section: "reasoningHistory",
-        type: "section.replace",
+        activeRole: projection.activeRole,
+        cards: projection.cards,
+        phaseText: projection.phaseText,
+        statusText: projection.statusText,
+        type: "projection.replace",
         updatedAt,
-      });
-    }
-
-    if (!sameQueue(state.queueItems, projection.queueItems)) {
-      options.store.dispatch({
-        items: projection.queueItems,
-        type: "queue.replace",
-      });
-    }
-
-    if (
-      !sameLines(
-        state.sections.executionLog.lines,
-        projection.executionLogLines,
-      )
-    ) {
-      options.store.dispatch({
-        lines: projection.executionLogLines,
-        section: "executionLog",
-        type: "section.replace",
-        updatedAt,
-      });
-    }
-
-    if (
-      !sameLines(
-        state.sections.activeCommand.lines,
-        projection.activeCommandLines,
-      )
-    ) {
-      options.store.dispatch({
-        lines: projection.activeCommandLines,
-        section: "activeCommand",
-        type: "section.replace",
-        updatedAt,
-      });
-    }
-
-    if (
-      !sameLines(state.sections.testsChecks.lines, projection.testsChecksLines)
-    ) {
-      options.store.dispatch({
-        lines: projection.testsChecksLines,
-        section: "testsChecks",
-        type: "section.replace",
-        updatedAt,
-      });
-    }
-
-    if (state.statusText !== projection.statusText) {
-      options.store.dispatch({
-        text: projection.statusText,
-        type: "status.set",
       });
     }
 
@@ -392,23 +334,6 @@ function sameLines(left: readonly string[], right: readonly string[]): boolean {
   }
 
   return left.every((line, index) => line === right[index]);
-}
-
-function sameQueue(
-  left: readonly TuiQueueItem[],
-  right: readonly TuiQueueItem[],
-): boolean {
-  if (left.length !== right.length) {
-    return false;
-  }
-
-  return left.every(
-    (item, index) =>
-      item.id === right[index]?.id &&
-      item.status === right[index]?.status &&
-      item.title === right[index]?.title &&
-      item.detail === right[index]?.detail,
-  );
 }
 
 function sameLogEntries(

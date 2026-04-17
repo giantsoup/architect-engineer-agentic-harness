@@ -83,18 +83,18 @@ describe("tui accessibility fallbacks", () => {
       runLabel: "qa-run",
     });
     state.focusRole = "architect";
-    state.queueItems = [
-      {
-        id: "one",
-        status: "active",
-        title: "Review terminal fallback behavior",
-      },
-      {
-        id: "two",
-        status: "blocked",
-        title: "Confirm Windows fallback behavior",
-      },
-    ];
+    state.phaseText = "Execution";
+    state.activeRole = "architect";
+    state.statusText = "Execution | architect | compact status";
+    state.cards.architect = {
+      lines: [
+        "Task      Review terminal fallback behavior",
+        "State     planning / active",
+        "Latest    Confirm mono and ASCII fallbacks stay readable.",
+        "Decision  Keep placeholders explicit in constrained terminals.",
+      ],
+      updatedAt: "2026-04-16T20:00:00.000Z",
+    };
     const layout = computeTuiLayout({
       height: 24,
       state,
@@ -110,7 +110,6 @@ describe("tui accessibility fallbacks", () => {
 
     renderHeaderWidget({
       box: headerBox,
-      layout,
       rect: layout.header,
       state,
       theme,
@@ -130,21 +129,19 @@ describe("tui accessibility fallbacks", () => {
       theme,
     });
 
-    expect(headerBox.content).toBe(
-      "Run qa-run | live | showing Architect | mono/ascii",
-    );
+    expect(headerBox.content).toBe("Run qa-run | live | Execution | Architect");
     expect(roleBox.label).toContain("[*] Architect");
-    expect(roleBox.content).toContain("TASK QUEUE");
     expect(roleBox.content).toContain(
-      "[ACTIVE] Review terminal fallback behavior",
+      "Task      Review terminal fallback behavior",
     );
-    expect(roleBox.content).toContain(
-      "[BLOCKED] Confirm Windows fallback behavior",
-    );
-    expect(statusBarBox.content).toContain("Showing Architect");
+    expect(roleBox.content).toContain("Decision  Keep placeholders explicit");
+    expect(roleBox.content).not.toContain("REASONING HISTORY");
+    expect(roleBox.content).not.toContain("EXECUTION LOG");
     expect(statusBarBox.content).toContain("Tab switch role");
     expect(statusBarBox.content).toContain("s stop run");
     expect(statusBarBox.content).toContain("? help");
+    expect(statusBarBox.content).not.toContain("Scroll");
+    expect(statusBarBox.content).not.toContain("follow:");
   });
 
   it("preserves literal braces in panel content when color tags are enabled", () => {
@@ -152,8 +149,13 @@ describe("tui accessibility fallbacks", () => {
       demoMode: false,
       runLabel: "qa-run",
     });
-    state.sections.currentGoal = {
-      lines: ['Summary   Keep "{literal}" braces visible in the panel.'],
+    state.cards.architect = {
+      lines: [
+        'Task      Keep "{literal}" braces visible in the panel.',
+        "State     planning / active",
+        "Latest    Confirm escaped tags stay literal.",
+        "Decision  Preserve safe box rendering.",
+      ],
       updatedAt: "2026-04-16T20:00:00.000Z",
     };
     const layout = computeTuiLayout({
@@ -206,8 +208,7 @@ describe("tui accessibility fallbacks", () => {
       theme,
     });
 
-    expect(statusBarBox.content).toContain("Focus Architect");
-    expect(statusBarBox.content).toContain("Tab switch panel");
+    expect(statusBarBox.content).toContain("Tab switch role/panel");
     expect(statusBarBox.content).toContain("s stop run");
     expect(statusBarBox.content).toContain("? help");
     expect(statusBarBox.style).toEqual({
@@ -310,18 +311,19 @@ describe("tui accessibility fallbacks", () => {
       theme,
     });
 
-    expect(roleBox.content).toContain("No engineer execution recorded yet.");
-    expect(roleBox.content).toContain("No required check output recorded yet.");
+    expect(roleBox.content).toContain("No tool or command recorded yet.");
+    expect(roleBox.content).toContain(
+      "No command or check result recorded yet.",
+    );
     expect(helpModalBox.content).toContain(
-      "move focus in wide mode or swap roles in narrow mode",
+      "current task, state, latest activity",
     );
     expect(helpModalBox.content).toContain(
       "gracefully stop the current run and keep the TUI open",
     );
     expect(helpModalBox.content).toContain(
-      "Sections stay explicit when data is not available yet",
+      "History stays in the dossier; the TUI only surfaces current state.",
     );
-    expect(statusBarBox.content).toContain("f follow:on");
     expect(statusBarBox.content).toContain("? clo");
   });
 

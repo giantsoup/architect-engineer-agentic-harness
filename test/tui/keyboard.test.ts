@@ -31,18 +31,9 @@ describe("tui keyboard model", () => {
     });
   });
 
-  it("maps scrolling and shell toggle keys to reducer actions", () => {
-    expect(resolveTuiKeyboardCommand(state, { name: "down" })).toEqual({
-      action: { delta: 1, type: "view.adjust" },
-      type: "dispatch",
-    });
-    expect(resolveTuiKeyboardCommand(state, { name: "pageup" })).toEqual({
-      action: { delta: -5, type: "view.adjust" },
-      type: "dispatch",
-    });
+  it("maps help keys and drops obsolete history-navigation keys", () => {
     expect(resolveTuiKeyboardCommand(state, { name: "f" })).toEqual({
-      action: { type: "follow.toggle" },
-      type: "dispatch",
+      type: "none",
     });
     expect(
       resolveTuiKeyboardCommand(state, { full: "?", sequence: "?" }),
@@ -59,6 +50,15 @@ describe("tui keyboard model", () => {
     ).toEqual({
       action: { type: "help.toggle" },
       type: "dispatch",
+    });
+    expect(resolveTuiKeyboardCommand(state, { name: "down" })).toEqual({
+      type: "none",
+    });
+    expect(resolveTuiKeyboardCommand(state, { name: "pageup" })).toEqual({
+      type: "none",
+    });
+    expect(resolveTuiKeyboardCommand(state, { name: "r" })).toEqual({
+      type: "none",
     });
   });
 

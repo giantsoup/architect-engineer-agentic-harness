@@ -60,6 +60,7 @@
     "build:watch": "tsup --watch",
     "cli": "node dist/cli.js",
     "cli:dev": "node --import tsx src/cli/index.ts",
+    "tui:demo": "npm run cli:dev -- tui-demo",
     "link:dev": "npm run build && npm link",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",

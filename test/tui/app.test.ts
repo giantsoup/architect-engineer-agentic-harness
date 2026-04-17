@@ -87,19 +87,20 @@ describe("tui app", () => {
       createdBoxes;
 
     expect(headerBox?.content).toContain(
-      "Run qa-run | live | Architect + Engineer",
+      "Run qa-run | live | Waiting | System",
     );
     expect(architectBox?.label).toBe("[*] Architect");
     expect(engineerBox?.label).toBe("[ ] Engineer");
-    expect(footerBox?.content).toContain("Focus Architect");
+    expect(footerBox?.content).toContain("Tab switch role/panel");
+    expect(footerBox?.content).toContain("s stop run");
 
     keyHandlers[0]?.("", { name: "tab" });
     await vi.advanceTimersByTimeAsync(20);
 
     expect(architectBox?.label).toBe("[ ] Architect");
     expect(engineerBox?.label).toBe("[*] Engineer");
-    expect(footerBox?.content).toContain("Focus Engineer");
-    expect(footerBox?.content).toContain("f follow:on");
+    expect(footerBox?.content).toContain("Tab switch role/panel");
+    expect(footerBox?.content).not.toContain("follow");
 
     keyHandlers[0]?.("", { full: "?", sequence: "?" });
     await vi.advanceTimersByTimeAsync(20);

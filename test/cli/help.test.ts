@@ -43,6 +43,7 @@ describe("CLI help", () => {
     expect(result.stdout).toContain("run");
     expect(result.stdout).toContain("status");
     expect(result.stdout).toContain("inspect");
+    expect(result.stdout).toContain("tui-demo");
   });
 
   it("prints the package version", () => {
@@ -108,5 +109,15 @@ describe("CLI help", () => {
     expect(result.stderr).toContain(
       "`--project-root` is only supported with `--task` or `--task-file`.",
     );
+  });
+
+  it("shows the standalone TUI demo command help", () => {
+    const result = runCli(["tui-demo", "--help"]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Open the standalone TUI demo feed");
+    expect(result.stdout).toContain("--run-label <label>");
+    expect(result.stdout).toContain("--task <markdown>");
   });
 });

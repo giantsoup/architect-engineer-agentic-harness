@@ -215,32 +215,13 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiController {
     scheduler.markDirty();
   });
   options.screen.key(
-    [
-      "tab",
-      "S-tab",
-      "backtab",
-      "up",
-      "down",
-      "pageup",
-      "pagedown",
-      "f",
-      "s",
-      "r",
-      "?",
-      "S-/",
-      "q",
-      "C-c",
-    ],
+    ["tab", "S-tab", "backtab", "s", "?", "S-/", "q", "C-c"],
     (_character: string, key: BlessedKey) => {
       try {
         const command = resolveTuiKeyboardCommand(store.getState(), key);
 
         if (command.type === "dispatch") {
           store.dispatch(command.action);
-
-          if (command.action.type === "view.reset") {
-            void dataSource.forceRefresh?.();
-          }
 
           return;
         }
@@ -303,7 +284,6 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiController {
 
     renderHeaderWidget({
       box: headerBox,
-      layout,
       rect: layout.header,
       state,
       theme,

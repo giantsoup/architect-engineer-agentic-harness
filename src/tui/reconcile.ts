@@ -1,7 +1,7 @@
 import type { HarnessEvent } from "../runtime/harness-events.js";
 import type { RunInspection } from "../runtime/run-history.js";
 import type { CommandLogRecord, RunCheckResult } from "../types/run.js";
-import type { TuiLogEntry, TuiQueueItem } from "./state.js";
+import type { TuiActiveRole, TuiLogEntry, TuiRoleId } from "./state.js";
 import type { TuiArtifactSnapshot } from "./artifact-reader.js";
 
 type JsonRecord = Record<string, unknown>;
@@ -49,13 +49,10 @@ export interface TuiLiveOverlay {
 }
 
 export interface TuiProjection {
-  activeCommandLines: readonly string[];
-  currentGoalLines: readonly string[];
-  executionLogLines: readonly string[];
-  queueItems: readonly TuiQueueItem[];
-  reasoningHistoryLines: readonly string[];
+  activeRole: TuiActiveRole;
+  cards: Record<TuiRoleId, { lines: readonly string[] }>;
+  phaseText: string;
   statusText: string;
-  testsChecksLines: readonly string[];
 }
 
 export interface TuiReconcileContext {
@@ -65,12 +62,9 @@ export interface TuiReconcileContext {
   task?: string | undefined;
 }
 
-const ARCHITECT_HISTORY_LINE_LIMIT = 10;
-const ENGINEER_EXECUTION_LOG_LINE_LIMIT = 18;
 const HYDRATED_LOG_ENTRY_LIMIT = 600;
 const LIVE_COMMAND_CHUNK_LINE_LIMIT = 12;
 const LIVE_COMMAND_OUTPUT_LINE_LIMIT = 120;
-const TEST_OUTPUT_LINE_LIMIT = 18;
 
 export function createEmptyTuiLiveOverlay(): TuiLiveOverlay {
   return {
@@ -324,23 +318,313 @@ export function buildTuiProjection(
   }
 
   return {
-    activeCommandLines: buildActiveCommandSection(
-      context,
-      requiredCheckCommand,
-    ),
-    currentGoalLines: buildCurrentGoalSection(context, requiredCheckCommand),
-    executionLogLines: buildEngineerExecutionLogSection(
-      context,
-      requiredCheckCommand,
-    ),
-    queueItems: synthesizeQueueItems(context, requiredCheckCommand),
-    reasoningHistoryLines: buildReasoningHistorySection(
-      context,
-      requiredCheckCommand,
-    ),
+    activeRole: resolveProjectionActiveRole(context),
+    cards: {
+      architect: {
+        lines: buildArchitectCardLines(context, requiredCheckCommand),
+      },
+      engineer: {
+        lines: buildEngineerCardLines(context, requiredCheckCommand),
+      },
+    },
+    phaseText: resolveProjectionPhase(context),
     statusText: buildStatusText(context),
-    testsChecksLines: buildTestsPane(context, requiredCheckCommand),
   };
+}
+
+function buildArchitectCardLines(
+  context: TuiReconcileContext,
+  requiredCheckCommand: string | undefined,
+): readonly string[] {
+  const planSummary =
+    context.artifacts.architectReview.trim().length > 0
+      ? summarizeMarkdownArtifact(
+          context.artifacts.architectReview,
+          "Architect review recorded.",
+        )
+      : context.artifacts.architectPlan.trim().length > 0
+        ? summarizeMarkdownArtifact(
+            context.artifacts.architectPlan,
+            "Architect plan recorded.",
+          )
+        : undefined;
+  const latestSummary = resolveArchitectLatestSummary(
+    context,
+    requiredCheckCommand,
+    planSummary,
+  );
+  const decisionSummary =
+    context.inspection?.latestDecision ??
+    planSummary ??
+    "No architect decision recorded yet.";
+
+  return formatCardRows([
+    ["Task", resolveArchitectTask(context, planSummary)],
+    ["State", resolveArchitectState(context)],
+    ["Latest", latestSummary],
+    ["Decision", decisionSummary],
+  ]);
+}
+
+function buildEngineerCardLines(
+  context: TuiReconcileContext,
+  requiredCheckCommand: string | undefined,
+): readonly string[] {
+  const runningCommand = context.overlay.currentCommands.engineer;
+  const lastCommand =
+    context.overlay.lastCommands.engineer ??
+    getLatestCommandForRole(context.artifacts.commandLog, "engineer");
+  const latestCheck =
+    context.overlay.latestCheck?.check ??
+    context.artifacts.checks?.checks.at(-1);
+
+  return formatCardRows([
+    ["Task", resolveEngineerTask(context)],
+    [
+      "State",
+      resolveEngineerState(context, runningCommand, lastCommand, latestCheck),
+    ],
+    ["Tool", resolveEngineerTool(context, runningCommand, lastCommand)],
+    [
+      "Result",
+      resolveEngineerResult(
+        context,
+        requiredCheckCommand,
+        runningCommand,
+        lastCommand,
+        latestCheck,
+      ),
+    ],
+  ]);
+}
+
+function resolveProjectionActiveRole(
+  context: TuiReconcileContext,
+): TuiActiveRole {
+  if (context.overlay.currentCommands.engineer !== undefined) {
+    return "engineer";
+  }
+
+  if (context.overlay.currentCommands.architect !== undefined) {
+    return "architect";
+  }
+
+  if (context.overlay.agentStatus.engineer?.status === "active") {
+    return "engineer";
+  }
+
+  if (context.overlay.agentStatus.architect?.status === "active") {
+    return "architect";
+  }
+
+  if (context.inspection !== undefined) {
+    return context.inspection.activeRole;
+  }
+
+  return "system";
+}
+
+function resolveProjectionPhase(context: TuiReconcileContext): string {
+  if (context.overlay.runStatus?.phase !== undefined) {
+    return capitalize(context.overlay.runStatus.phase.replaceAll("-", " "));
+  }
+
+  if (context.overlay.currentCommands.engineer !== undefined) {
+    return "Execution";
+  }
+
+  if (context.overlay.agentStatus.architect?.status === "active") {
+    return capitalize(context.overlay.agentStatus.architect.phase);
+  }
+
+  if (context.overlay.agentStatus.engineer?.status === "active") {
+    return capitalize(context.overlay.agentStatus.engineer.phase);
+  }
+
+  if (context.inspection?.phase !== undefined) {
+    return context.inspection.phase;
+  }
+
+  if (context.overlay.runStatus?.status !== undefined) {
+    return capitalize(context.overlay.runStatus.status);
+  }
+
+  return "Waiting";
+}
+
+function resolveArchitectTask(
+  context: TuiReconcileContext,
+  planSummary: string | undefined,
+): string {
+  if (context.inspection?.activeRole === "architect") {
+    return (
+      context.inspection.currentObjective ??
+      context.inspection.task ??
+      planSummary ??
+      context.task ??
+      "Waiting for architect planning."
+    );
+  }
+
+  return (
+    planSummary ??
+    context.task ??
+    context.inspection?.task ??
+    "Waiting for architect planning."
+  );
+}
+
+function resolveArchitectState(context: TuiReconcileContext): string {
+  const architectAgent = context.overlay.agentStatus.architect;
+
+  if (architectAgent !== undefined) {
+    return architectAgent.status === "active"
+      ? `${architectAgent.phase} / active`
+      : `${architectAgent.phase} / completed`;
+  }
+
+  if (
+    context.inspection?.activeRole === "engineer" &&
+    context.inspection.status === "running"
+  ) {
+    return "handoff / waiting";
+  }
+
+  if (context.inspection !== undefined) {
+    return `${context.inspection.phase.toLowerCase()} / ${context.inspection.status}`;
+  }
+
+  return "waiting";
+}
+
+function resolveArchitectLatestSummary(
+  context: TuiReconcileContext,
+  requiredCheckCommand: string | undefined,
+  artifactSummary: string | undefined,
+): string {
+  const architectAgent = context.overlay.agentStatus.architect;
+
+  if (architectAgent !== undefined) {
+    return `Architect ${architectAgent.phase}: ${architectAgent.summary}`;
+  }
+
+  const reasoningTimeline = buildArchitectReasoningTimeline(
+    context,
+    requiredCheckCommand,
+  );
+
+  if (reasoningTimeline.length > 0) {
+    const latestLine = reasoningTimeline.at(-1);
+
+    if (latestLine !== undefined) {
+      return latestLine.replace(/^\d{2}:\d{2}:\d{2}\s+\S+\s+/u, "");
+    }
+  }
+
+  return artifactSummary ?? "No architect activity recorded yet.";
+}
+
+function resolveEngineerTask(context: TuiReconcileContext): string {
+  if (context.inspection?.activeRole === "engineer") {
+    return (
+      context.inspection.currentObjective ??
+      context.inspection.task ??
+      resolveTaskSummary(context)
+    );
+  }
+
+  return context.inspection?.task ?? resolveTaskSummary(context);
+}
+
+function resolveEngineerState(
+  context: TuiReconcileContext,
+  runningCommand: TuiRunningCommandState | undefined,
+  lastCommand: TuiCompletedCommandState | undefined,
+  latestCheck: RunCheckResult | undefined,
+): string {
+  if (runningCommand !== undefined) {
+    return "running";
+  }
+
+  if (latestCheck !== undefined) {
+    return latestCheck.status;
+  }
+
+  if (context.inspection?.status === "failed") {
+    return "failed";
+  }
+
+  if (context.inspection?.status === "stopped") {
+    return "blocked";
+  }
+
+  if (lastCommand !== undefined) {
+    if (lastCommand.status !== "completed") {
+      return lastCommand.status;
+    }
+
+    return lastCommand.exitCode === 0 ? "idle" : "failed";
+  }
+
+  return "idle";
+}
+
+function resolveEngineerTool(
+  context: TuiReconcileContext,
+  runningCommand: TuiRunningCommandState | undefined,
+  lastCommand: TuiCompletedCommandState | undefined,
+): string {
+  if (runningCommand !== undefined) {
+    return runningCommand.command;
+  }
+
+  const lastTool =
+    context.overlay.lastToolByRole.engineer ??
+    findLatestToolName(context.artifacts.events, "engineer");
+
+  if (lastTool !== undefined) {
+    return lastTool;
+  }
+
+  if (lastCommand !== undefined) {
+    return lastCommand.command;
+  }
+
+  return "No tool or command recorded yet.";
+}
+
+function resolveEngineerResult(
+  context: TuiReconcileContext,
+  requiredCheckCommand: string | undefined,
+  runningCommand: TuiRunningCommandState | undefined,
+  lastCommand: TuiCompletedCommandState | undefined,
+  latestCheck: RunCheckResult | undefined,
+): string {
+  if (runningCommand !== undefined) {
+    const latestOutput = runningCommand.output.at(-1)?.text;
+    const location =
+      runningCommand.workingDirectory === undefined
+        ? ""
+        : ` from ${runningCommand.workingDirectory}`;
+
+    return latestOutput === undefined
+      ? `Running${location}.`
+      : `Running${location}: ${latestOutput}`;
+  }
+
+  if (latestCheck !== undefined) {
+    return formatCheckLine(latestCheck, requiredCheckCommand);
+  }
+
+  if (lastCommand !== undefined) {
+    return `${lastCommand.command} ${summarizeCommandResult(lastCommand)}`;
+  }
+
+  if (context.inspection?.commandStatus !== undefined) {
+    return context.inspection.commandStatus;
+  }
+
+  return "No command or check result recorded yet.";
 }
 
 export function buildHydratedLogEntries(context: TuiReconcileContext): {
@@ -420,189 +704,18 @@ export function buildHydratedLogEntries(context: TuiReconcileContext): {
   };
 }
 
-function buildCurrentGoalSection(
-  context: TuiReconcileContext,
-  requiredCheckCommand: string | undefined,
-): readonly string[] {
-  const inspection = context.inspection;
-  const objective =
-    inspection?.currentObjective ??
-    context.task ??
-    "Waiting for architect state.";
-  const handoffLine = resolveArchitectHandoffLine(context);
-
-  return formatDetailRows([
-    ["Summary", objective],
-    ["Phase", inspection?.phase ?? "Preparing"],
-    ["Role", inspection?.activeRole ?? "system"],
-    [
-      "Decision",
-      inspection?.latestDecision ?? "No architect decision recorded yet.",
-    ],
-    ["Status", inspection?.status ?? "starting"],
-    [
-      "Checks",
-      inspection?.commandStatus ?? fallbackCommandStatus(requiredCheckCommand),
-    ],
-    ["Elapsed", formatElapsedMs(inspection?.elapsedMs)],
-    ["Architect", handoffLine ?? "Awaiting architect planning activity."],
-  ]);
-}
-
-function buildReasoningHistorySection(
-  context: TuiReconcileContext,
-  requiredCheckCommand: string | undefined,
-): readonly string[] {
-  const lines = buildArchitectReasoningTimeline(context, requiredCheckCommand);
-
-  if (lines.length === 0) {
-    return [
-      "No architect reasoning recorded yet.",
-      "Observable milestones such as plan, review, and handoff will appear here.",
-    ];
-  }
-
-  const boundedLines = boundLines(lines, ARCHITECT_HISTORY_LINE_LIMIT);
-
-  return boundedLines.dropped > 0
-    ? [
-        `(${boundedLines.dropped} earlier architect updates hidden)`,
-        ...boundedLines.lines,
-      ]
-    : boundedLines.lines;
-}
-
-function buildActiveCommandSection(
-  context: TuiReconcileContext,
-  requiredCheckCommand: string | undefined,
-): readonly string[] {
-  const inspection = context.inspection;
-  const runningCommand = context.overlay.currentCommands.engineer;
-  const lastCommand =
-    context.overlay.lastCommands.engineer ??
-    getLatestCommandForRole(context.artifacts.commandLog, "engineer");
-  const lastTool =
-    context.overlay.lastToolByRole.engineer ??
-    findLatestToolName(context.artifacts.events, "engineer");
-  const latestCheck =
-    context.overlay.latestCheck?.check ??
-    context.artifacts.checks?.checks.at(-1);
-
-  return formatDetailRows([
-    ["Task", inspection?.task ?? resolveTaskSummary(context)],
-    ["State", runningCommand === undefined ? "idle" : "running"],
-    ["Current", runningCommand?.command ?? "idle"],
-    ["Last", lastCommand?.command ?? "No command recorded yet."],
-    [
-      "Context",
-      [
-        runningCommand?.accessMode ?? lastCommand?.accessMode ?? "n/a",
-        runningCommand?.workingDirectory ??
-          lastCommand?.workingDirectory ??
-          ".",
-      ].join(" | "),
-    ],
-    ["Tool", lastTool ?? "No tool recorded yet."],
-    ["Result", summarizeCommandResult(lastCommand)],
-    ["Check", formatCheckLine(latestCheck, requiredCheckCommand)],
-    [
-      "Status",
-      inspection?.commandStatus ?? fallbackCommandStatus(requiredCheckCommand),
-    ],
-  ]);
-}
-
-function buildEngineerExecutionLogSection(
-  context: TuiReconcileContext,
-  requiredCheckCommand: string | undefined,
-): readonly string[] {
-  const entries = buildEngineerExecutionTimeline(context, requiredCheckCommand);
-
-  if (entries.length === 0) {
-    return [
-      "No engineer execution recorded yet.",
-      "Engineer commands, tool calls, and check activity will appear here.",
-    ];
-  }
-
-  const boundedEntries = boundLines(entries, ENGINEER_EXECUTION_LOG_LINE_LIMIT);
-
-  return boundedEntries.dropped > 0
-    ? [
-        `(${boundedEntries.dropped} earlier engineer log lines hidden)`,
-        ...boundedEntries.lines,
-      ]
-    : boundedEntries.lines;
-}
-
-function buildTestsPane(
-  context: TuiReconcileContext,
-  requiredCheckCommand: string | undefined,
-): readonly string[] {
-  const runningCheck = getRunningCheckCommand(
-    context.overlay,
-    requiredCheckCommand,
-  );
-  const latestCheck =
-    context.overlay.latestCheck?.check ??
-    context.artifacts.checks?.checks.at(-1);
-  const latestCommand = getLatestCheckCommand(
-    context,
-    requiredCheckCommand,
-    latestCheck,
-  );
-  const outputLines =
-    runningCheck !== undefined
-      ? formatRunningCommandOutput(
-          runningCheck.output,
-          runningCheck.droppedOutputLineCount,
-        )
-      : formatCommandOutput(latestCommand?.stdout, latestCommand?.stderr);
-
-  return [
-    ...formatDetailRows([
-      ["Required", requiredCheckCommand ?? "not recorded yet"],
-      ["Current", runningCheck?.command ?? latestCommand?.command ?? "idle"],
-      [
-        "State",
-        runningCheck !== undefined
-          ? "running"
-          : (latestCheck?.status ??
-            (latestCommand === undefined ? "not run" : latestCommand.status)),
-      ],
-      [
-        "Exit",
-        runningCheck === undefined
-          ? `${latestCommand?.exitCode ?? latestCheck?.exitCode ?? "n/a"}`
-          : "running",
-      ],
-      [
-        "Duration",
-        runningCheck === undefined
-          ? formatDurationMs(
-              latestCommand?.durationMs ?? latestCheck?.durationMs,
-            )
-          : "running",
-      ],
-    ]),
-    "",
-    "Recent output",
-    ...(outputLines.length > 0
-      ? outputLines
-      : ["  No check output recorded yet."]),
-  ];
-}
-
 function buildStatusText(context: TuiReconcileContext): string {
-  if (context.inspection !== undefined) {
-    return [
-      `${context.inspection.phase} / ${context.inspection.activeRole}`,
-      context.inspection.commandStatus,
-    ].join(" | ");
+  if (
+    context.overlay.runStatus !== undefined &&
+    (context.inspection === undefined ||
+      Date.parse(context.overlay.runStatus.timestamp) >=
+        Date.parse(context.inspection.updatedAt))
+  ) {
+    return `${context.overlay.runStatus.status} | ${context.overlay.runStatus.summary ?? "Waiting for run activity."}`;
   }
 
-  if (context.overlay.runStatus !== undefined) {
-    return `${context.overlay.runStatus.status} | ${context.overlay.runStatus.summary ?? "Waiting for run activity."}`;
+  if (context.inspection !== undefined) {
+    return `${context.inspection.phase} | ${context.inspection.activeRole} | ${context.inspection.commandStatus}`;
   }
 
   return "Waiting for live harness activity.";
@@ -740,138 +853,6 @@ function buildArchitectReasoningTimeline(
   );
 }
 
-function buildEngineerExecutionTimeline(
-  context: TuiReconcileContext,
-  requiredCheckCommand: string | undefined,
-): string[] {
-  const entries: Array<{ kind: string; summary: string; timestamp: string }> =
-    [];
-
-  for (const event of context.artifacts.events) {
-    const entry = toEngineerExecutionTimelineEntry(event);
-
-    if (entry !== undefined) {
-      entries.push(entry);
-    }
-  }
-
-  for (const command of context.artifacts.commandLog) {
-    if (command.role !== "engineer") {
-      continue;
-    }
-
-    entries.push({
-      kind: "CMD",
-      summary: `${command.command} (${formatExitSuffix(command.exitCode, command.status)})`,
-      timestamp: command.timestamp,
-    });
-  }
-
-  const latestCheck =
-    context.overlay.latestCheck?.check ??
-    context.artifacts.checks?.checks.at(-1);
-  const checkTimestamp =
-    context.overlay.latestCheck?.timestamp ?? context.inspection?.updatedAt;
-
-  if (latestCheck !== undefined && checkTimestamp !== undefined) {
-    entries.push({
-      kind: "CHECK",
-      summary: `${latestCheck.status}${latestCheck.exitCode === undefined ? "" : ` (exit ${latestCheck.exitCode})`}: ${latestCheck.command ?? requiredCheckCommand ?? latestCheck.name}`,
-      timestamp: checkTimestamp,
-    });
-  }
-
-  const runningCommand = context.overlay.currentCommands.engineer;
-  const lastCommand =
-    context.overlay.lastCommands.engineer ??
-    getLatestCommandForRole(context.artifacts.commandLog, "engineer");
-
-  if (runningCommand !== undefined) {
-    entries.push({
-      kind: "RUN",
-      summary: runningCommand.command,
-      timestamp: runningCommand.startedAt,
-    });
-
-    for (const line of runningCommand.output) {
-      entries.push({
-        kind: line.stream === "stderr" ? "STDERR" : "STDOUT",
-        summary: line.text,
-        timestamp: line.timestamp,
-      });
-    }
-  }
-
-  if (lastCommand !== undefined) {
-    entries.push({
-      kind: "CMD",
-      summary: `${lastCommand.command} (${formatExitSuffix(lastCommand.exitCode, lastCommand.status)})`,
-      timestamp: lastCommand.timestamp,
-    });
-  }
-
-  return dedupeTimelineLines(
-    entries
-      .sort(
-        (left, right) =>
-          Date.parse(left.timestamp) - Date.parse(right.timestamp),
-      )
-      .map((entry) =>
-        formatTimelineEntry(entry.timestamp, entry.kind, entry.summary),
-      ),
-  );
-}
-
-function synthesizeQueueItems(
-  context: TuiReconcileContext,
-  requiredCheckCommand: string | undefined,
-): readonly TuiQueueItem[] {
-  const markdownItems = parseQueueTitles(context.artifacts.engineerTask);
-  const status = context.inspection?.status;
-
-  if (markdownItems.length > 0) {
-    const activeIndex =
-      status === "success"
-        ? markdownItems.length
-        : findQueueActiveIndex(markdownItems, context, requiredCheckCommand);
-
-    return markdownItems.map((title, index) => ({
-      id: `task-${index + 1}`,
-      status:
-        status === "success"
-          ? "done"
-          : status === "failed" || status === "stopped"
-            ? index === Math.min(activeIndex, markdownItems.length - 1)
-              ? "blocked"
-              : index < activeIndex
-                ? "done"
-                : "pending"
-            : index < activeIndex
-              ? "done"
-              : index === activeIndex
-                ? "active"
-                : "pending",
-      title,
-    }));
-  }
-
-  const fallbackItems = [
-    context.inspection?.currentObjective,
-    context.overlay.currentCommands.engineer?.command,
-    requiredCheckCommand === undefined
-      ? undefined
-      : `Run required check: ${requiredCheckCommand}`,
-  ].filter(
-    (value): value is string => value !== undefined && value.trim().length > 0,
-  );
-
-  return fallbackItems.map((title, index) => ({
-    id: `fallback-${index + 1}`,
-    status: index === 0 ? "active" : "pending",
-    title,
-  }));
-}
-
 function parseQueueTitles(markdown: string): string[] {
   const executionOrderSection = extractMarkdownSection(
     markdown,
@@ -927,33 +908,6 @@ function parseMarkdownList(markdown: string): string[] {
     .filter((line) => /^(\d+\.\s+|[-*]\s+)/u.test(line))
     .map((line) => line.replace(/^(\d+\.\s+|[-*]\s+)/u, "").trim())
     .filter((line) => line.length > 0);
-}
-
-function findQueueActiveIndex(
-  titles: readonly string[],
-  context: TuiReconcileContext,
-  requiredCheckCommand: string | undefined,
-): number {
-  const candidates = [
-    context.inspection?.currentObjective,
-    context.inspection?.latestDecision,
-    context.overlay.currentCommands.engineer?.command,
-    requiredCheckCommand,
-  ].filter(
-    (value): value is string => value !== undefined && value.trim().length > 0,
-  );
-
-  for (const candidate of candidates) {
-    const matchedIndex = titles.findIndex((title) =>
-      includesNormalized(title, candidate),
-    );
-
-    if (matchedIndex >= 0) {
-      return matchedIndex;
-    }
-  }
-
-  return 0;
 }
 
 function resolveRequiredCheckCommand(
@@ -1014,32 +968,6 @@ function findLatestToolName(
   return undefined;
 }
 
-function fallbackCommandStatus(
-  requiredCheckCommand: string | undefined,
-): string {
-  return requiredCheckCommand === undefined
-    ? "Waiting for run activity."
-    : `Waiting for ${requiredCheckCommand}`;
-}
-
-function resolveArchitectHandoffLine(
-  context: TuiReconcileContext,
-): string | undefined {
-  if (context.inspection?.activeRole === "engineer") {
-    return "Handed off to engineer.";
-  }
-
-  if (context.overlay.agentStatus.engineer?.status === "active") {
-    return "Handed off to engineer.";
-  }
-
-  if (context.overlay.agentStatus.architect?.status === "active") {
-    return "Architect is active.";
-  }
-
-  return undefined;
-}
-
 function summarizeMarkdownArtifact(markdown: string, fallback: string): string {
   const summaryLine = splitLines(markdown).find(
     (line) => !/^(#|[-*]\s*$)/u.test(line.trim()),
@@ -1074,43 +1002,6 @@ function formatTimelineEntry(
   summary: string,
 ): string {
   return `${formatClock(timestamp)}  ${kind.padEnd(6)}  ${summary}`;
-}
-
-function toEngineerExecutionTimelineEntry(
-  event: JsonRecord,
-): { kind: string; summary: string; timestamp: string } | undefined {
-  const timestamp = getOptionalString(event, "timestamp");
-  const type = getOptionalString(event, "type");
-
-  if (timestamp === undefined || type === undefined) {
-    return undefined;
-  }
-
-  switch (type) {
-    case "engineer-run-started":
-      return {
-        kind: "START",
-        summary: "Engineer task started.",
-        timestamp,
-      };
-    case "engineer-action-selected":
-      return {
-        kind: "ACTION",
-        summary:
-          getOptionalString(event, "summary") ?? "Engineer action recorded.",
-        timestamp,
-      };
-    case "tool-call":
-      return getOptionalString(event, "role") === "engineer"
-        ? {
-            kind: "TOOL",
-            summary: `${getOptionalString(event, "toolName") ?? "tool"} ${getOptionalString(event, "status") ?? "completed"}`,
-            timestamp,
-          }
-        : undefined;
-    default:
-      return undefined;
-  }
 }
 
 function formatExitSuffix(
@@ -1191,128 +1082,6 @@ function getLatestCommandForRole(
   }
 
   return undefined;
-}
-
-function getRunningCheckCommand(
-  overlay: TuiLiveOverlay,
-  requiredCheckCommand: string | undefined,
-): TuiRunningCommandState | undefined {
-  const runningCommand = overlay.currentCommands.engineer;
-
-  if (runningCommand === undefined) {
-    return undefined;
-  }
-
-  if (requiredCheckCommand === undefined) {
-    return runningCommand;
-  }
-
-  return includesNormalized(runningCommand.command, requiredCheckCommand)
-    ? runningCommand
-    : undefined;
-}
-
-function getLatestCheckCommand(
-  context: TuiReconcileContext,
-  requiredCheckCommand: string | undefined,
-  latestCheck: RunCheckResult | undefined,
-): TuiCompletedCommandState | undefined {
-  const overlayCommand = context.overlay.lastCommands.engineer;
-
-  if (
-    overlayCommand !== undefined &&
-    (requiredCheckCommand === undefined ||
-      includesNormalized(overlayCommand.command, requiredCheckCommand))
-  ) {
-    return overlayCommand;
-  }
-
-  for (
-    let index = context.artifacts.commandLog.length - 1;
-    index >= 0;
-    index -= 1
-  ) {
-    const command = context.artifacts.commandLog[index];
-
-    if (command?.role !== "engineer") {
-      continue;
-    }
-
-    if (
-      latestCheck?.command !== undefined &&
-      includesNormalized(command.command, latestCheck.command)
-    ) {
-      return {
-        accessMode: command.accessMode ?? "mutate",
-        command: command.command,
-        durationMs: command.durationMs,
-        exitCode: command.exitCode,
-        role: "engineer",
-        status: command.status ?? "completed",
-        stderr: command.stderr,
-        stdout: command.stdout,
-        timestamp: command.timestamp,
-        workingDirectory: command.workingDirectory,
-      };
-    }
-
-    if (
-      requiredCheckCommand !== undefined &&
-      includesNormalized(command.command, requiredCheckCommand)
-    ) {
-      return {
-        accessMode: command.accessMode ?? "mutate",
-        command: command.command,
-        durationMs: command.durationMs,
-        exitCode: command.exitCode,
-        role: "engineer",
-        status: command.status ?? "completed",
-        stderr: command.stderr,
-        stdout: command.stdout,
-        timestamp: command.timestamp,
-        workingDirectory: command.workingDirectory,
-      };
-    }
-  }
-
-  return undefined;
-}
-
-function formatRunningCommandOutput(
-  output: readonly TuiRunningCommandOutputLine[],
-  droppedOutputLineCount: number,
-): string[] {
-  const boundedOutput = boundLines(output, TEST_OUTPUT_LINE_LIMIT);
-  const hiddenLineCount = droppedOutputLineCount + boundedOutput.dropped;
-  const lines = boundedOutput.lines.map(
-    (line) =>
-      `${line.stream === "stderr" ? "stderr".padEnd(8) : "stdout".padEnd(8)}  ${line.text}`,
-  );
-
-  return hiddenLineCount > 0
-    ? [
-        `  (${hiddenLineCount} older output lines hidden to keep the pane bounded)`,
-        ...lines,
-      ]
-    : lines;
-}
-
-function formatCommandOutput(
-  stdout: string | undefined,
-  stderr: string | undefined,
-): string[] {
-  const lines = [
-    ...splitLines(stdout).map((line) => `${"stdout".padEnd(8)}  ${line}`),
-    ...splitLines(stderr).map((line) => `${"stderr".padEnd(8)}  ${line}`),
-  ];
-  const boundedLines = boundLines(lines, TEST_OUTPUT_LINE_LIMIT);
-
-  return boundedLines.dropped > 0
-    ? [
-        `  (${boundedLines.dropped} older output lines hidden to keep the pane bounded)`,
-        ...boundedLines.lines,
-      ]
-    : [...boundedLines.lines];
 }
 
 function toHistoricalEventLogEntry(
@@ -1455,36 +1224,10 @@ function summarizeCommandExit(
   return exitCode === null ? "failed" : `failed (exit ${exitCode})`;
 }
 
-function formatDurationMs(durationMs: number | undefined): string {
-  if (durationMs === undefined) {
-    return "n/a";
-  }
-
-  return `${durationMs}ms`;
-}
-
-function formatElapsedMs(elapsedMs: number | undefined): string {
-  if (elapsedMs === undefined) {
-    return "n/a";
-  }
-
-  if (elapsedMs < 1_000) {
-    return `${elapsedMs}ms`;
-  }
-
-  return `${(elapsedMs / 1_000).toFixed(elapsedMs >= 10_000 ? 0 : 1)}s`;
-}
-
-function formatDetailRows(
+function formatCardRows(
   rows: ReadonlyArray<readonly [label: string, value: string]>,
 ): string[] {
-  const labelWidth = Math.max(
-    6,
-    Math.min(
-      10,
-      rows.reduce((width, [label]) => Math.max(width, label.length), 0),
-    ),
-  );
+  const labelWidth = 8;
 
   return rows.map(
     ([label, value]) => `${label.padEnd(labelWidth)}  ${value.trim()}`,
@@ -1499,10 +1242,6 @@ function formatClock(value: string): string {
   }
 
   return date.toISOString().slice(11, 19);
-}
-
-function includesNormalized(left: string, right: string): boolean {
-  return normalizeText(left).includes(normalizeText(right));
 }
 
 function normalizeText(value: string): string {
