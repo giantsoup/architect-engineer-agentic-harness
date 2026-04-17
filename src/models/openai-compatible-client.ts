@@ -547,6 +547,7 @@ export class OpenAiCompatibleChatClient {
       structuredOutput.formatName,
       rawContent,
     );
+    const validatedArchitectCandidates = new Map<string, TStructured>();
     let lastParseError: unknown;
     let lastValidationError: unknown;
 
@@ -563,14 +564,15 @@ export class OpenAiCompatibleChatClient {
       try {
         const validatedOutput = await structuredOutput.validate(parsedJson);
 
-        if (hasAmbiguousArchitectJson) {
-          throw createAmbiguousArchitectStructuredOutputError(
-            this.describeTarget(),
-            structuredOutput.formatName,
-          );
+        if (!hasAmbiguousArchitectJson) {
+          return validatedOutput;
         }
 
-        return validatedOutput;
+        validatedArchitectCandidates.set(
+          JSON.stringify(validatedOutput),
+          validatedOutput,
+        );
+        continue;
       } catch (error) {
         lastValidationError = error;
 
@@ -584,18 +586,31 @@ export class OpenAiCompatibleChatClient {
             const validatedOutput =
               await structuredOutput.validate(normalizedJson);
 
-            if (hasAmbiguousArchitectJson) {
-              throw createAmbiguousArchitectStructuredOutputError(
-                this.describeTarget(),
-                structuredOutput.formatName,
-              );
+            if (!hasAmbiguousArchitectJson) {
+              return validatedOutput;
             }
 
-            return validatedOutput;
+            validatedArchitectCandidates.set(
+              JSON.stringify(validatedOutput),
+              validatedOutput,
+            );
           } catch (normalizedError) {
             lastValidationError = normalizedError;
           }
         }
+      }
+    }
+
+    if (hasAmbiguousArchitectJson) {
+      if (validatedArchitectCandidates.size === 1) {
+        return validatedArchitectCandidates.values().next().value as TStructured;
+      }
+
+      if (validatedArchitectCandidates.size > 1) {
+        throw createAmbiguousArchitectStructuredOutputError(
+          this.describeTarget(),
+          structuredOutput.formatName,
+        );
       }
     }
 

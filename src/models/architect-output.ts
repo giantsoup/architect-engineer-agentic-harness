@@ -9,7 +9,10 @@ import type {
   ArchitectStructuredOutputKind,
   ArchitectStructuredOutputSchema,
 } from "./types.js";
-import { validateEngineerControlOutput } from "./engineer-output.js";
+import {
+  normalizeEngineerToolRequestCandidate,
+  validateEngineerControlOutput,
+} from "./engineer-output.js";
 
 type ArchitectActionByKind = {
   plan: ArchitectPlanAction | ArchitectToolAction;
@@ -95,30 +98,31 @@ export async function validateArchitectControlOutput<
     schemaVersion,
   );
   await loadArchitectControlSchema(kind, { schemaVersion });
+  const normalizedValue = normalizeArchitectControlCandidate(kind, value);
 
   const issues: string[] = [];
 
-  if (!isPlainObject(value)) {
+  if (!isPlainObject(normalizedValue)) {
     throw new ArchitectControlOutputValidationError(schemaPath, [
       `${kind}: Expected an object.`,
     ]);
   }
 
-  const actionType = value.type;
+  const actionType = normalizedValue.type;
 
   if (actionType === "tool") {
-    await validateArchitectToolAction(value, kind, issues);
+    await validateArchitectToolAction(normalizedValue, kind, issues);
   } else if (kind === "plan") {
-    validateArchitectPlanAction(value, issues);
+    validateArchitectPlanAction(normalizedValue, issues);
   } else {
-    validateArchitectReviewAction(value, issues);
+    validateArchitectReviewAction(normalizedValue, issues);
   }
 
   if (issues.length > 0) {
     throw new ArchitectControlOutputValidationError(schemaPath, issues);
   }
 
-  return value as unknown as ArchitectActionByKind[TKind];
+  return normalizedValue as unknown as ArchitectActionByKind[TKind];
 }
 
 async function loadSchemaFromDisk(
@@ -187,6 +191,82 @@ function getArchitectControlSchemaCandidates(
     ),
     new URL(`../schemas/${schemaVersion}/${schemaFileName}`, import.meta.url),
   ];
+}
+
+function normalizeArchitectControlCandidate(
+  kind: ArchitectStructuredOutputKind,
+  value: unknown,
+): unknown {
+  if (!isPlainObject(value)) {
+    return value;
+  }
+
+  if (normalizeLowercaseString(value.type) === "tool") {
+    return {
+      ...value,
+      request: normalizeArchitectToolRequestCandidate(value.request),
+      summary: normalizeTrimmedString(value.summary),
+      type: "tool",
+    };
+  }
+
+  if (kind === "plan") {
+    const normalized: Record<string, unknown> = {
+      ...value,
+      steps: normalizeStringList(value.steps),
+      summary: normalizeTrimmedString(value.summary),
+    };
+    const normalizedAcceptanceCriteria = normalizeStringList(
+      value.acceptanceCriteria,
+    );
+    const normalizedType = normalizeLowercaseString(value.type);
+
+    if (normalizedAcceptanceCriteria !== undefined) {
+      normalized.acceptanceCriteria = normalizedAcceptanceCriteria;
+    }
+
+    if (normalizedType !== undefined) {
+      normalized.type = normalizedType;
+    }
+
+    return normalized;
+  }
+
+  const normalized: Record<string, unknown> = {
+    ...value,
+    decision: normalizeKeywordLiteral(value.decision),
+    summary: normalizeTrimmedString(value.summary),
+  };
+  const normalizedNextActions = normalizeStringList(value.nextActions);
+  const normalizedType = normalizeLowercaseString(value.type);
+
+  if (normalizedNextActions !== undefined) {
+    normalized.nextActions = normalizedNextActions;
+  }
+
+  if (normalizedType !== undefined) {
+    normalized.type = normalizedType;
+  }
+
+  return normalized;
+}
+
+function normalizeArchitectToolRequestCandidate(value: unknown): unknown {
+  if (!isPlainObject(value)) {
+    return value;
+  }
+
+  const normalizedLegacyToolName =
+    normalizeTrimmedString(value.toolName) ?? normalizeTrimmedString(value.name);
+
+  if (normalizedLegacyToolName !== undefined && isPlainObject(value.arguments)) {
+    return normalizeEngineerToolRequestCandidate({
+      ...value.arguments,
+      toolName: normalizedLegacyToolName,
+    });
+  }
+
+  return normalizeEngineerToolRequestCandidate(value);
 }
 
 function validateArchitectPlanAction(
@@ -289,6 +369,32 @@ function validateNonEmptyString(
   }
 }
 
+function normalizeTrimmedString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmedValue = value.trim();
+
+  return trimmedValue.length === 0 ? "" : trimmedValue;
+}
+
+function normalizeLowercaseString(value: unknown): string | undefined {
+  const normalized = normalizeTrimmedString(value);
+
+  return normalized === undefined ? undefined : normalized.toLowerCase();
+}
+
+function normalizeKeywordLiteral(value: unknown): string | undefined {
+  const normalized = normalizeLowercaseString(value);
+
+  if (normalized === undefined) {
+    return undefined;
+  }
+
+  return normalized.replace(/^[`"'“”‘’\s]+|[`"'“”‘’\s.,;:!?]+$/gu, "");
+}
+
 function validateStringArray(
   value: unknown,
   path: string,
@@ -302,6 +408,22 @@ function validateStringArray(
   for (const [index, item] of value.entries()) {
     validateNonEmptyString(item, `${path}[${index}]`, issues);
   }
+}
+
+function normalizeStringList(value: unknown): string[] | undefined {
+  if (typeof value === "string") {
+    const normalized = normalizeTrimmedString(value);
+
+    return normalized === undefined ? undefined : [normalized];
+  }
+
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value.map((entry) =>
+    typeof entry === "string" ? entry.trim() : entry,
+  ) as string[];
 }
 
 function pushUnexpectedProperties(

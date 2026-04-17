@@ -1027,7 +1027,79 @@ describe("OpenAiCompatibleChatClient", () => {
     });
   });
 
-  it("rejects ambiguous Architect structured output when the response contains multiple JSON objects", async () => {
+  it("normalizes legacy wrapped Architect tool requests during local validation fallback", async () => {
+    let attempts = 0;
+    const mockServer = await startMockServer((_request, response) => {
+      attempts += 1;
+
+      if (attempts === 1) {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: {
+              message: "response_format is unsupported here",
+            },
+          }),
+        );
+        return;
+      }
+
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  request: {
+                    arguments: {
+                      path: ".",
+                    },
+                    toolName: "file.list",
+                  },
+                  summary: "Inspect the repository root.",
+                  type: "tool",
+                }),
+                role: "assistant",
+              },
+            },
+          ],
+          id: "chatcmpl-normalized-architect-tool-request",
+        }),
+      );
+    });
+    servers.push(mockServer);
+
+    const { loadedConfig, projectRoot } = await createLoadedConfig(
+      renderConfig({
+        architectBaseUrl: `${mockServer.url}/remote/v1`,
+        architectMaxRetries: 0,
+        engineerBaseUrl: `${mockServer.url}/local/v1`,
+      }),
+    );
+    projectRoots.push(projectRoot);
+
+    const client = new OpenAiCompatibleChatClient({
+      config: resolveModelConfigForRole(loadedConfig, "architect"),
+      retryDelayMs: 0,
+    });
+
+    const response = await client.chat({
+      messages: [{ content: "Return a tool request.", role: "user" }],
+      structuredOutput: await createArchitectStructuredOutputFormat("plan"),
+    });
+
+    expect(response.structuredOutput).toEqual({
+      request: {
+        path: ".",
+        toolName: "file.list",
+      },
+      summary: "Inspect the repository root.",
+      type: "tool",
+    });
+  });
+
+  it("accepts Architect structured output when exactly one top-level JSON object is valid", async () => {
     let attempts = 0;
     const mockServer = await startMockServer((_request, response) => {
       attempts += 1;
@@ -1052,6 +1124,69 @@ describe("OpenAiCompatibleChatClient", () => {
               message: {
                 content: [
                   '{"type":"tool","tool":{"toolName":"file.list","path":"."}}',
+                  '{"type":"plan","summary":"Inspect then implement","steps":["inspect the repo","make one small change","run tests"]}',
+                ].join("\n"),
+                role: "assistant",
+              },
+            },
+          ],
+          id: "chatcmpl-one-valid-structured-candidate",
+        }),
+      );
+    });
+    servers.push(mockServer);
+
+    const { loadedConfig, projectRoot } = await createLoadedConfig(
+      renderConfig({
+        architectBaseUrl: `${mockServer.url}/remote/v1`,
+        architectMaxRetries: 0,
+        engineerBaseUrl: `${mockServer.url}/local/v1`,
+      }),
+    );
+    projectRoots.push(projectRoot);
+
+    const client = new OpenAiCompatibleChatClient({
+      config: resolveModelConfigForRole(loadedConfig, "architect"),
+      retryDelayMs: 0,
+    });
+
+    const response = await client.chat({
+      messages: [{ content: "Return one valid plan.", role: "user" }],
+      structuredOutput: await createArchitectStructuredOutputFormat("plan"),
+    });
+
+    expect(response.structuredOutput).toEqual({
+      steps: ["inspect the repo", "make one small change", "run tests"],
+      summary: "Inspect then implement",
+      type: "plan",
+    });
+  });
+
+  it("rejects ambiguous Architect structured output when the response contains multiple JSON objects", async () => {
+    let attempts = 0;
+    const mockServer = await startMockServer((_request, response) => {
+      attempts += 1;
+
+      if (attempts === 1) {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: {
+              message: "response_format is unsupported here",
+            },
+          }),
+        );
+        return;
+      }
+
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: [
+                  '{"type":"tool","summary":"Inspect the repository root.","request":{"toolName":"file.list","path":"."}}',
                   '{"type":"plan","summary":"Inspect then implement","steps":["inspect the repo","make one small change","run tests"]}',
                 ].join("\n"),
                 role: "assistant",

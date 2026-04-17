@@ -112,4 +112,26 @@ describe("architect output validation", () => {
       type: "tool",
     });
   });
+
+  it("normalizes legacy wrapped Architect tool requests before validation", async () => {
+    await expect(
+      validateArchitectControlOutput("plan", {
+        request: {
+          arguments: {
+            path: ".",
+          },
+          toolName: "file.list",
+        },
+        summary: "Inspect the repository root.",
+        type: "tool",
+      }),
+    ).resolves.toEqual({
+      request: {
+        path: ".",
+        toolName: "file.list",
+      },
+      summary: "Inspect the repository root.",
+      type: "tool",
+    });
+  });
 });
