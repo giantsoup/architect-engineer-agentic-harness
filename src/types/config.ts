@@ -27,6 +27,7 @@ export interface McpServerConfig {
 export interface HarnessConfig {
   version: HarnessConfigVersion;
   models: {
+    agent: ModelConfig;
     architect: ModelConfig;
     engineer: ModelConfig;
   };

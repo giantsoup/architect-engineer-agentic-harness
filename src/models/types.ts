@@ -1,6 +1,6 @@
 import type { JsonValue } from "../types/run.js";
 
-export type HarnessModelRole = "architect" | "engineer";
+export type HarnessModelRole = "agent" | "architect" | "engineer";
 
 export type SupportedModelProvider = "llama.cpp" | "openai-compatible";
 

@@ -603,7 +603,8 @@ export class OpenAiCompatibleChatClient {
 
     if (hasAmbiguousArchitectJson) {
       if (validatedArchitectCandidates.size === 1) {
-        return validatedArchitectCandidates.values().next().value as TStructured;
+        return validatedArchitectCandidates.values().next()
+          .value as TStructured;
       }
 
       if (validatedArchitectCandidates.size > 1) {

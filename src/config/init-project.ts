@@ -383,7 +383,7 @@ function formatNextSteps(
       : `Review ${configFileName} and confirm the`;
   const steps = [
     `1. ${configPrefix} \`models.architect\` values for your real Architect endpoint.`,
-    `2. ${configPrefix} \`models.engineer\` values for your real Engineer endpoint.`,
+    `2. ${configPrefix} \`models.agent\` for interactive chat, plus \`models.engineer\` for split-brain execution.`,
     `3. Review the detected commands under \`[commands]\` and adjust any repo-specific overrides.`,
     "4. Optional: add allowlisted MCP servers under `[mcp]` before task runs.",
   ];

@@ -260,6 +260,7 @@ export type ToolResult = BuiltInToolResult | McpToolCallResult;
 
 export interface ToolExecutionContext {
   role: HarnessModelRole;
+  signal?: AbortSignal | undefined;
 }
 
 export type BuiltInToolExecutionContext = ToolExecutionContext;

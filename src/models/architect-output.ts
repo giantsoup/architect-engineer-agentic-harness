@@ -257,9 +257,13 @@ function normalizeArchitectToolRequestCandidate(value: unknown): unknown {
   }
 
   const normalizedLegacyToolName =
-    normalizeTrimmedString(value.toolName) ?? normalizeTrimmedString(value.name);
+    normalizeTrimmedString(value.toolName) ??
+    normalizeTrimmedString(value.name);
 
-  if (normalizedLegacyToolName !== undefined && isPlainObject(value.arguments)) {
+  if (
+    normalizedLegacyToolName !== undefined &&
+    isPlainObject(value.arguments)
+  ) {
     return normalizeEngineerToolRequestCandidate({
       ...value.arguments,
       toolName: normalizedLegacyToolName,

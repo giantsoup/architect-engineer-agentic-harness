@@ -4,14 +4,15 @@ CLI-first Architect-Engineer coding harness for autonomous repo work.
 
 Current v1 shape:
 
+- single-model interactive `blueprint chat`
 - explicit TypeScript runtime, not LangGraph
 - OpenAI-compatible model APIs
-- remote Architect plus local `llama.cpp` Engineer by default
+- one chat-first Agent model plus remote Architect and local `llama.cpp` Engineer defaults
 - host or Docker command execution
 - repo-local run dossiers under `.agent-harness/runs/<run-id>/`
 - built-in tools plus MCP stdio servers gated by a repo allowlist
 
-The package is pre-v1, but the CLI is real today: `init`, `run`, `status`, and `inspect` all work.
+The package is pre-v1, but the CLI is real today: `init`, `chat`, `run`, `status`, and `inspect` all work.
 
 ## Install
 
@@ -61,10 +62,10 @@ Set up these items before you try a real task run:
 1. Choose an execution target.
    Host: commands run directly in your local checkout.
    Docker: commands run in an already-running project container.
-2. Configure the Architect model endpoint.
-   Example: OpenAI or another OpenAI-compatible API.
-3. Configure the Engineer model endpoint.
+2. Configure the Agent model endpoint for `blueprint chat`.
    The default examples assume an OpenAI-compatible `llama.cpp` server.
+3. Configure the Architect and Engineer model endpoints for `blueprint run --task`.
+   Example: OpenAI or another OpenAI-compatible API for Architect, plus a local or remote Engineer endpoint.
 4. Confirm your repo commands work.
    At minimum, make sure your configured `test` command succeeds when run manually.
 5. For full Architect-Engineer runs, start from a clean git worktree.
@@ -104,6 +105,11 @@ export OPENAI_API_KEY=replace-me
 5. Update `agent-harness.toml` for host execution.
 
 ```toml
+[models.agent]
+provider = "llama.cpp"
+model = "replace-with-your-agent-model"
+baseUrl = "http://127.0.0.1:8080/v1"
+
 [models.architect]
 provider = "openai-compatible"
 model = "replace-with-your-architect-model"
@@ -156,6 +162,11 @@ export OPENAI_API_KEY=replace-me
 5. Update `agent-harness.toml` for Docker execution.
 
 ```toml
+[models.agent]
+provider = "llama.cpp"
+model = "replace-with-your-agent-model"
+baseUrl = "http://127.0.0.1:8080/v1"
+
 [models.architect]
 provider = "openai-compatible"
 model = "replace-with-your-architect-model"
@@ -182,6 +193,18 @@ npx blueprint run --command "npm test"
 ```
 
 ## First Commands
+
+Open the single-model interactive chat TUI:
+
+```bash
+blueprint chat
+```
+
+Target a repo outside your current shell directory:
+
+```bash
+blueprint chat --project-root ../target-repo
+```
 
 Run a single command through the configured execution target:
 
@@ -240,6 +263,8 @@ Live sanity prompts for post-change validation:
 
 Keybindings, terminal fallbacks, and the current smoke matrix live in [docs/tui-hardening.md](docs/tui-hardening.md).
 
+Interactive chat mode is documented separately in [docs/chat-mode.md](docs/chat-mode.md). `blueprint chat` is TTY-only and does not accept inline task text.
+
 ## Commands
 
 `init`
@@ -251,6 +276,13 @@ Keybindings, terminal fallbacks, and the current smoke matrix live in [docs/tui-
 - detects a generic TypeScript or Laravel repo and seeds matching command defaults
 - defaults generic local repos to `project.executionTarget = "host"`
 - keeps Laravel-oriented initialization on `project.executionTarget = "docker"`
+
+`chat`
+
+- opens a full-screen single-model chat TUI backed by `models.agent`
+- writes a fresh `agent-chat` dossier immediately
+- accepts `--project-root <directory>`
+- requires an interactive TTY on both `stdin` and `stdout`
 
 `run`
 
@@ -279,14 +311,16 @@ The repo-local config file is `agent-harness.toml`.
 
 Current config version behavior:
 
-- current supported version: `1`
+- current supported version: `2`
 - missing `version` fails with an actionable error
 - newer config versions fail with an upgrade message
+- version `1` configs are migrated by copying `models.engineer` into `models.agent`
 - legacy `commands.setup` is still accepted and normalized to `commands.install`
 
 Top-level sections:
 
 - `version`
+- `models.agent`
 - `models.architect`
 - `models.engineer`
 - `project`
@@ -330,7 +364,7 @@ Guidelines:
 
 ## Local `llama.cpp` Setup
 
-The default local Engineer path assumes an OpenAI-compatible `llama.cpp` server.
+The default local Agent and Engineer paths assume an OpenAI-compatible `llama.cpp` server.
 
 A minimal local launch often looks like:
 
@@ -341,6 +375,11 @@ llama-server --host 127.0.0.1 --port 8080 --model /absolute/path/to/engineer.ggu
 Match the config to that server:
 
 ```toml
+[models.agent]
+provider = "llama.cpp"
+model = "replace-with-your-agent-model"
+baseUrl = "http://127.0.0.1:8080/v1"
+
 [models.engineer]
 provider = "llama.cpp"
 model = "replace-with-your-engineer-model"
@@ -349,7 +388,7 @@ baseUrl = "http://127.0.0.1:8080/v1"
 
 Notes:
 
-- the harness talks to the Engineer model from the host process, not from inside the Docker project container
+- the harness talks to the Agent and Engineer models from the host process, not from inside the Docker project container
 - keep the `baseUrl` reachable from the machine running `blueprint`
 - set `model` to whatever identifier your local server expects
 

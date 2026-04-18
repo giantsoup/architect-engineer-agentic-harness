@@ -9,7 +9,7 @@ import {
   type RunProcess,
 } from "./process-runner.js";
 
-export type ContainerCommandRole = "architect" | "engineer";
+export type ContainerCommandRole = "agent" | "architect" | "engineer";
 export type ContainerCommandAccessMode = "inspect" | "mutate";
 
 export interface ContainerCommandEnvironment {

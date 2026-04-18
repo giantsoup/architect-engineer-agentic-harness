@@ -1,7 +1,12 @@
 # Example config for a generic Laravel project with Docker command execution.
 # Copy this into your repo root as `agent-harness.toml` and replace the model values.
 
-version = 1
+version = 2
+
+[models.agent]
+provider = "llama.cpp"
+model = "replace-with-your-local-agent-model"
+baseUrl = "http://127.0.0.1:8080/v1"
 
 [models.architect]
 provider = "openai-compatible"

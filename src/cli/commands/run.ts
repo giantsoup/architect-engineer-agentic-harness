@@ -136,7 +136,9 @@ export function createRunCommand(): Command {
         return;
       }
 
-      const dossier = await initializeRunDossier(loadedConfig);
+      const dossier = await initializeRunDossier(loadedConfig, {
+        kind: "command",
+      });
       const eventBus = createHarnessEventBus();
       const runner = createProjectCommandRunner({
         dossierPaths: dossier.paths,

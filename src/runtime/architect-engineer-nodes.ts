@@ -128,6 +128,7 @@ export async function prepareArchitectEngineerRunNode(
 ): Promise<ArchitectEngineerState> {
   const dossier = await initializeRunDossier(context.loadedConfig, {
     createdAt: new Date(state.metadata.createdAt),
+    kind: "architect-engineer",
     runId: state.metadata.runId,
   });
   const timestamp = context.now().toISOString();

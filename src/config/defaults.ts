@@ -8,6 +8,11 @@ export const DEFAULT_RUNS_DIR = `${DEFAULT_ARTIFACTS_ROOT_DIR}/runs`;
 export const DEFAULT_HARNESS_CONFIG: HarnessConfig = {
   version: CURRENT_HARNESS_CONFIG_VERSION,
   models: {
+    agent: {
+      provider: "llama.cpp",
+      model: "replace-with-your-agent-model",
+      baseUrl: "http://127.0.0.1:8080/v1",
+    },
     architect: {
       provider: "openai-compatible",
       model: "replace-with-your-architect-model",

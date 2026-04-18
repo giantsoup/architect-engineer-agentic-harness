@@ -18,7 +18,11 @@ export function createTuiDemoCommand(): Command {
   return new Command("tui-demo")
     .description("Open the standalone TUI demo feed")
     .option("--task <markdown>", "Optional task label for the demo feed")
-    .option("--run-label <label>", "Label shown in the TUI header", DEFAULT_RUN_LABEL)
+    .option(
+      "--run-label <label>",
+      "Label shown in the TUI header",
+      DEFAULT_RUN_LABEL,
+    )
     .action(async (options: TuiDemoCommandOptions) => {
       const controller = createTuiRenderer({
         paths: buildRunDossierPaths({

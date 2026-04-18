@@ -47,16 +47,36 @@ export function migrateHarnessConfig(
     ]);
   }
 
-  if (configVersion < CURRENT_HARNESS_CONFIG_VERSION) {
+  if (configVersion !== 1 && configVersion < CURRENT_HARNESS_CONFIG_VERSION) {
     throw new HarnessConfigMigrationError([
       `version: Config version ${configVersion} is not supported by this release. Update the file to version ${CURRENT_HARNESS_CONFIG_VERSION} or regenerate it with \`architect-engineer-agentic-harness init\`.`,
     ]);
   }
 
-  return migrateVersion1Config(rawConfig);
+  return configVersion === 1
+    ? migrateVersion1Config(rawConfig)
+    : migrateVersion2Config(rawConfig);
 }
 
 function migrateVersion1Config(
+  rawConfig: Record<string, unknown>,
+): MigrateHarnessConfigResult {
+  return {
+    migrated: true,
+    value: {
+      ...rawConfig,
+      version: CURRENT_HARNESS_CONFIG_VERSION,
+      ...(isPlainObject(rawConfig.commands)
+        ? { commands: normalizeCommands(rawConfig.commands) }
+        : {}),
+      ...(isPlainObject(rawConfig.models)
+        ? { models: normalizeVersion1Models(rawConfig.models) }
+        : {}),
+    },
+  };
+}
+
+function migrateVersion2Config(
   rawConfig: Record<string, unknown>,
 ): MigrateHarnessConfigResult {
   if (!isPlainObject(rawConfig.commands)) {
@@ -66,25 +86,43 @@ function migrateVersion1Config(
     };
   }
 
-  const install = rawConfig.commands.install;
-  const setup = rawConfig.commands.setup;
+  const normalizedCommands = normalizeCommands(rawConfig.commands);
+
+  return {
+    migrated: normalizedCommands !== rawConfig.commands,
+    value: {
+      ...rawConfig,
+      commands: normalizedCommands,
+    },
+  };
+}
+
+function normalizeCommands(
+  commands: Record<string, unknown>,
+): Record<string, unknown> {
+  const install = commands.install;
+  const setup = commands.setup;
 
   if (typeof install === "string" || typeof setup !== "string") {
-    return {
-      migrated: false,
-      value: rawConfig,
-    };
+    return commands;
   }
 
   return {
-    migrated: true,
-    value: {
-      ...rawConfig,
-      commands: {
-        ...rawConfig.commands,
-        install: setup,
-      },
-    },
+    ...commands,
+    install: setup,
+  };
+}
+
+function normalizeVersion1Models(
+  models: Record<string, unknown>,
+): Record<string, unknown> {
+  if (isPlainObject(models.agent) || !isPlainObject(models.engineer)) {
+    return models;
+  }
+
+  return {
+    ...models,
+    agent: { ...models.engineer },
   };
 }
 

@@ -24,6 +24,7 @@ const FIXED_CREATED_AT = new Date("2026-04-13T12:00:00.000Z");
 const EXPECTED_DOSSIER_FILES = [
   "run.json",
   "events.jsonl",
+  "conversation.jsonl",
   "architect-plan.md",
   "engineer-task.md",
   "architect-review.md",
@@ -52,6 +53,7 @@ describe("run dossier", () => {
     try {
       const dossier = await initializeRunDossier(loadedConfig, {
         createdAt: FIXED_CREATED_AT,
+        kind: "architect-engineer",
         runId: FIXED_RUN_ID,
       });
 
@@ -79,6 +81,7 @@ describe("run dossier", () => {
       expect(initializedResult).toBe("");
       expect(parsedEvents).toHaveLength(1);
       expect(parsedEvents[0]).toMatchObject({
+        kind: "architect-engineer",
         schemaVersion: "v1",
         timestamp: FIXED_CREATED_AT.toISOString(),
         type: "run-initialized",
@@ -94,6 +97,7 @@ describe("run dossier", () => {
     try {
       const dossier = await initializeRunDossier(loadedConfig, {
         createdAt: FIXED_CREATED_AT,
+        kind: "architect-engineer",
         runId: FIXED_RUN_ID,
       });
       const manifest = await readRunManifest(dossier.paths);
@@ -107,9 +111,13 @@ describe("run dossier", () => {
       expect(manifest.files.commandLog.relativePath).toBe(
         `${manifest.runDir}/command-log.jsonl`,
       );
+      expect(manifest.files.conversation.relativePath).toBe(
+        `${manifest.runDir}/conversation.jsonl`,
+      );
       expect(manifest.files.finalReport.relativePath).toBe(
         `${manifest.runDir}/final-report.md`,
       );
+      expect(manifest.kind).toBe("architect-engineer");
       expect(manifest.schemas.runResult).toEqual({
         id: "run-result",
         sourcePath: "schemas/v1/run-result.schema.json",
@@ -146,6 +154,7 @@ describe("run dossier", () => {
     try {
       const dossier = await initializeRunDossier(loadedConfig, {
         createdAt: FIXED_CREATED_AT,
+        kind: "architect-engineer",
         runId: FIXED_RUN_ID,
       });
 

@@ -121,6 +121,7 @@ function orderedArtifacts(run: RunInspection): RunArtifactPresence[] {
   return [
     run.artifacts.finalReport,
     run.artifacts.result,
+    run.artifacts.conversation,
     run.artifacts.events,
     run.artifacts.checks,
     run.artifacts.commandLog,
@@ -151,6 +152,8 @@ function formatArtifactLabel(artifact: RunArtifactPresence): string {
       return "result JSON";
     case "events":
       return "events";
+    case "conversation":
+      return "conversation";
     case "checks":
       return "checks";
     case "commandLog":

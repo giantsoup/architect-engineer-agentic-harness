@@ -4,7 +4,9 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import type { LoadedHarnessConfig } from "../types/config.js";
 import type {
   CommandLogRecord,
+  ConversationMessageRecord,
   RunChecksSummary,
+  RunKind,
   RunLifecycleStatus,
   RunManifest,
   RunPromptReference,
@@ -28,6 +30,7 @@ import { validateRunResult } from "./run-result.js";
 
 export interface InitializeRunDossierOptions {
   createdAt?: Date;
+  kind?: RunKind;
   promptReferences?: readonly RunPromptReference[];
   promptVersion?: string;
   runId?: string;
@@ -56,6 +59,7 @@ export async function initializeRunDossier(
 ): Promise<RunDossier> {
   const createdAtDate = options.createdAt ?? new Date();
   const runId = options.runId ?? createRunId({ date: createdAtDate });
+  const kind = options.kind ?? "command";
   const promptVersion = options.promptVersion ?? DEFAULT_PROMPT_VERSION;
   const schemaVersion = options.schemaVersion ?? DEFAULT_SCHEMA_VERSION;
   const createdAt = createdAtDate.toISOString();
@@ -106,9 +110,11 @@ export async function initializeRunDossier(
 
   const manifest = createRunManifest({
     createdAt,
+    kind,
     paths,
     promptReferences:
-      options.promptReferences ?? getDefaultPromptReferences(promptVersion),
+      options.promptReferences ??
+      getDefaultPromptReferences(kind, promptVersion),
     promptVersion,
     schemaVersion,
     status: "initialized",
@@ -119,6 +125,7 @@ export async function initializeRunDossier(
     promptVersion,
     prompts: manifest.prompts,
     schemaVersion,
+    kind,
     timestamp: createdAt,
     type: "run-initialized",
   });
@@ -190,6 +197,14 @@ export async function appendStructuredMessage(
     timestamp: message.timestamp,
     type: "message",
   });
+}
+
+export async function appendConversationMessage(
+  paths: RunDossierPaths,
+  message: ConversationMessageRecord,
+): Promise<RunManifest> {
+  await appendJsonLine(paths.files.conversation.absolutePath, message);
+  return appendStructuredMessage(paths, message);
 }
 
 export async function appendModelEvent(
@@ -315,14 +330,21 @@ export async function writeRunLifecycleStatus(
 
 function createRunManifest(options: {
   createdAt: string;
+  kind: RunKind;
   paths: RunDossierPaths;
   promptReferences: readonly RunPromptReference[];
   promptVersion: string;
   schemaVersion: string;
   status: RunLifecycleStatus;
 }): RunManifest {
-  const { createdAt, paths, promptReferences, promptVersion, schemaVersion } =
-    options;
+  const {
+    createdAt,
+    kind,
+    paths,
+    promptReferences,
+    promptVersion,
+    schemaVersion,
+  } = options;
 
   return {
     artifactsRootDir: paths.artifactsRootRelativePath,
@@ -332,6 +354,7 @@ function createRunManifest(options: {
       architectReview: buildManifestFileReference(paths, "architectReview"),
       checks: buildManifestFileReference(paths, "checks"),
       commandLog: buildManifestFileReference(paths, "commandLog"),
+      conversation: buildManifestFileReference(paths, "conversation"),
       diff: buildManifestFileReference(paths, "diff"),
       engineerTask: buildManifestFileReference(paths, "engineerTask"),
       events: buildManifestFileReference(paths, "events"),
@@ -340,6 +363,7 @@ function createRunManifest(options: {
       result: buildManifestFileReference(paths, "result"),
       run: buildManifestFileReference(paths, "run"),
     },
+    kind,
     promptVersion,
     prompts: [...promptReferences],
     runDir: paths.runDirRelativePath,
@@ -383,7 +407,37 @@ function buildManifestFileReference(
   };
 }
 
-function getDefaultPromptReferences(version: string): RunPromptReference[] {
+function getDefaultPromptReferences(
+  kind: RunKind,
+  version: string,
+): RunPromptReference[] {
+  if (kind === "agent-chat") {
+    return [
+      {
+        id: "agent-system",
+        sourcePath: `prompts/${version}/agent/system.md`,
+        sourceRoot: "package",
+        version,
+      },
+      {
+        id: "agent-chat",
+        sourcePath: `prompts/${version}/agent/chat.md`,
+        sourceRoot: "package",
+        version,
+      },
+      {
+        id: "agent-summarize",
+        sourcePath: `prompts/${version}/agent/summarize.md`,
+        sourceRoot: "package",
+        version,
+      },
+    ];
+  }
+
+  if (kind === "command") {
+    return [];
+  }
+
   return [
     {
       id: "architect-system",
@@ -487,6 +541,7 @@ function getEventTimestamp(event: Record<string, unknown>): string {
 function orderedArtifactKeys(): DossierFileKey[] {
   return [
     "events",
+    "conversation",
     "architectPlan",
     "engineerTask",
     "architectReview",

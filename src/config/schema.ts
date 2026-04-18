@@ -54,6 +54,7 @@ export const harnessConfigSchema: z.ZodType<HarnessConfig> = z
     version: z.literal(CURRENT_HARNESS_CONFIG_VERSION),
     models: z
       .object({
+        agent: modelConfigSchema,
         architect: modelConfigSchema,
         engineer: modelConfigSchema,
       })

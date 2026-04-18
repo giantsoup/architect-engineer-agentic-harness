@@ -40,6 +40,7 @@ export {
 } from "./artifacts/run-id.js";
 export {
   appendCommandLog,
+  appendConversationMessage,
   appendModelEvent,
   appendRunEvent,
   appendStructuredMessage,
@@ -199,6 +200,12 @@ export {
   redactModelHeaders,
 } from "./models/dossier-logger.js";
 export {
+  createAgentToolDefinitions,
+  renderAgentToolFallbackInstruction,
+  resolveAgentTurn,
+  AgentTurnValidationError,
+} from "./models/agent-output.js";
+export {
   createEngineerToolDefinitions,
   createEngineerStructuredOutputFormat,
   EngineerControlOutputValidationError,
@@ -220,6 +227,7 @@ export {
   resolveAcceptanceCriteriaPolicy,
 } from "./runtime/acceptance-criteria.js";
 export { executeEngineerTask } from "./runtime/engineer-task.js";
+export { createAgentChatSession } from "./runtime/agent-chat-session.js";
 export { executeArchitectEngineerRun } from "./runtime/architect-engineer-run.js";
 export { createHarnessEventBus } from "./runtime/harness-events.js";
 export {
@@ -252,6 +260,7 @@ export type {
 } from "./runtime/run-git-state.js";
 export type {
   CommandLogRecord,
+  ConversationMessageRecord,
   DossierArtifactKind,
   JsonPrimitive,
   JsonValue,
@@ -264,6 +273,7 @@ export type {
   RunLifecycleStatus,
   RunManifest,
   RunManifestFiles,
+  RunKind,
   RunPromptReference,
   RunResult,
   RunSchemaReference,

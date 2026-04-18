@@ -56,6 +56,12 @@ describe("CLI init", () => {
       );
       expect(
         readFileSync(path.join(projectRoot, "agent-harness.toml"), "utf8"),
+      ).toContain("version = 2");
+      expect(
+        readFileSync(path.join(projectRoot, "agent-harness.toml"), "utf8"),
+      ).toContain("[models.agent]");
+      expect(
+        readFileSync(path.join(projectRoot, "agent-harness.toml"), "utf8"),
       ).toContain("[models.architect]");
       expect(
         readFileSync(path.join(projectRoot, "agent-harness.toml"), "utf8"),
@@ -100,6 +106,7 @@ describe("CLI init", () => {
       expect(secondRun.stdout).toContain(
         "preserved existing agent-harness.toml",
       );
+      expect(secondRun.stdout).toContain("models.agent");
       expect(secondRun.stdout).toContain("Next steps");
       expect(readFileSync(configPath, "utf8")).toContain(
         'executionTarget = "docker"',

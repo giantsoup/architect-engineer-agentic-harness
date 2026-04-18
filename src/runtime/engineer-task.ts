@@ -174,6 +174,7 @@ export async function executeEngineerTask(
       ...(options.createdAt === undefined
         ? {}
         : { createdAt: options.createdAt }),
+      kind: "architect-engineer",
       ...(options.runId === undefined ? {} : { runId: options.runId }),
     }));
   const requiredCheckCommand = getRequiredCheckCommand(options.loadedConfig);

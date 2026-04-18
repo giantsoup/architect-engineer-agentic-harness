@@ -94,6 +94,7 @@ export class BuiltInToolExecutor {
   readonly #paths: BuiltInToolPaths;
   readonly #runProcess: RunProcess;
   readonly #writePolicies: {
+    readonly agent: BuiltInToolWritePolicy;
     readonly architect: BuiltInToolWritePolicy;
     readonly engineer: BuiltInToolWritePolicy;
   };
@@ -108,6 +109,7 @@ export class BuiltInToolExecutor {
     this.#paths = resolveBuiltInToolPaths(this.#loadedConfig);
     this.#runProcess = options.runProcess ?? runProcessCommand;
     this.#writePolicies = {
+      agent: resolveBuiltInToolWritePolicy("agent", this.#paths),
       architect: resolveBuiltInToolWritePolicy("architect", this.#paths),
       engineer: resolveBuiltInToolWritePolicy("engineer", this.#paths),
     } as const;
@@ -562,6 +564,9 @@ export class BuiltInToolExecutor {
               ...(request.environment === undefined
                 ? {}
                 : { environment: request.environment }),
+              ...(context.signal === undefined
+                ? {}
+                : { signal: context.signal }),
               ...(request.timeoutMs === undefined
                 ? {}
                 : { timeoutMs: request.timeoutMs }),
@@ -569,19 +574,44 @@ export class BuiltInToolExecutor {
                 ? {}
                 : { workingDirectory: request.workingDirectory }),
             })
-          : await projectCommandRunner.executeEngineerCommand({
-              accessMode: request.accessMode ?? "mutate",
-              command: request.command,
-              ...(request.environment === undefined
-                ? {}
-                : { environment: request.environment }),
-              ...(request.timeoutMs === undefined
-                ? {}
-                : { timeoutMs: request.timeoutMs }),
-              ...(request.workingDirectory === undefined
-                ? {}
-                : { workingDirectory: request.workingDirectory }),
-            });
+          : context.role === "agent"
+            ? await (
+                projectCommandRunner.executeAgentCommand ??
+                projectCommandRunner.executeEngineerCommand.bind(
+                  projectCommandRunner,
+                )
+              )({
+                accessMode: request.accessMode ?? "mutate",
+                command: request.command,
+                ...(request.environment === undefined
+                  ? {}
+                  : { environment: request.environment }),
+                ...(context.signal === undefined
+                  ? {}
+                  : { signal: context.signal }),
+                ...(request.timeoutMs === undefined
+                  ? {}
+                  : { timeoutMs: request.timeoutMs }),
+                ...(request.workingDirectory === undefined
+                  ? {}
+                  : { workingDirectory: request.workingDirectory }),
+              })
+            : await projectCommandRunner.executeEngineerCommand({
+                accessMode: request.accessMode ?? "mutate",
+                command: request.command,
+                ...(request.environment === undefined
+                  ? {}
+                  : { environment: request.environment }),
+                ...(context.signal === undefined
+                  ? {}
+                  : { signal: context.signal }),
+                ...(request.timeoutMs === undefined
+                  ? {}
+                  : { timeoutMs: request.timeoutMs }),
+                ...(request.workingDirectory === undefined
+                  ? {}
+                  : { workingDirectory: request.workingDirectory }),
+              });
 
       return {
         ...commandResult,

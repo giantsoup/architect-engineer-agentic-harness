@@ -36,6 +36,9 @@ export interface CreateProjectCommandRunnerOptions {
 
 export interface ProjectCommandRunnerLike {
   close(reason?: string): void;
+  executeAgentCommand?(
+    request: EngineerCommandExecutionRequest,
+  ): Promise<ContainerCommandResult>;
   executeArchitectCommand(
     request: CommandExecutionRequest,
   ): Promise<ContainerCommandResult>;
@@ -107,6 +110,26 @@ export class ProjectCommandRunner implements ProjectCommandRunnerLike {
       accessMode: request.accessMode ?? "mutate",
       command: request.command,
       role: "engineer",
+      ...(request.environment === undefined
+        ? {}
+        : { environment: request.environment }),
+      ...(request.signal === undefined ? {} : { signal: request.signal }),
+      ...(request.timeoutMs === undefined
+        ? {}
+        : { timeoutMs: request.timeoutMs }),
+      ...(request.workingDirectory === undefined
+        ? {}
+        : { workingDirectory: request.workingDirectory }),
+    });
+  }
+
+  async executeAgentCommand(
+    request: EngineerCommandExecutionRequest,
+  ): Promise<ContainerCommandResult> {
+    return this.#execute({
+      accessMode: request.accessMode ?? "mutate",
+      command: request.command,
+      role: "agent",
       ...(request.environment === undefined
         ? {}
         : { environment: request.environment }),

@@ -176,19 +176,24 @@ async function createLoadedConfig(options: {
   await initializeProject(options.projectRoot);
 
   const configPath = path.join(options.projectRoot, "agent-harness.toml");
-  const updatedConfig = readFileSync(configPath, "utf8")
-    .replace(
-      'baseUrl = "http://127.0.0.1:8080/v1"',
-      `baseUrl = ${JSON.stringify(options.engineerBaseUrl)}`,
-    )
-    .replace(
-      'model = "replace-with-your-engineer-model"',
-      `model = ${JSON.stringify(options.engineerModel ?? "replace-with-your-engineer-model")}`,
-    )
-    .replace(
-      'provider = "llama.cpp"',
-      `provider = ${JSON.stringify(options.engineerProvider ?? "llama.cpp")}`,
-    )
+  const updatedConfig = replaceTomlSection(
+    readFileSync(configPath, "utf8"),
+    "models.engineer",
+    (section) =>
+      section
+        .replace(
+          'baseUrl = "http://127.0.0.1:8080/v1"',
+          `baseUrl = ${JSON.stringify(options.engineerBaseUrl)}`,
+        )
+        .replace(
+          'model = "replace-with-your-engineer-model"',
+          `model = ${JSON.stringify(options.engineerModel ?? "replace-with-your-engineer-model")}`,
+        )
+        .replace(
+          'provider = "llama.cpp"',
+          `provider = ${JSON.stringify(options.engineerProvider ?? "llama.cpp")}`,
+        ),
+  )
     .replace("maxEngineerAttempts = 5", () => {
       const value = options.stopConditions?.maxEngineerAttempts ?? 5;
       return `maxEngineerAttempts = ${value}`;
@@ -234,6 +239,19 @@ function parseJsonLines(filePath: string): Record<string, unknown>[] {
   return contents
     .split(/\r?\n/u)
     .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+function replaceTomlSection(
+  source: string,
+  sectionName: string,
+  update: (section: string) => string,
+): string {
+  const sectionPattern = new RegExp(
+    `(\\[${sectionName.replaceAll(".", "\\.")}\\][\\s\\S]*?)(?=\\n\\[[^\\n]+\\]|$)`,
+    "u",
+  );
+
+  return source.replace(sectionPattern, (section) => update(section));
 }
 
 async function readRequestBody(request: IncomingMessage): Promise<string> {

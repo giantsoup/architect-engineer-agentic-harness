@@ -22,9 +22,8 @@ describe("CLI tui demo", () => {
   });
 
   it("launches the standalone TUI demo with default labels", async () => {
-    const { createTuiDemoCommand } = await import(
-      "../../src/cli/commands/tui-demo.js"
-    );
+    const { createTuiDemoCommand } =
+      await import("../../src/cli/commands/tui-demo.js");
     const controller = {
       start: vi.fn(),
       stop: vi.fn().mockResolvedValue(undefined),
@@ -54,9 +53,8 @@ describe("CLI tui demo", () => {
   });
 
   it("passes through custom task and run labels", async () => {
-    const { createTuiDemoCommand } = await import(
-      "../../src/cli/commands/tui-demo.js"
-    );
+    const { createTuiDemoCommand } =
+      await import("../../src/cli/commands/tui-demo.js");
     const controller = {
       start: vi.fn(),
       stop: vi.fn().mockResolvedValue(undefined),

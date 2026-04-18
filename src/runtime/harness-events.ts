@@ -30,26 +30,44 @@ export interface HarnessEventMap {
     status: "active" | "completed";
     summary: string;
   };
+  "agent:session": {
+    phase: "finished" | "started";
+    runId: string;
+    status?: RunLifecycleStatus | RunResult["status"] | undefined;
+    summary: string;
+  };
+  "agent:action": {
+    runId: string;
+    summary: string;
+    toolName?: string | undefined;
+  };
+  "agent:turn": {
+    outcome?: "cancelled" | "failed" | "replied" | undefined;
+    runId: string;
+    status: "finished" | "started";
+    summary: string;
+    turnIndex: number;
+  };
   "command:start": {
     accessMode: "inspect" | "mutate";
     command: string;
     containerName?: string | undefined;
     environment?: Record<string, string> | undefined;
     executionTarget?: "docker" | "host" | undefined;
-    role: "architect" | "engineer";
+    role: HarnessModelRole;
     runId?: string | undefined;
     workingDirectory?: string | undefined;
   };
   "command:stdout": {
     chunk: string;
     command: string;
-    role: "architect" | "engineer";
+    role: HarnessModelRole;
     runId?: string | undefined;
   };
   "command:stderr": {
     chunk: string;
     command: string;
-    role: "architect" | "engineer";
+    role: HarnessModelRole;
     runId?: string | undefined;
   };
   "command:end": {
@@ -59,7 +77,7 @@ export interface HarnessEventMap {
     durationMs: number;
     executionTarget: "docker" | "host";
     exitCode: number;
-    role: "architect" | "engineer";
+    role: HarnessModelRole;
     runId?: string | undefined;
     status: "completed";
     workingDirectory: string;
@@ -73,7 +91,7 @@ export interface HarnessEventMap {
     executionTarget?: "docker" | "host" | undefined;
     exitCode: number | null;
     message: string;
-    role: "architect" | "engineer";
+    role: HarnessModelRole;
     runId?: string | undefined;
     status: "cancelled" | "failed-to-start" | "timed-out";
     timeoutMs?: number | undefined;

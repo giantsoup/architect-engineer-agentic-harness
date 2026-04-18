@@ -10,9 +10,17 @@ interface NeoBlessedModule {
 export interface BlessedKey {
   ctrl?: boolean | undefined;
   full?: string | undefined;
+  meta?: boolean | undefined;
   name?: string | undefined;
   sequence?: string | undefined;
   shift?: boolean | undefined;
+}
+
+export interface BlessedMouseData {
+  action?: string | undefined;
+  button?: string | undefined;
+  x: number;
+  y: number;
 }
 
 export interface BlessedNodeStyle {
@@ -65,6 +73,11 @@ export interface BlessedScreen {
     keys: string | readonly string[],
     handler: (character: string, key: BlessedKey) => void,
   ): void;
+  on(
+    eventName: "keypress",
+    handler: (character: string, key: BlessedKey) => void,
+  ): void;
+  on(eventName: "mouse", handler: (data: BlessedMouseData) => void): void;
   on(eventName: "resize", handler: () => void): void;
   render(): void;
   title?: string | undefined;

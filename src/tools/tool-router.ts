@@ -196,7 +196,7 @@ export class ToolRouter {
     request: Exclude<ToolRequest, McpToolCallRequest>,
     role: ToolExecutionContext["role"],
   ): BuiltInToolStateError | undefined {
-    if (role !== "engineer") {
+    if (role !== "engineer" && role !== "agent") {
       return undefined;
     }
 

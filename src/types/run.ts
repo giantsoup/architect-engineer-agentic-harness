@@ -12,6 +12,8 @@ export type RunLifecycleStatus =
   | "stopped"
   | "success";
 
+export type RunKind = "agent-chat" | "architect-engineer" | "command";
+
 export type DossierArtifactKind = "json" | "jsonl" | "markdown" | "patch";
 
 export interface RunPromptReference {
@@ -40,6 +42,7 @@ export interface RunManifestFiles {
   architectReview: RunArtifactFileReference;
   checks: RunArtifactFileReference;
   commandLog: RunArtifactFileReference;
+  conversation: RunArtifactFileReference;
   diff: RunArtifactFileReference;
   engineerTask: RunArtifactFileReference;
   events: RunArtifactFileReference;
@@ -53,6 +56,7 @@ export interface RunManifest {
   artifactsRootDir: string;
   createdAt: string;
   files: RunManifestFiles;
+  kind?: RunKind | undefined;
   promptVersion: string;
   prompts: RunPromptReference[];
   runDir: string;
@@ -72,7 +76,15 @@ export interface StructuredMessageRecord {
   content: string;
   format?: "json" | "markdown" | "text";
   metadata?: { [key: string]: JsonValue | undefined };
-  role: "architect" | "engineer" | "system" | "tool" | "user";
+  role: "agent" | "architect" | "engineer" | "system" | "tool" | "user";
+  timestamp: string;
+}
+
+export interface ConversationMessageRecord {
+  content: string;
+  format?: "json" | "markdown" | "text";
+  metadata?: { [key: string]: JsonValue | undefined };
+  role: "agent" | "system" | "user";
   timestamp: string;
 }
 
@@ -84,7 +96,7 @@ export interface CommandLogRecord {
   environment?: Record<string, string>;
   executionTarget?: "docker" | "host";
   exitCode: number | null;
-  role?: "architect" | "engineer" | "system";
+  role?: "agent" | "architect" | "engineer" | "system";
   stderr?: string;
   status?: "cancelled" | "completed" | "failed-to-start" | "timed-out";
   stdout?: string;
@@ -113,7 +125,7 @@ export interface ToolCallRecord {
   error?: ToolCallErrorRecord;
   request: { [key: string]: JsonValue | undefined };
   result?: { [key: string]: JsonValue | undefined };
-  role: "architect" | "engineer";
+  role: "agent" | "architect" | "engineer";
   status: "completed" | "failed";
   timestamp: string;
   toolName: string;

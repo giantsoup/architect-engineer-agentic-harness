@@ -40,6 +40,7 @@ describe("CLI help", () => {
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage:");
     expect(result.stdout).toContain("init");
+    expect(result.stdout).toContain("chat");
     expect(result.stdout).toContain("run");
     expect(result.stdout).toContain("status");
     expect(result.stdout).toContain("inspect");
@@ -119,5 +120,23 @@ describe("CLI help", () => {
     expect(result.stdout).toContain("Open the standalone TUI demo feed");
     expect(result.stdout).toContain("--run-label <label>");
     expect(result.stdout).toContain("--task <markdown>");
+  });
+
+  it("shows the interactive chat command help and rejects non-tty startup", () => {
+    const helpResult = runCli(["chat", "--help"]);
+
+    expect(helpResult.status).toBe(0);
+    expect(helpResult.stdout).toContain(
+      "Open the single-model interactive chat TUI",
+    );
+    expect(helpResult.stdout).toContain("--project-root <directory>");
+
+    const result = runCli(["chat"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "The `blueprint chat` TUI requires an interactive TTY on stdin and stdout.",
+    );
+    expect(result.stderr).toContain("blueprint run --task");
   });
 });

@@ -4,6 +4,7 @@ import { Command } from "commander";
 
 import packageJson from "../../package.json" with { type: "json" };
 
+import { createChatCommand } from "./commands/chat.js";
 import { createInitCommand } from "./commands/init.js";
 import { createInspectCommand } from "./commands/inspect.js";
 import { createRunCommand } from "./commands/run.js";
@@ -28,6 +29,7 @@ export function createProgram(options: CreateProgramOptions = {}): Command {
   program.showSuggestionAfterError();
 
   program.addCommand(createInitCommand());
+  program.addCommand(createChatCommand());
   program.addCommand(createRunCommand());
   program.addCommand(createStatusCommand());
   program.addCommand(createInspectCommand());

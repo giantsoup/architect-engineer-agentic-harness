@@ -397,6 +397,9 @@ describe.sequential("packaged CLI smoke", () => {
     expect(packedPaths).toContain("examples/typescript/agent-harness.toml");
     expect(packedPaths).toContain("examples/laravel/agent-harness.toml");
     expect(packedPaths).toContain("prompts/v1/architect/system.md");
+    expect(packedPaths).toContain("prompts/v1/agent/system.md");
+    expect(packedPaths).toContain("prompts/v1/agent/chat.md");
+    expect(packedPaths).toContain("prompts/v1/agent/summarize.md");
     expect(packedPaths).toContain("schemas/v1/run-result.schema.json");
     expect(packedPaths).toContain("README.md");
     expect(packedPaths).toContain("LICENSE");

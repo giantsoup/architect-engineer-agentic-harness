@@ -36,6 +36,17 @@ export function renderHarnessConfigTemplate(
 
 version = ${config.version}
 
+[models.agent]
+# Example single-model agent endpoint for interactive \`blueprint chat\`.
+provider = ${quoteTomlString(config.models.agent.provider)}
+model = ${quoteTomlString(config.models.agent.model)}
+baseUrl = ${quoteTomlString(config.models.agent.baseUrl)}
+# timeoutMs = 120000
+# maxRetries = 1
+#
+# [models.agent.headers]
+# x-provider-route = "agent"
+
 [models.architect]
 # Example remote model provider for the Architect role.
 provider = ${quoteTomlString(config.models.architect.provider)}

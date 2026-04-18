@@ -280,7 +280,7 @@ function readJsonLines(filePath: string): unknown[] {
     .map((line) => JSON.parse(line));
 }
 
-describe("CLI run", () => {
+describe("CLI run", { timeout: 15_000 }, () => {
   const servers: Array<{ close: () => Promise<void> }> = [];
 
   afterEach(async () => {

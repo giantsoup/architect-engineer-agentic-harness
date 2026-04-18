@@ -29,7 +29,14 @@ describe("migrateHarnessConfig", () => {
       commands: {
         setup: "npm ci",
       },
-      version: CURRENT_HARNESS_CONFIG_VERSION,
+      models: {
+        engineer: {
+          baseUrl: "http://127.0.0.1:8080/v1",
+          model: "engineer",
+          provider: "llama.cpp",
+        },
+      },
+      version: 1,
     });
 
     expect(migrated.migrated).toBe(true);
@@ -37,6 +44,13 @@ describe("migrateHarnessConfig", () => {
       commands: {
         install: "npm ci",
         setup: "npm ci",
+      },
+      models: {
+        agent: {
+          baseUrl: "http://127.0.0.1:8080/v1",
+          model: "engineer",
+          provider: "llama.cpp",
+        },
       },
       version: CURRENT_HARNESS_CONFIG_VERSION,
     });
@@ -140,7 +154,60 @@ requirePassingChecks = true
     );
 
     await expect(loadHarnessConfig({ projectRoot })).rejects.toThrowError(
-      /version: Config version 2 is newer than this CLI supports \(1\)\./u,
+      /version: Config version 3 is newer than this CLI supports \(2\)\./u,
+    );
+  });
+
+  it("migrates a version 1 config by synthesizing models.agent from models.engineer", async () => {
+    const projectRoot = createTempProject();
+    projectRoots.push(projectRoot);
+
+    writeFileSync(
+      path.join(projectRoot, "agent-harness.toml"),
+      `version = 1
+
+[models.architect]
+provider = "openai-compatible"
+model = "architect"
+baseUrl = "https://api.example.com/v1"
+
+[models.engineer]
+provider = "llama.cpp"
+model = "engineer"
+baseUrl = "http://127.0.0.1:8080/v1"
+
+[project]
+executionTarget = "host"
+
+[commands]
+test = "npm test"
+
+[mcp]
+allowlist = []
+
+[network]
+mode = "inherit"
+
+[sandbox]
+mode = "workspace-write"
+
+[artifacts]
+rootDir = ".agent-harness"
+runsDir = ".agent-harness/runs"
+
+[stopConditions]
+maxIterations = 12
+maxEngineerAttempts = 5
+requirePassingChecks = true
+`,
+      "utf8",
+    );
+
+    const loadedConfig = await loadHarnessConfig({ projectRoot });
+
+    expect(loadedConfig.config.version).toBe(2);
+    expect(loadedConfig.config.models.agent).toEqual(
+      loadedConfig.config.models.engineer,
     );
   });
 });

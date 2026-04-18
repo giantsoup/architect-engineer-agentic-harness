@@ -112,6 +112,13 @@ export function applyHarnessEventToOverlay(
         requestReconcile: false,
       };
     case "model:request":
+      if (!isHarnessRole(event.role)) {
+        return {
+          appendLogEntries: [],
+          requestReconcile: false,
+        };
+      }
+
       overlay.modelRequests[event.role] = event;
       return {
         appendLogEntries: [
@@ -125,6 +132,13 @@ export function applyHarnessEventToOverlay(
         requestReconcile: false,
       };
     case "model:retry":
+      if (!isHarnessRole(event.role)) {
+        return {
+          appendLogEntries: [],
+          requestReconcile: false,
+        };
+      }
+
       overlay.latestRetryByRole[event.role] = event;
       return {
         appendLogEntries: [
@@ -138,6 +152,13 @@ export function applyHarnessEventToOverlay(
         requestReconcile: false,
       };
     case "command:start": {
+      if (!isHarnessRole(event.role)) {
+        return {
+          appendLogEntries: [],
+          requestReconcile: false,
+        };
+      }
+
       const nextCommand: TuiRunningCommandState = {
         accessMode: event.accessMode,
         command: event.command,
@@ -167,6 +188,13 @@ export function applyHarnessEventToOverlay(
     }
     case "command:stdout":
     case "command:stderr": {
+      if (!isHarnessRole(event.role)) {
+        return {
+          appendLogEntries: [],
+          requestReconcile: false,
+        };
+      }
+
       const runningCommand = overlay.currentCommands[event.role];
       const chunkLines = toChunkLines(
         event.chunk,
@@ -214,6 +242,13 @@ export function applyHarnessEventToOverlay(
       };
     }
     case "command:end": {
+      if (!isHarnessRole(event.role)) {
+        return {
+          appendLogEntries: [],
+          requestReconcile: false,
+        };
+      }
+
       const completedCommand: TuiCompletedCommandState = {
         accessMode: event.accessMode,
         command: event.command,
@@ -241,6 +276,13 @@ export function applyHarnessEventToOverlay(
       };
     }
     case "command:error": {
+      if (!isHarnessRole(event.role)) {
+        return {
+          appendLogEntries: [],
+          requestReconcile: false,
+        };
+      }
+
       const completedCommand: TuiCompletedCommandState = {
         accessMode: event.accessMode,
         command: event.command,
@@ -301,6 +343,11 @@ export function applyHarnessEventToOverlay(
           event.artifact === "engineerTask" ||
           event.artifact === "finalReport" ||
           event.artifact === "result",
+      };
+    default:
+      return {
+        appendLogEntries: [],
+        requestReconcile: false,
       };
   }
 }
@@ -418,7 +465,9 @@ function resolveProjectionActiveRole(
   }
 
   if (context.inspection !== undefined) {
-    return context.inspection.activeRole;
+    return context.inspection.activeRole === "agent"
+      ? "system"
+      : context.inspection.activeRole;
   }
 
   return "system";
@@ -1246,6 +1295,10 @@ function formatClock(value: string): string {
 
 function normalizeText(value: string): string {
   return value.trim().replaceAll(/\s+/gu, " ").toLowerCase();
+}
+
+function isHarnessRole(value: string): value is HarnessRole {
+  return value === "architect" || value === "engineer";
 }
 
 function capitalize(value: string): string {

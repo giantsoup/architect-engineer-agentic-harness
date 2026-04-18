@@ -83,6 +83,7 @@ requirePassingChecks = true
 
     expect(config.project.containerName).toBe("app-from-env");
     expect(config.models.architect.apiKey).toBe("secret-token");
+    expect(config.models.agent).toEqual(config.models.engineer);
   });
 
   it("reports a useful error when an environment variable reference is missing", async () => {
@@ -195,6 +196,56 @@ requirePassingChecks = true
 
     await expect(loadHarnessConfig({ projectRoot })).rejects.toThrowError(
       /artifacts\.rootDir: Must not be the project root\./u,
+    );
+  });
+
+  it("requires models.agent in version 2 configs", async () => {
+    const projectRoot = createTempProject();
+    createdProjectRoots.push(projectRoot);
+
+    writeFileSync(
+      path.join(projectRoot, "agent-harness.toml"),
+      `version = 2
+
+[models.architect]
+provider = "openai-compatible"
+model = "architect"
+baseUrl = "https://api.example.com/v1"
+
+[models.engineer]
+provider = "llama.cpp"
+model = "engineer"
+baseUrl = "http://127.0.0.1:8080/v1"
+
+[project]
+executionTarget = "host"
+
+[commands]
+test = "npm run test"
+
+[mcp]
+allowlist = []
+
+[network]
+mode = "inherit"
+
+[sandbox]
+mode = "workspace-write"
+
+[artifacts]
+rootDir = ".agent-harness"
+runsDir = ".agent-harness/runs"
+
+[stopConditions]
+maxIterations = 12
+maxEngineerAttempts = 5
+requirePassingChecks = true
+`,
+      "utf8",
+    );
+
+    await expect(loadHarnessConfig({ projectRoot })).rejects.toThrowError(
+      /models\.agent: Invalid input: expected object, received undefined/u,
     );
   });
 

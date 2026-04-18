@@ -12,6 +12,7 @@ import type {
   DossierArtifactKind,
   RunCheckResult,
   RunChecksSummary,
+  RunKind,
   RunLifecycleStatus,
   RunManifest,
   RunResult,
@@ -28,7 +29,7 @@ export interface RunArtifactPresence {
 }
 
 export interface RunInspection {
-  activeRole: "architect" | "engineer" | "system";
+  activeRole: "agent" | "architect" | "engineer" | "system";
   artifacts: Record<DossierFileKey, RunArtifactPresence>;
   commandStatus: string;
   createdAt: string;
@@ -39,6 +40,7 @@ export interface RunInspection {
   manifest: RunManifest;
   phase: string;
   primaryArtifacts: RunArtifactPresence[];
+  runKind: RunKind;
   result?: RunResult;
   runDirAbsolutePath: string;
   runDirRelativePath: string;
@@ -145,6 +147,7 @@ export async function readRunInspection(
   const artifacts = await readArtifactPresence(paths);
   const latestCheck = getLatestCheck(checks);
   const derivedState = deriveRunState(events, manifest.status);
+  const runKind = determineRunKind(manifest, events);
   const updatedAt = manifest.updatedAt;
   const currentTimestamp =
     manifest.status === "running"
@@ -176,8 +179,18 @@ export async function readRunInspection(
         ? derivedState.latestDecision
         : "No high-level decision recorded yet.",
     manifest,
-    phase: deriveDisplayedPhase(manifest.status, result?.status, derivedState),
-    primaryArtifacts: selectPrimaryArtifacts(artifacts, manifest.status),
+    phase: deriveDisplayedPhase(
+      manifest.status,
+      result?.status,
+      derivedState,
+      runKind,
+    ),
+    primaryArtifacts: selectPrimaryArtifacts(
+      artifacts,
+      manifest.status,
+      runKind,
+    ),
+    runKind,
     ...(result === undefined ? {} : { result }),
     runDirAbsolutePath: paths.runDirAbsolutePath,
     runDirRelativePath: paths.runDirRelativePath,
@@ -472,6 +485,64 @@ function deriveRunState(
       case "tool-call":
         state.pendingTool = undefined;
         break;
+      case "agent-session-started":
+        state.phase = "Chat";
+        state.activeRole = "system";
+        state.summary = getOptionalString(event, "summary") ?? state.summary;
+        break;
+      case "agent-turn-started":
+        state.phase = "Chat";
+        state.activeRole = "agent";
+        state.currentObjective =
+          getOptionalString(event, "summary") ?? state.currentObjective;
+        break;
+      case "agent-action-selected":
+        state.phase = "Chat";
+        state.activeRole = "agent";
+        state.currentObjective =
+          getOptionalString(event, "summary") ?? state.currentObjective;
+        state.pendingTool = readPendingTool(event, state.requiredCheckCommand);
+        break;
+      case "agent-turn-finished": {
+        const summary = getOptionalString(event, "summary");
+        const outcome = getOptionalString(event, "outcome");
+
+        state.phase =
+          outcome === "failed"
+            ? "Waiting"
+            : outcome === "cancelled"
+              ? "Cancelled"
+              : "Waiting";
+        state.activeRole = "system";
+        state.pendingTool = undefined;
+        if (summary !== undefined) {
+          state.latestDecision = summary;
+        }
+        break;
+      }
+      case "agent-session-finished":
+        state.pendingTool = undefined;
+        state.activeRole = "system";
+        state.phase = summarizeFinalPhase(getOptionalString(event, "status"));
+        state.stopReason =
+          getOptionalString(event, "stopReason") ?? state.stopReason;
+        state.summary = getOptionalString(event, "summary") ?? state.summary;
+        if (state.summary !== undefined) {
+          state.latestDecision = state.summary;
+        }
+        break;
+      case "message": {
+        const role = getOptionalMessageRole(event, "role");
+        const content = getOptionalString(event, "content");
+
+        if (role === "user" && content !== undefined) {
+          state.task = content;
+          state.currentObjective = content;
+        } else if (role === "agent" && content !== undefined) {
+          state.latestDecision = summarizeMessageContent(content);
+        }
+        break;
+      }
     }
   }
 
@@ -741,6 +812,7 @@ function deriveDisplayedPhase(
   manifestStatus: RunLifecycleStatus,
   resultStatus: RunResult["status"] | undefined,
   derivedState: DerivedRunState,
+  runKind: RunKind,
 ): string {
   if (resultStatus !== undefined) {
     return summarizeFinalPhase(resultStatus);
@@ -750,7 +822,11 @@ function deriveDisplayedPhase(
     return summarizeLifecycleStatus(manifestStatus);
   }
 
-  return derivedState.phase;
+  return derivedState.phase.length > 0
+    ? derivedState.phase
+    : runKind === "agent-chat"
+      ? "Chat"
+      : "Running";
 }
 
 function summarizeLifecycleStatus(status: RunLifecycleStatus): string {
@@ -784,7 +860,38 @@ function summarizeFinalPhase(status: string | undefined): string {
 function selectPrimaryArtifacts(
   artifacts: Record<DossierFileKey, RunArtifactPresence>,
   status: RunLifecycleStatus,
+  runKind: RunKind,
 ): RunArtifactPresence[] {
+  if (runKind === "agent-chat") {
+    const orderedKeys: DossierFileKey[] =
+      status === "success"
+        ? [
+            "conversation",
+            "finalReport",
+            "result",
+            "checks",
+            "commandLog",
+            "events",
+          ]
+        : status === "failed" || status === "stopped"
+          ? [
+              "conversation",
+              "failureNotes",
+              "finalReport",
+              "commandLog",
+              "events",
+            ]
+          : ["conversation", "run", "commandLog", "checks", "events"];
+
+    const selectedArtifacts = orderedKeys
+      .map((key) => artifacts[key])
+      .filter((artifact) => artifact !== undefined && artifact.written);
+
+    return selectedArtifacts.length > 0
+      ? selectedArtifacts
+      : [artifacts.run].filter((artifact) => artifact.written);
+  }
+
   const orderedKeys: DossierFileKey[] =
     status === "success"
       ? ["finalReport", "result", "checks", "events", "commandLog"]
@@ -847,7 +954,26 @@ function getOptionalRole(
   key: string,
 ): CommandLogRecord["role"] | undefined {
   const entry = value[key];
-  return entry === "architect" || entry === "engineer" || entry === "system"
+  return entry === "agent" ||
+    entry === "architect" ||
+    entry === "engineer" ||
+    entry === "system"
+    ? entry
+    : undefined;
+}
+
+function getOptionalMessageRole(
+  value: JsonRecord,
+  key: string,
+): "agent" | "system" | "tool" | "user" | "architect" | "engineer" | undefined {
+  const entry = value[key];
+
+  return entry === "agent" ||
+    entry === "architect" ||
+    entry === "engineer" ||
+    entry === "system" ||
+    entry === "tool" ||
+    entry === "user"
     ? entry
     : undefined;
 }
@@ -891,4 +1017,52 @@ function normalizeCommand(command: string): string {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function determineRunKind(
+  manifest: RunManifest,
+  events: readonly JsonRecord[],
+): RunKind {
+  if (
+    manifest.kind === "agent-chat" ||
+    manifest.kind === "architect-engineer" ||
+    manifest.kind === "command"
+  ) {
+    return manifest.kind;
+  }
+
+  for (const event of events) {
+    const type = getOptionalString(event, "type");
+
+    if (
+      type === "agent-session-started" ||
+      type === "agent-turn-started" ||
+      type === "agent-turn-finished" ||
+      type === "agent-session-finished"
+    ) {
+      return "agent-chat";
+    }
+
+    if (
+      type === "architect-engineer-run-started" ||
+      type === "engineer-run-started" ||
+      type === "architect-review-created" ||
+      type === "architect-plan-created" ||
+      type === "engineer-iteration-started"
+    ) {
+      return "architect-engineer";
+    }
+  }
+
+  return "command";
+}
+
+function summarizeMessageContent(content: string): string {
+  const normalized = content.trim().replaceAll(/\s+/gu, " ");
+
+  if (normalized.length <= 96) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, 95)}…`;
 }
